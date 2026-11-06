@@ -20,6 +20,14 @@ class ContextOverBudget(Exception):
         )
 
 
+class ModelCallLimit(Exception):
+    """The run already made its maximum number of model calls; nothing was sent."""
+
+    def __init__(self, cap: int) -> None:
+        self.cap = cap
+        super().__init__(f"the run already made {cap} model calls; nothing was sent")
+
+
 class ForcedToolChoiceError(ValueError):
     """Forced tool_choice is a 400 on Opus 5.5 and LangChain silently drops it."""
 

@@ -47,6 +47,12 @@ class LimitSettings(BaseSettings):
 
     context_budget_tokens: int = 12_000
     planner_timeout_s: float = 60.0
+    # The run caps from 15.1 that M3 enforces (M13 adds cost and the live deadline).
+    model_calls_per_run: int = 8
+    loop_iterations: int = 6
+    tool_calls_per_run: int = 16
+    run_deadline_s: float = 60.0
+    run_backstop_s: float = 90.0
 
 
 class PathSettings(BaseSettings):

@@ -24,7 +24,7 @@ import difflib
 import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -41,6 +41,7 @@ from langchain_core.messages import (
 from pydantic import SecretStr
 
 from errand.config import LimitSettings, ModelMode, ModelSettings, load_anthropic_credentials
+from errand.domain.counters import RunCounters
 from errand.llm.anthropic import (
     OFFLINE_API_KEY,
     PLANNER_THINKING,
@@ -55,6 +56,7 @@ from errand.llm.errors import (
     ContextOverBudget,
     LoopPrefixViolation,
     MissingUsage,
+    ModelCallLimit,
     check_tool_choice,
 )
 from errand.llm.messages import aggregate
@@ -65,20 +67,6 @@ from errand.trace.tracer import Tracer
 from errand.usage import Usage
 
 TokenCallback = Callable[[str], Awaitable[None] | None]
-
-
-@dataclass
-class RunCounters:
-    """Per-run totals across every session of the gateway, for the caps in M3 and M13."""
-
-    model_calls: int = 0
-    tokens_in: int = 0
-    tokens_out: int = 0
-    cost: Decimal = field(default_factory=Decimal)
-
-    @property
-    def cost_usd(self) -> float:
-        return float(self.cost)
 
 
 @dataclass(frozen=True)
@@ -158,6 +146,7 @@ class LLMGateway:
         transport: BaseChatModel | None = None,
         cassette_path: Path | None = None,
         api_key: SecretStr | None = None,
+        counters: RunCounters | None = None,
     ) -> None:
         # Refused before anything is built, so a forced choice never reaches ChatAnthropic,
         # which would drop it with only a warning when thinking is on (spike C7).
@@ -165,7 +154,8 @@ class LLMGateway:
         self.settings = settings or ModelSettings()
         self.limits = limits or LimitSettings()
         self.tracer = tracer
-        self.counters = RunCounters()
+        # Shared with the run's ToolGateway: one counter object per run (domain.counters).
+        self.counters = counters if counters is not None else RunCounters()
         self.mode: ModelMode = self.settings.model_mode
 
         uses_api = self.mode == "live" or (self.mode == "record" and transport is None)
@@ -216,10 +206,17 @@ class LLMGateway:
         return self.canonicalizer(messages, self.bind_kwargs)
 
     def session(
-        self, *, system: str | Sequence[Mapping[str, Any]], messages: Sequence[BaseMessage]
+        self,
+        *,
+        system: str | Sequence[Mapping[str, Any]],
+        messages: Sequence[BaseMessage],
+        manifest: Mapping[str, Any] | None = None,
     ) -> LoopSession:
+        """A loop session. `manifest` is the context builder's account of what went into
+        the first request (sections, included messages); it is merged into every
+        `context.built` record the session writes."""
         content: Any = system if isinstance(system, str) else [dict(b) for b in system]
-        return LoopSession(self, SystemMessage(content=content), messages)
+        return LoopSession(self, SystemMessage(content=content), messages, manifest)
 
     async def send(
         self,
@@ -229,8 +226,12 @@ class LLMGateway:
         prev_usage: Usage | None,
         appended: Sequence[BaseMessage],
         on_token: TokenCallback | None = None,
+        manifest: Mapping[str, Any] | None = None,
     ) -> ModelTurn:
         """Budget check, one streamed call, trace. Use LoopSession.call, not this."""
+        cap = self.limits.model_calls_per_run
+        if self.counters.model_calls >= cap:
+            raise ModelCallLimit(cap)
         sha = request_sha256(canonical)
         tools = canonical.get("tools")
         est = est_request(
@@ -244,7 +245,9 @@ class LLMGateway:
         self.tracer.emit(
             "context.built",
             manifest={
-                "builder": "loop_session",  # the sectioned ContextBuilder lands in M3/M12
+                "builder": "loop_session",
+                **(manifest or {}),
+                "call": self.counters.model_calls + 1,
                 "messages": len(messages),
                 "est_request_tokens": est,
                 "floor_tokens": floor,
@@ -324,12 +327,17 @@ class LoopSession:
     """The planner's in-loop history: append-only, checked byte for byte before each call."""
 
     def __init__(
-        self, gateway: LLMGateway, system: SystemMessage, messages: Sequence[BaseMessage]
+        self,
+        gateway: LLMGateway,
+        system: SystemMessage,
+        messages: Sequence[BaseMessage],
+        manifest: Mapping[str, Any] | None = None,
     ) -> None:
         for m in messages:
             if isinstance(m, SystemMessage):
                 raise ValueError("the system prompt is given once, as `system`")
         self._gateway = gateway
+        self._manifest = dict(manifest or {})
         self._messages: list[BaseMessage] = [system, *messages]
         self._expected: dict[str, Any] | None = None  # previous request + response, wire form
         self._prev_usage: Usage | None = None
@@ -375,6 +383,7 @@ class LoopSession:
             prev_usage=self._prev_usage,
             appended=self._appended,
             on_token=on_token,
+            manifest={**self._manifest, "loop_messages": len(self._messages) - 2},
         )
         self._calls += 1
         self._messages.append(turn.message)
