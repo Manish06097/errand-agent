@@ -1,7 +1,8 @@
 """The Tracer: one per run. Assigns seq and span ids, sanitizes once, fans out.
 
-Order per record: sanitize the payload, build the envelope, validate against schema
-v1, serialize once, then hand the same dict and line to every sink, JsonlSink first.
+Order per record: sanitize the payload, build the envelope with candidate seq and span
+ids, validate against schema v1, serialize once, commit the counters, then hand the
+same dict and line to every sink, JsonlSink first. A rejected record uses up nothing.
 A failing JSONL write raises (it is the record of truth); any other sink failing is
 logged and skipped.
 
@@ -125,9 +126,10 @@ class Tracer:
 
     # ------------------------------------------------------------------ core
 
-    def _next_span(self) -> str:
-        self._spans += 1
-        return f"s_{self._spans}"
+    def _peek_span(self) -> str:
+        # Span ids are only handed out once a record using them passes validation, so
+        # a rejected record never leaves a hole in s_1, s_2, ...
+        return f"s_{self._spans + 1}"
 
     def _frame(self) -> _Frame | None:
         frame = _current.get()
@@ -142,6 +144,27 @@ class Tracer:
         **fields: Any,
     ) -> dict[str, Any]:
         """Emit one record and return it exactly as the sinks received it."""
+        return self._emit(
+            record_type,
+            span_id=self._peek_span() if span_id is None else span_id,
+            parent_span_id=parent_span_id,
+            new_span=span_id is None,
+            fields=fields,
+        )
+
+    def _emit(
+        self,
+        record_type: str,
+        *,
+        span_id: str,
+        parent_span_id: str | None,
+        new_span: bool,
+        fields: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Build and validate with candidate seq and span; commit them only if valid.
+
+        `new_span` says `span_id` is the next unissued id, to be committed with the record.
+        """
         if record_type not in RECORD_TYPES:
             raise UnknownTraceType(f"unknown trace record type {record_type!r}")
         clash = _ENVELOPE_KEYS & fields.keys()
@@ -149,16 +172,15 @@ class Tracer:
             raise ValueError(f"envelope fields are assigned by the Tracer: {sorted(clash)}")
         frame = self._frame()
         payload = sanitize(fields)
-        self._seq += 1
         raw = {
-            "seq": self._seq,
+            "seq": self._seq + 1,
             "ts": format_ts(self._now()),
             "wall_ts": format_ts(self._wall_now()),
             "run_id": self.run_id,
             "thread_id": self.thread_id,
             "errand_id": self.errand_id,
             "trace_id": self.trace_id,
-            "span_id": span_id or self._next_span(),
+            "span_id": span_id,
             "parent_span_id": parent_span_id
             if parent_span_id is not None
             else (frame.span_id if frame else self._run_span),
@@ -170,6 +192,11 @@ class Tracer:
             raw["parent_span_id"] = None
         model = RECORD_ADAPTER.validate_python(raw)
         record, line = encode_record(model)
+        # Committed before fan-out on purpose: if the JSONL write itself fails, a line
+        # may be half on disk, and reusing its seq would be worse than a gap.
+        self._seq += 1
+        if new_span:
+            self._spans += 1
         self._fan_out(record, line)
         return record
 
@@ -195,21 +222,22 @@ class Tracer:
     @contextmanager
     def node(self, name: str, **start_fields: Any) -> Iterator[Span]:
         """node.start ... node.end around a graph node, with its attempt number."""
-        self._node_attempts[name] += 1
-        attempt = self._node_attempts[name]
-        span_id = self._next_span()
+        attempt = self._node_attempts[name] + 1
+        span_id = self._peek_span()
         parent = self._frame()
         token = _current.set(_Frame(id(self), span_id, attempt))
         started = self._perf()
         span = Span(span_id, {})
         try:
-            self.emit(
+            self._emit(
                 "node.start",
                 span_id=span_id,
                 parent_span_id=parent.span_id if parent else self._run_span,
-                node=name,
-                **start_fields,
+                new_span=True,
+                fields={"node": name, **start_fields},
             )
+            # Only a node whose start was recorded counts as an attempt.
+            self._node_attempts[name] = attempt
             try:
                 yield span
             except BaseException as exc:
@@ -233,8 +261,14 @@ class Tracer:
         if self._run_span is not None:
             raise RuntimeError("run already started")
         self._run_started = self._perf()
-        span_id = self._next_span()
-        record = self.emit("run.start", span_id=span_id, trigger=trigger, **fields)
+        span_id = self._peek_span()
+        record = self._emit(
+            "run.start",
+            span_id=span_id,
+            parent_span_id=None,
+            new_span=True,
+            fields={"trigger": trigger, **fields},
+        )
         self._run_span = span_id
         return record
 
