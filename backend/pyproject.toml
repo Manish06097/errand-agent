@@ -19,6 +19,7 @@ dependencies = [
 [project.scripts]
 errand-api = "errand.api.app:main"
 errand-world = "errand.world.server:main"
+errand-trace = "errand.trace.cli:main"
 
 [dependency-groups]
 dev = [
@@ -68,6 +69,8 @@ module = [
   "errand.execution", "errand.execution.*",
   "errand.world", "errand.world.*",
   "errand.store", "errand.store.*",
+  "errand.trace", "errand.trace.*",
+  "errand.usage",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true
