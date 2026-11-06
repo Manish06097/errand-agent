@@ -10,14 +10,25 @@ of the key disagreed with `bookings`, the ground truth INV-02 and INV-03 read.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from errand.tools.client import HttpTransport
 from errand.tools.errors import ToolTimeout
+from errand.tools.inspector import HttpInspector
 from errand.tools.timeouts import ToolTimeouts
-from errand.world.contracts import BookError, BookOut
-from errand.world.scenario import BookConfig, ScenarioConfig, WorldConfig
+from errand.world.contracts import BookError, BookOut, GetProviderOut, HoldSlotOut
+from errand.world.scenario import (
+    BookConfig,
+    CommitLatency,
+    FaultsConfig,
+    ScenarioConfig,
+    WorldConfig,
+)
 from tests.contract.conftest import Env
-from tests.contract.helpers import hold_first_free, raw, rows
+from tests.contract.helpers import hold_first_free, raw, rows, wait_for_outcome
+from tests.contract.world_process import start_world
 
 KEY = "k-off-applied"
 
@@ -59,3 +70,44 @@ async def test_a_resent_book_never_rewrites_an_applied_key(env: Env, second: str
     assert op.response_json == first.decode()
     assert (op.calls, op.attempts) == (2, 2)
     assert first_booking in {b.booking_id for b in await env.inspector.bookings()}
+
+
+async def test_a_restart_during_a_resent_book_keeps_the_key_applied(tmp_path: Path) -> None:
+    # Same bug, another path: the re-send's claim used to mark the applied key
+    # in_progress, and a restart mid-latency then turned it not_applied.
+    db = tmp_path / "w.sqlite"
+    scenario = ScenarioConfig(
+        id="dedupe-off-restart",
+        seed=4,
+        world=WorldConfig(
+            enforce_idempotency=False, book=BookConfig.model_validate({"forced": ["success"]})
+        ),
+        faults=FaultsConfig(commit_latency_ms=CommitLatency(book=1500)),
+    )
+    world = start_world(db, "--clock", "sim")
+    try:
+        async with HttpInspector(world.base_url) as inspector:
+            await inspector.load_scenario(scenario)
+            async with HttpTransport(world.base_url, ToolTimeouts(book=0.3)) as client:
+                details = await client.get_provider("P3")
+                assert isinstance(details, GetProviderOut)
+                held = await client.hold_slot("P3", details.available_slots[0])
+                assert isinstance(held, HoldSlotOut)
+                with pytest.raises(ToolTimeout):
+                    await client.book(held.hold_id, KEY)
+                applied = await wait_for_outcome(inspector, "book", KEY, "success")
+                with pytest.raises(ToolTimeout):
+                    await client.book(held.hold_id, KEY)
+    finally:
+        world.stop(kill=True)  # dies while the re-sent book is still sleeping
+
+    world = start_world(db, "--clock", "sim")
+    try:
+        async with HttpInspector(world.base_url) as inspector:
+            log = rows(await inspector.op_log(), "book", KEY)
+            assert [r.outcome for r in log] == ["success", "interrupted"]
+            [op] = [o for o in await inspector.operations() if o.idempotency_key == KEY]
+            assert op.outcome == "applied"
+            assert op.response_json == applied.response_json
+    finally:
+        world.stop()

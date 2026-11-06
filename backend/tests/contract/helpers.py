@@ -66,8 +66,11 @@ def rows(log: list[OpLogRow], op: str, key: str | None = None) -> list[OpLogRow]
 async def wait_for_outcome(
     inspector: InProcessInspector | HttpInspector, op: str, key: str, outcome: str
 ) -> OpLogRow:
-    """Poll the op_log until the call on `key` shows `outcome` (HTTP only needs this)."""
-    for _ in range(200):
+    """Poll the op_log until the call on `key` shows `outcome` (HTTP only needs this).
+
+    The 5 s budget only matters when the outcome never comes; normally it returns
+    within a few polls."""
+    for _ in range(500):
         for row in rows(await inspector.op_log(), op, key):
             if row.outcome == outcome:
                 return row
