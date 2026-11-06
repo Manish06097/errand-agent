@@ -127,6 +127,7 @@ errand-agent/
         scripted.py               # ScriptedChatModel (bind_tools-capable fake, records requests)
         cassette.py               # record/replay keyed by canonical request hash
         pricing.py tokens.py      # cost_usd(), est_tokens(), est_request()
+        errors.py messages.py     # typed failures; stream_chunks()/aggregate() shared by fakes and cassettes
       agent/
         state.py                  # ThreadState and sub-models
         transitions.py            # ALLOWED table + transition()
@@ -154,7 +155,8 @@ errand-agent/
       context/ builder.py manifest.py ledger.py render.py
       followup/ watcher.py policy.py
       store/ db.py migrations/*.sql repos/*.py
-      trace/ schema.py tracer.py sinks/{jsonl,stream,langfuse,null}.py cli.py
+      usage.py                    # Usage split; below both llm/ and trace/ (import-linter layers)
+      trace/ schema.py tracer.py sanitize.py reader.py sinks/{jsonl,stream,langfuse,null}.py cli.py
       api/ app.py runs.py locks.py sse.py events.py routes/*.py
     evals/
       scenarios/*.yaml            # one file per scenario
@@ -1310,7 +1312,8 @@ Every node is wrapped: an uncaught exception emits an `error` record and routes 
 nodes / LLMGateway / ToolGateway / approvals / executor
    | tracer.span(kind, name, input) ... span.end(output, usage, cost) ; tracer.event(type, ...)
    v
-Tracer: assigns seq and span ids, sanitizes ONCE, computes latency and cost from pricing.py
+Tracer: assigns seq and span ids, sanitizes ONCE, computes latency; cost is priced by the
+        caller (LLMGateway via pricing.py) and handed in, so trace/ never imports llm/
    |--> JsonlSink     always on, writes first; the source of truth for evals and the deliverable
    |--> StreamSink    get_stream_writer() -> SSE trace panel (same records)
    '--> LangfuseSink  only when keys are set and ERRAND_LANGFUSE is not off; otherwise NullSink
