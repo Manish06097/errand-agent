@@ -1,0 +1,30 @@
+id: S30_same_client_msg_id
+title: The same client_msg_id POSTed twice in sequence and twice concurrently starts one run each time
+category: [network retry]
+seed: 30
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - post:
+      text: "Find a plumber for my kitchen tap this week, mornings only, under ₹1,500."
+      client_msg_id: s30-first
+      times: 2
+      concurrent: false
+      gives: [service, issue, window, budget_max_inr]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [area]
+  - post:
+      text: "Indiranagar"
+      client_msg_id: s30-second
+      times: 2
+      concurrent: true
+      gives: [area]
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_world: {search_providers: 1}
+expect:
+  invariants: [default]

@@ -59,8 +59,9 @@ def test_make_dev_under_a_coding_agent_writes_no_agent_files(tmp_path: Path) -> 
         ERRAND_WORLD_PORT=str(free_port()),
         ERRAND_API_PORT=str(free_port()),
         ERRAND_WEB_PORT=str(free_port()),
-        # Keep the world's store out of the repo's data/ directory.
+        # Keep the world's store and the API's files out of the repo's data/ directory.
         ERRAND_WORLD_DB=str(tmp_path / "world.sqlite"),
+        ERRAND_DATA_DIR=str(tmp_path / "agent-data"),
     )
     dev = subprocess.Popen(
         ["uv", "run", "--frozen", "--project", "backend", "python", "scripts/dev.py"],

@@ -9,6 +9,7 @@ and in pre-commit. The long-form design is docs/design/architecture.md.
 
 ## State model
 <!-- budget: 90 words -->
+One LangGraph thread per conversation holds one errand: a typed brief where every field carries provenance (the user's quoted words, checked by code), a code-built shortlist, and a phase that only `transition()` changes, against a fixed table. Checkpoints are strict msgpack, so only types reachable from `ThreadState` load. The transcript, runs and leases live in agent.sqlite; thinking blocks never reach state. The planner proposes patches and questions; code merges, resolves dates, derives search arguments and caps repeat questions.
 
 ## Approval
 <!-- budget: 90 words -->

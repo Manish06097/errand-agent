@@ -1,0 +1,23 @@
+id: S02_only_area_missing
+title: Only the area is missing, so the agent asks for exactly that, then searches the brief
+category: [conversation]
+seed: 2
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Find a plumber for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, window, budget_max_inr]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [area]
+  - expect_world: {search_providers: 0}
+  - answer: {}
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_world: {search_providers: 1}
+  - expect_search_matches_brief: {}
+expect:
+  invariants: [default]

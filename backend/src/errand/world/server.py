@@ -32,7 +32,12 @@ from pydantic import BaseModel, ConfigDict
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from errand.clock import CLOCK_HEADER, ClockMode, SimClock, to_ms
-from errand.world.contracts import CLIENT_TIMEOUT_HEADER, SERVICE_UNAVAILABLE, encode
+from errand.world.contracts import (
+    CLIENT_TIMEOUT_HEADER,
+    SERVICE_UNAVAILABLE,
+    WORLD_SEQ_HEADER,
+    encode,
+)
 from errand.world.engine import ClockPacing, Pacing, UnknownTool, World, WorldClosed, WorldHost
 from errand.world.scenario import ScenarioConfig, WorldConfig, parse_duration
 from errand.world.store import BookingRow, EventRow, OperationRow, OpLogRow
@@ -258,7 +263,8 @@ def create_app(settings: ServeSettings | None = None, dev: bool | None = None) -
                 world.clock.advance(max(0.0, timeout - elapsed))
             await asyncio.sleep(timeout + settings.timeout_margin_s)
             return Response(b"", 504)
-        return Response(answer.body, answer.status, media_type="application/json")
+        headers = {} if answer.seq is None else {WORLD_SEQ_HEADER: str(answer.seq)}
+        return Response(answer.body, answer.status, media_type="application/json", headers=headers)
 
     if dev_routes:
         _add_dev_routes(app, host, settings)

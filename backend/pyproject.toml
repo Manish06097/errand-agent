@@ -55,6 +55,7 @@ mypy_path = [
 files = [
   "$MYPY_CONFIG_FILE_DIR/src",
   "$MYPY_CONFIG_FILE_DIR/tests",
+  "$MYPY_CONFIG_FILE_DIR/evals",
   "$MYPY_CONFIG_FILE_DIR/../scripts",
 ]
 explicit_package_bases = true
@@ -98,6 +99,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+# An empty parametrize list is a collection error, not one skipped test that exits 0
+# (BUG-M3-1: an empty scenario catalogue passed make evals that way).
+empty_parameter_set_mark = "fail_at_collect"
 markers = [
   "live: calls the real Claude API; skipped unless ERRAND_LIVE=1",
 ]
@@ -150,3 +154,21 @@ forbidden_modules = ["errand.agent", "errand.api", "errand.world", "errand.execu
 name = "The model gateway uses the tracer, never the other way round; usage depends on neither"
 type = "layers"
 layers = ["errand.llm", "errand.trace", "errand.usage"]
+
+[[tool.importlinter.contracts]]
+name = "Agent, API, context and model code reach the world only through errand.tools (world.contracts types are fine)"
+type = "forbidden"
+source_modules = ["errand.agent", "errand.api", "errand.context", "errand.llm"]
+forbidden_modules = [
+  "errand.world.engine",
+  "errand.world.store",
+  "errand.world.server",
+  "errand.world.catalog",
+]
+# The tools package is the one sanctioned way in, and only through these two edges:
+# the runtime builds the host and the in-process transport calls it. Any other tools
+# module on a path from these sources to the engine, store, server or catalog fails.
+ignore_imports = [
+  "errand.tools.runtime -> errand.world.engine",
+  "errand.tools.client -> errand.world.engine",
+]

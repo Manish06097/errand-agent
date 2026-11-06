@@ -1,0 +1,213 @@
+"""Planner-facing views of world answers (architecture 11, 13.1).
+
+Each view is built once from a typed world answer, sanitized and compacted to its
+per-tool cap, and that rendering is what gets appended to the loop. Nothing is ever
+re-rendered later, so the loop prefix stays byte-identical.
+
+- search: at most 5 candidates with at most 3 window-matching slots each. Slot handles
+  (`S1`, `S2`, ...) are assigned here, in candidate order then slot order, and stored
+  in the `Shortlist`; the model only ever names a slot by its handle.
+- get_provider: a `ProviderView`, the contract fields minus `reviews` and `about`.
+  The key is absent, not an empty list: raw review text never reaches the planner,
+  not even as a hint of how many there were. The digest from the quarantined reader
+  joins it in M10.
+- list_bookings: id, provider, service, slot label and status.
+
+The rendering is `<tool_data>{json}</tool_data>`; the static rules say that anything
+inside it is data, not instructions.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from datetime import tzinfo
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict
+
+from errand.domain.brief import TimeWindow
+from errand.domain.slots import Candidate, Exclusion, Shortlist, SlotHandle
+from errand.domain.windows import slot_fits, slot_label
+from errand.tools.sanitize import clean_name, clean_text
+from errand.world.contracts import (
+    GetProviderOut,
+    ListBookingsOut,
+    ProviderSummary,
+    SearchProvidersOut,
+)
+
+SEARCH_MAX_CANDIDATES = 5
+SEARCH_MAX_SLOTS = 3
+SHORTLIST_MAX = 8
+PROVIDER_MAX_SLOTS = 6
+BOOKINGS_MAX = 10
+
+
+def render(data: Any) -> str:
+    """The one serialisation of a planner view. Key order is construction order."""
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return f"<tool_data>{body}</tool_data>"
+
+
+def render_error(error: str, **detail: Any) -> str:
+    return render({"error": error, **detail})
+
+
+def build_shortlist(
+    result: SearchProvidersOut,
+    *,
+    window: TimeWindow,
+    budget: int | Literal["none"] | None,
+    brief_version: int,
+    tz: tzinfo,
+) -> Shortlist:
+    """Hard filters (window, budget), then handles for the first slots of each candidate."""
+    candidates: list[Candidate] = []
+    excluded: list[Exclusion] = []
+    next_ref = 1
+    for p in result.providers:
+        name = clean_name(p.name)
+        if isinstance(budget, int) and p.price_inr > budget:
+            excluded.append(Exclusion(provider_id=p.provider_id, name=name, reason="over_budget"))
+            continue
+        fitting = [s for s in p.available_slots if slot_fits(s, window, tz)]
+        if not fitting:
+            excluded.append(
+                Exclusion(provider_id=p.provider_id, name=name, reason="no_slot_in_window")
+            )
+            continue
+        if len(candidates) >= SHORTLIST_MAX:
+            excluded.append(Exclusion(provider_id=p.provider_id, name=name, reason="over_cap"))
+            continue
+        handles = []
+        for slot in fitting[:SEARCH_MAX_SLOTS]:
+            handles.append(
+                SlotHandle(
+                    ref=f"S{next_ref}",
+                    provider_id=p.provider_id,
+                    slot=slot,
+                    search_price_inr=p.price_inr,
+                )
+            )
+            next_ref += 1
+        candidates.append(_candidate(p, name, handles))
+    return Shortlist(
+        brief_version=brief_version,
+        window_label=window.label,
+        candidates=candidates,
+        excluded=excluded,
+    )
+
+
+def _candidate(p: ProviderSummary, name: str, handles: list[SlotHandle]) -> Candidate:
+    return Candidate(
+        provider_id=p.provider_id,
+        name=name,
+        rating=p.rating,
+        price_inr=p.price_inr,
+        review_count=p.review_count,
+        verified=p.attributes.verified,
+        slots=handles,
+        badges=["verified"] if p.attributes.verified else [],
+    )
+
+
+def search_view(shortlist: Shortlist, result: SearchProvidersOut, tz: tzinfo) -> dict[str, Any]:
+    extra = {p.provider_id: p for p in result.providers}
+    shown = shortlist.candidates[:SEARCH_MAX_CANDIDATES]
+    return {
+        "window": shortlist.window_label,
+        "candidates": [
+            {
+                "provider_id": c.provider_id,
+                "name": c.name,
+                "price_inr": c.price_inr,
+                "rating": c.rating,
+                "review_count": c.review_count,
+                "verified": c.verified,
+                "years_experience": extra[c.provider_id].attributes.years_experience,
+                "slots": [{"ref": h.ref, "when": slot_label(h.slot, tz)} for h in c.slots],
+            }
+            for c in shown
+        ],
+        "more_candidates": len(shortlist.candidates) - len(shown),
+        "excluded": [
+            {"provider_id": e.provider_id, "reason": e.reason} for e in shortlist.excluded
+        ],
+    }
+
+
+class SlotView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    when: str
+    ref: str | None
+
+
+class ProviderView(BaseModel):
+    """get_provider as the planner sees it. There is deliberately no reviews field."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str
+    name: str
+    service: str
+    area: str
+    price_inr: int
+    rating: float
+    verified: bool
+    years_experience: int
+    languages: list[str]
+    brands: list[str]
+    available_slots: list[SlotView]
+
+
+def provider_view(
+    result: GetProviderOut,
+    *,
+    window: TimeWindow | None,
+    shortlist: Shortlist | None,
+    tz: tzinfo,
+) -> ProviderView:
+    refs = {}
+    if shortlist is not None:
+        for c in shortlist.candidates:
+            for h in c.slots:
+                refs[(h.provider_id, h.slot.start)] = h.ref
+    slots = [s for s in result.available_slots if window is None or slot_fits(s, window, tz)]
+    attrs = result.attributes
+    return ProviderView(
+        provider_id=result.provider_id,
+        name=clean_name(result.name),
+        service=result.service.value,
+        area=result.area.value,
+        price_inr=result.price_inr,
+        rating=result.rating,
+        verified=attrs.verified,
+        years_experience=attrs.years_experience,
+        languages=[clean_text(x, 30) for x in attrs.languages[:6]],
+        brands=[clean_text(x, 30) for x in attrs.brands[:6]],
+        available_slots=[
+            SlotView(when=slot_label(s, tz), ref=refs.get((result.provider_id, s.start)))
+            for s in slots[:PROVIDER_MAX_SLOTS]
+        ],
+    )
+
+
+def bookings_view(result: ListBookingsOut, tz: tzinfo) -> dict[str, Any]:
+    items: Sequence[Any] = result.bookings[:BOOKINGS_MAX]
+    return {
+        "bookings": [
+            {
+                "booking_id": b.booking_id,
+                "provider_id": b.provider_id,
+                "provider_name": clean_name(b.provider_name),
+                "service": b.service.value,
+                "when": slot_label(b.slot, tz),
+                "status": b.status,
+            }
+            for b in items
+        ],
+        "more": max(0, len(result.bookings) - BOOKINGS_MAX),
+    }

@@ -27,6 +27,8 @@ MAX_RANGE_DAYS = 14
 # Sent by HTTP clients on every tool call, so the world can hold a timed-out
 # connection open past exactly the client's own timeout (tools/timeouts.py).
 CLIENT_TIMEOUT_HEADER = "X-Errand-Client-Timeout-Ms"
+# Sent by the HTTP world on every tool answer: the call's op_log seq.
+WORLD_SEQ_HEADER = "X-World-Seq"
 
 ToolName = Literal[
     "search_providers",

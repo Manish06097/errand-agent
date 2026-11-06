@@ -16,7 +16,7 @@ help:
 	@echo "make dev          world, API and web together (ports: ERRAND_WORLD_PORT,"
 	@echo "                  ERRAND_API_PORT, ERRAND_WEB_PORT; defaults 8765, 8000, 3200)"
 	@echo "make check        every lint, type, hygiene and test gate"
-	@echo "make evals        offline eval suite"
+	@echo "make evals        offline eval suite; regenerates docs/EVAL_TABLE.md"
 	@echo "make e2e | record | langfuse-up   not built yet"
 
 setup:
@@ -46,7 +46,7 @@ check:
 
 evals:
 	uv sync --locked --project backend
-	$(UV) python scripts/run_evals.py
+	$(UV) python scripts/run_evals.py --write-report
 
 e2e:
 	@echo "make e2e: not built yet, lands in M7" >&2; exit 2

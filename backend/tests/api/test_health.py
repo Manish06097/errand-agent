@@ -28,8 +28,14 @@ def routes(app: FastAPI) -> set[str]:
     return {r.path for r in app.routes if isinstance(r, APIRoute)}
 
 
-def test_api_has_only_health() -> None:
-    assert routes(api_app) == {"/api/health"}
+def test_api_has_exactly_the_m3_routes() -> None:
+    assert routes(api_app) == {
+        "/api/health",
+        "/api/conversations",
+        "/api/conversations/{conversation_id}",
+        "/api/conversations/{conversation_id}/messages",
+        "/api/runs/{run_id}/events",
+    }
 
 
 def test_world_has_health_and_tools_and_no_dev_routes_by_default() -> None:

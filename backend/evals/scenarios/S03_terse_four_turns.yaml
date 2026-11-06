@@ -1,0 +1,36 @@
+id: S03_terse_four_turns
+title: A four-turn errand with a terse user; one legal re-ask, then options, then an answer from the shortlist
+category: [conversation]
+seed: 3
+user:
+  persona: terse
+  goal:
+    service: plumber
+    area: indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+# A terse user answering one field per turn would spend the re-ask budget by turn 3,
+# so the legal sequence is spelled out: turn 2 gives the area only, turn 3 the rest.
+steps:
+  - say: "need a plumber"
+    gives: [service]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [area, window, budget_max_inr]
+  - say: "indiranagar"
+    gives: [area]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [window, budget_max_inr]
+    with_options: true
+  - expect_world: {search_providers: 0}
+  - say: "this week mornings, 1500"
+    gives: [window, budget_max_inr]
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_world: {search_providers: 1}
+  - expect_search_matches_brief: {}
+  - say: "which one is cheapest?"
+  - expect_outcome: REPLIED
+  - expect_no_card: {}
+  - expect_trace: {tool.call: 0, guard.ask_rejected: 0}
+  - expect_world: {search_providers: 1}
+expect:
+  invariants: [default]

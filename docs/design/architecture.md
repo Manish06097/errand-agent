@@ -78,7 +78,7 @@ The evals are invariant checks across those three records. The trace excerpt in 
    |  reader: Haiku 5.5 |  ConsequentialClient    |  messages, runs, notifications...
    |  (quarantined)     |  (executor only)        |
    v                    v                         v
- Tracer (sanitize once) -> JsonlSink (always, source of truth) -> StreamSink (live panel)
+ Tracer (sanitize once) -> JsonlSink (always, source of truth) -> StreamSink (RunManager broadcaster -> SSE)
                                                                -> LangfuseSink (optional)
                         |
                         v
@@ -101,10 +101,12 @@ errand-agent/
     src/errand/
       config.py                   # pydantic-settings: model ids, effort, budgets, limits, paths, modes
       clock.py                    # Clock protocol: SystemClock, SimClock (persisted)
-      ids.py                      # IdFactory: deterministic in sim mode, uuid7 live
+      ids.py                      # IdFactory: deterministic in sim mode (c_0001, r_0001), uuid7 live;
+                                  # message and errand ids are derived from the run id, never minted
       faults.py                   # named crash points: ERRAND_FAULT=after_world_book:exit
       domain/                     # shared Pydantic types, no I/O
-        money.py slots.py brief.py material.py outcomes.py inbound.py
+        brief.py slots.py errand.py outcomes.py inbound.py counters.py messages.py windows.py
+        (material.py in M4; money is integer rupees on the wire, no module)
       world/                      # MOCK PROVIDER WORLD; imports nothing from agent/
         contracts.py              # Pydantic I/O of the 8 fixed tools (the contract boundary)
         scenario.py               # ScenarioConfig (YAML -> Pydantic)
@@ -117,6 +119,8 @@ errand-agent/
       tools/
         client.py                 # WorldClient protocol; InProcessTransport, HttpTransport
         gateway.py                # ToolGateway: caller allowlist, validation, timeouts, error taxonomy, trace
+        runtime.py                # WorldAccess: in-process or HTTP world plus its clock; the only way
+                                  # the agent and API reach the world (import-linter)
         errors.py                 # ToolTimeout, ToolTransient, ToolDefinitive, ToolInvalid, ToolUnexpected
         sanitize.py               # caps, control/zero-width strip, PII masks
         views.py                  # planner-facing views (ProviderView without reviews, compact search)
@@ -135,7 +139,9 @@ errand-agent/
         nodes/ ingress.py plan.py prepare_proposal.py await_approval.py
                execute.py verify.py followup.py respond.py
         planner_tools.py          # model-facing schemas: read + propose + brief + memory only
-        brief_ops.py              # REQUIRED, missing(), merge(), INVALIDATES
+        brief_ops.py              # REQUIRED, missing(), merge(), evidence check, INVALIDATES (M8)
+        ask_guard.py              # ask once, re-ask once with options, then a code message
+        deps.py templates.py      # per-run context (never checkpointed); outcome templates
         timewin.py                # deterministic resolution of "this week", "mornings", "Saturday"
         ranking.py                # hard filters + transparent score
         validation.py             # proposal validation (eligibility, ownership, duplicates, budget)
@@ -157,6 +163,7 @@ errand-agent/
       store/ db.py migrations/*.sql repos/*.py
       usage.py                    # Usage split; below both llm/ and trace/ (import-linter layers)
       trace/ schema.py tracer.py sanitize.py reader.py sinks/{jsonl,stream,langfuse,null}.py cli.py
+      store/agent_db.py           # one shared connection, an asyncio lock per use; repos/leases.py
       api/ app.py runs.py locks.py sse.py events.py routes/*.py
     evals/
       scenarios/*.yaml            # one file per scenario
@@ -180,7 +187,7 @@ errand-agent/
 
 `errand chat` (a small CLI over the same API) is the terminal fallback for a grader who only has `uv`. `make dev` starts the world, the API and the web app in one command; Langfuse stays optional.
 
-The module boundaries are also enforcement boundaries. `execution/executor.py` is the only module allowed to import the consequential world calls. An `import-linter` contract in pre-commit and CI forbids `agent.nodes.plan`, `llm`, `context` and `quarantine` from importing it, and `ToolGateway` rejects `book`, `cancel`, `reschedule` and `hold_slot` when the caller is the planner. That is defence in depth: the planner's tool schemas do not contain them in the first place.
+The module boundaries are also enforcement boundaries. `execution/executor.py` is the only module allowed to import the consequential world calls. An `import-linter` contract in pre-commit and CI forbids `agent.nodes.plan`, `llm`, `context` and `quarantine` from importing it, and `ToolGateway` rejects `book`, `cancel`, `reschedule` and `hold_slot` when the caller is the planner. That is defence in depth: the planner's tool schemas do not contain them in the first place. A second contract (M3) keeps `agent`, `api`, `context` and `llm` from importing `world.engine`, `store`, `server` or `catalog`: they reach the world only through `errand.tools` (importing `world.contracts` types is fine). Only two edges into the world are waived, `tools.runtime -> world.engine` (it builds the host) and `tools.client -> world.engine` (the in-process transport), so any other tools module that imports the engine, store, server or catalog breaks the contract.
 
 ---
 
@@ -207,7 +214,7 @@ Three SQLite files plus JSONL traces.
 |---|---|---|
 | `users` | user_id, tz, display_name | one seeded user |
 | `conversations` | conversation_id (= LangGraph thread_id), user_id, kind(`chat`/`followup`), title, origin_booking_id, created_at, last_activity_at | |
-| `messages` | message_id, conversation_id, client_msg_id UNIQUE, role, kind(`text`/`card`/`notice`/`proactive`), body_json, run_id, turn_no, approval_id, typed_grant_ok, rendered_at, created_at | transcript of record; dedups retried POSTs. Memory values are never stored inline in `body_json`: memory chips, suggestions and memory cards store `memory_id` references resolved at render time through `memories_eligible` (section 12.3). `rendered_at` is the client's render ack for a card. |
+| `messages` | message_id, conversation_id, client_msg_id UNIQUE, UNIQUE(run_id, kind) for assistant rows (migration 0002; the user's row carries the run it started), role, kind(`text`/`card`/`notice`/`proactive`), body_json, run_id, turn_no, approval_id, typed_grant_ok, rendered_at, created_at | transcript of record; dedups retried POSTs. Memory values are never stored inline in `body_json`: memory chips, suggestions and memory cards store `memory_id` references resolved at render time through `memories_eligible` (section 12.3). `rendered_at` is the client's render ack for a card. |
 | `message_redactions` | message_id, start, end, memory_id | spans removed by a forget (section 12) |
 | `runs` | run_id, conversation_id, trigger, status(`running`/`ended`/`recovered`), outcome, model_calls, tool_calls, tokens_in, tokens_out, cost_usd, trace_path, started_at, ended_at | derived index; rebuildable from traces except `status` |
 | `errands` | errand_id, conversation_id, kind, phase, brief_json, replaces_booking_id, outcome, created_at, closed_at | archived errands for the ledger |
@@ -421,8 +428,8 @@ The world is a separate SQLite file behind `WorldClient`, with two transports ru
 | Two concurrent resumes on one thread both ran `book` | Per-thread `asyncio.Lock` plus a DB lease row, conditional approval consumption, unique intent per approval. |
 | Plain input on an interrupted thread drops the interrupt and restarts from START | The API checks `aget_state(cfg).interrupts` under the lock. If one is pending, input goes in as `Command(resume=inbound)`, otherwise as plain input. Both land in `ingress`. |
 | Sync `get_state` on `AsyncSqliteSaver` raises on the loop thread | Only `a*` methods in FastAPI. |
-| v2 outputs are typed | `version="v2"` everywhere; `stream_mode=["updates","custom","tasks","messages"]`. |
-| Unregistered types warn on deserialise | `LANGGRAPH_STRICT_MSGPACK=true`; every state type reachable from `ThreadState`. |
+| v2 outputs are typed | `version="v2"` everywhere. No LangGraph stream modes feed the UI: the run's SSE stream is the tracer's `StreamSink` into a broadcaster owned by `RunManager` (16.1), because `run.start` and `run.end` are emitted outside any node, where `get_stream_writer()` does not exist; `messages` mode would duplicate the gateway's tokens. |
+| Unregistered types warn on deserialise | `LANGGRAPH_STRICT_MSGPACK=true` (set in `errand/__init__.py`, before anything imports langgraph); every state type reachable from `ThreadState`. A parametrised generic such as `Fact[Service]` is not restored by a strict checkpoint (it comes back as a dict), so fact types are concrete classes; a fresh-process round-trip test pins this. The state comes back from `aget_state` as a dict of field values. |
 
 ### 6.2 The graph
 
@@ -518,7 +525,7 @@ I rejected a `plan -> tools -> plan` cycle in the graph with `loop_messages` che
 
 - `RunManager` runs each graph invocation as a detached asyncio task. HTTP POSTs return `{run_id}` and the browser subscribes to `GET /api/runs/{run_id}/events`. A closed tab or dropped connection never cancels a `book` in flight. Reconnects replay from the run's JSONL using `Last-Event-ID = seq`.
 - One active run per thread. A second message while a run is active returns 409 `run_in_progress` and the UI shows it as queued, then sends it when the run ends. The client captures `visible_card` and `client_composed_at` when the user presses Send, not when the queue flushes, and keeps both on a manual resend, so a queued "book it" can never bind to a card that appeared after it was typed (section 8.3).
-- `api/locks.py` combines a per-thread `asyncio.Lock` with a `leases` row (`thread:<id>`) taken by a conditional UPDATE and renewed every 5 s, so a second worker process is safe.
+- `api/locks.py` combines a per-thread `asyncio.Lock` with a `leases` row (`thread:<id>`) taken by a conditional UPDATE and renewed every 5 s, so a second worker process is safe. The asyncio lock covers admission only, in this order: `client_msg_id` dedupe (a hit returns the existing `run_id`, before the active-run check, so a client retrying its own message never gets a 409), the active-run check (409 `run_in_progress`), the lease, the interrupt check, the task start. The lease is held for the whole run and released in `finally`; release always reaches its conditional UPDATE, even if the renew task died, and a failed renewal is logged and retried on the next tick (the TTL is three ticks). Leases run on real time, never the simulated clock: they measure process liveness, and an eval's `advance: 11m` must not expire a live run's lease.
 - `execute` and `verify` also hold a per-user consequential lock (`user:<id>` lease plus an in-process lock). Two conversations can each hold a card for the same booking, but only one consequential action per user runs at a time, and the second re-checks duplicates and booking status inside its own guard transaction after the first has committed (section 8.6).
 - Every lease takeover increments `epoch`. Attempt-state writes carry the epoch they were started under and are conditional on it, so a reconciler that took over a stale lease cannot be overwritten by a slow original worker, and vice versa.
 - A second Approve click either hits `run_in_progress` or finds the approval already `granted`/`consumed` and gets 200 with the current state ("Already approved, booking in progress"), never a misleading "details changed". If the approval is `granted` and no run is active, the click also starts the resume from its `pending_resumes` row. Even if two grants somehow got through, the conditional consume and `UNIQUE(approval_id)` allow one side effect.
@@ -538,14 +545,13 @@ class Provenance(BaseModel):
     evidence: str | None = None          # exact user substring, checked by code; rendered to the
                                          # model truncated to 60 chars, dropped on forget
 
-class Fact(BaseModel, Generic[T]):       # field-level provenance
-    value: T
-    prov: Provenance
-    set_at_turn: int
+class Fact(BaseModel):                   # field-level provenance; one concrete subclass per value
+    prov: Provenance                     # type (ServiceFact, AreaFact, TextFact, WindowFact,
+    set_at_turn: int                     # BudgetFact, ProviderPrefFact): strict msgpack does not
+                                         # restore a parametrised generic
 
 class TimeWindowExpr(BaseModel):         # what the model extracts
-    phrase: str                          # "this week", "Thursday or Friday"
-    days: list[date] | None = None
+    phrase: str                          # "this week", "tomorrow"; never a date (10.5)
     part_of_day: Literal["morning", "afternoon", "evening", "any"] | None = None
     not_before: time | None = None
     not_after: time | None = None
@@ -560,15 +566,16 @@ class ErrandKind(StrEnum): BOOK = "book"; CANCEL = "cancel"; RESCHEDULE = "resch
 
 class Brief(BaseModel):
     version: int = 0
-    service: Fact[Service] | None = None             # enum of seeded services
-    issue: Fact[str] | None = None                   # <= 80 chars
-    area: Fact[Area] | None = None                   # enum of seeded areas
-    window: Fact[TimeWindow] | None = None
-    budget_max_inr: Fact[int | Literal["none"]] | None = None
-    provider_pref: Fact[ProviderPref] | None = None  # {prefer_id?, avoid_ids[]}
-    target_booking_id: Fact[str] | None = None       # cancel / reschedule / rebook
-    new_window: Fact[TimeWindow] | None = None       # reschedule target
-    asked: dict[BriefField, list[int]] = {}          # field -> turns asked (at most 2: ask, one re-ask)
+    service: ServiceFact | None = None               # enum of seeded services
+    issue: TextFact | None = None                    # <= 80 chars
+    area: AreaFact | None = None                     # enum of seeded areas
+    window: WindowFact | None = None                 # resolved window plus the model's expr
+    budget_max_inr: BudgetFact | None = None         # int | "none"
+    provider_pref: ProviderPrefFact | None = None    # {prefer_id?, avoid_ids[]}
+    target_booking_id: TextFact | None = None        # cancel / reschedule / rebook
+    new_window: WindowFact | None = None             # reschedule target
+    asks: list[AskRecord] = []                       # {field, turn, with_options}; at most 2 per field
+    ask_exhausted: list[BriefField] = []             # spent: never asked again in this errand
 
 class SlotHandle(BaseModel):
     ref: str                              # "S4": the only way the model names a slot
@@ -632,7 +639,7 @@ One active errand per thread at a time. Finished errands are archived to the `er
 
 ### 7.2 Transitions
 
-`transitions.transition(errand, to, reason)` is the only way to change `phase`. It raises `IllegalTransition` for pairs not in `ALLOWED`, which ends the run with `INTERNAL_ERROR`, and emits a `state.transition` trace record. The invariant INV-08 re-checks every trace against the same table.
+`transitions.transition(errand, to, reason)` is the only way to change `phase`. It raises `IllegalTransition` for pairs not in `ALLOWED`, which ends the run with `INTERNAL_ERROR`, and emits a `state.transition` trace record. An illegal attempt is recorded too, with its reason prefixed `rejected:`, before the raise, so the trace shows what was tried. The invariant INV-08 re-checks every trace against the same table.
 
 ```
 GATHERING         -> GATHERING | COMPARING | QUOTING (cancel/reschedule with a resolved target) | ABANDONED
@@ -665,7 +672,8 @@ The errand phase and the intent state are separate on purpose. A user can abando
 - **Coverage.** `Service` and `Area` are enums of what the catalog serves. A value outside them ("HSR Layout") is not an error and not a guess: `update_brief` returns `out_of_coverage` to the planner, and `respond` uses a code template listing the covered areas or services with quick replies (S51).
 - `missing(brief, kind)` is computed by code after every patch. The planner's dynamic context states `Known:` and `Missing:` explicitly.
 - **Ask once, re-ask once.** `ask_user` may ask a field a second time only if the user's reply after the first ask did not fill it, and the re-ask must carry quick-reply options. After that the run ends `ASKED_USER` with a code message that names what is still needed, and the field is never asked again in that errand. The planner cannot re-ask a field the user did supply.
-- `merge(brief, patch, prov)` is field-level and never replaces the whole object. A budget correction leaves area, window and service untouched, with their provenance intact.
+- `merge(brief, patch, prov)` is field-level and never replaces the whole object. A budget correction leaves area, window and service untouched, with their provenance intact. A patch is checked whole before anything merges: one value with bad evidence or an unresolvable window rejects the entire patch (a tool error, 10.7), so the brief never holds half of a misread message.
+- **Re-ask budget and retractions.** "The reply after the first ask did not fill it" means "the field is unfilled when the re-ask is made". A retraction is not the user giving the value: `update_brief`'s `clear` exists from M3, and after an applied clear ("not indiranagar actually") the field is unfilled again, so its one re-ask with options is legal. It still counts toward the two asks, and a third is still refused. The guard decides this from `missing()`; INV-13 rebuilds it independently from the `brief.patch` records (an applied set fills, an applied clear un-fills) and the persisted cards, and the two agree. A clear of a required field while COMPARING moves the errand back to GATHERING. M8 adds value-bound corrections and `INVALIDATES`, not the clear itself.
 - `INVALIDATES` decides what a field change discards downstream:
 
 | Field changed | Invalidates |
@@ -987,7 +995,7 @@ reader = ChatAnthropic(model="claude-haiku-5-5", max_tokens=1500,
 |---|---|---|
 | Understanding | `update_brief(set, clear, evidence)` with a `TimeWindowExpr` for dates | Field-level merge with provenance; evidence is bound to the value (section 10.7), otherwise rejected as a tool error; `timewin.resolve` turns expressions into windows; `missing()` |
 | Clarifying | `ask_user(fields, question, options?)` | Rejects fields not in `missing()`; allows one re-ask with options only if the reply did not fill the field (section 7.3); all missing fields in one question; quick replies |
-| Reading the world | decides *when* to search, which shortlisted or historical provider to open, and when to look at bookings | `search_providers` as the planner sees it takes no arguments: code derives `service`, `area` and `date_range` from the resolved brief (the model never writes a date), so it cannot search a different area or window than the user asked for. `get_provider` accepts only an id from the shortlist or the user's bookings. `user_id` is injected. Results are sanitized and compacted; reviews go to the reader; hard filters apply before the model sees results |
+| Reading the world | decides *when* to search, which shortlisted or historical provider to open, and when to look at bookings | `search_providers` as the planner sees it takes no arguments: code derives `service`, `area` and `date_range` from the resolved brief (the model never writes a date), so it cannot search a different area or window than the user asked for. `get_provider` accepts only an id from the current shortlist (one whose `brief_version` is the brief's version; a stale one does not count) or the user's bookings. `user_id` is injected. Results are sanitized and compacted; reviews go to the reader; hard filters apply before the model sees results |
 | Comparing | writes the 1 to 2 sentence recommendation and trade-offs; may recommend any eligible candidate | Hard filters (window, `not_before`, `not_after`, budget, avoided providers) with reasons; transparent score; candidates shown in score order with score parts |
 | Choosing | `propose_booking(provider_id, slot_ref)`, `propose_cancel(booking_ref)`, `propose_reschedule(booking_ref, slot_ref)` | Slot handles resolved by code; validation (section 8.6); hold, quote, card, fingerprint |
 | Approval | nothing | everything |
@@ -998,7 +1006,7 @@ reader = ChatAnthropic(model="claude-haiku-5-5", max_tokens=1500,
 
 ### 10.3 Planner tools
 
-Stable order, `strict=True`: `search_providers` (no args), `get_provider`, `list_bookings` (no args), `update_brief`, `ask_user`, `propose_booking`, `propose_cancel`, `propose_reschedule`, `remember`, `list_memories`, `propose_forget`. A `propose_*` that passes validation ends the loop. `book`, `cancel`, `reschedule`, `hold_slot` and `get_booking_status` are absent by construction; INV-11 checks every traced request for this.
+Stable order, `strict=True`: `search_providers` (no args), `get_provider`, `list_bookings` (no args), `update_brief`, `ask_user`, `propose_booking`, `propose_cancel`, `propose_reschedule`, `remember`, `list_memories`, `propose_forget`. A `propose_*` that passes validation ends the loop. `book`, `cancel`, `reschedule`, `hold_slot` and `get_booking_status` are absent by construction; INV-11 checks every traced request for this. M3 ships the first five. Strict tool use needs every property in `required` and `additionalProperties: false`, so optional values are nullable (`anyOf` with `null`) and the no-argument tools have an empty closed object; a test checks the schemas against those rules, since scripted mode would accept a schema the API rejects. `ask_user`'s question (400 chars) and options (at most 6, 40 chars each) are bounded in code, since strict mode rejects `maxItems` and `maxLength`, and cleaned like world text before they reach the card. In M3 `update_brief`'s window is `{phrase, part_of_day}` only, the closed set `timewin` resolves (today, tomorrow, this week, next week); `not_before`/`not_after` join it with the full resolver in M8.
 
 ### 10.4 Steering without forced tool choice
 
@@ -1208,7 +1216,7 @@ Older turns never enter context verbatim. `context/ledger.py` builds lines from 
 
 ### 13.4 Manifest
 
-Every model call writes a `context.built` record:
+Every model call writes one `context.built` record: the gateway's budget figures (estimate, in-loop floor, request hash, sent) merged with the builder's manifest (sections, caps, included message ids), so there is never a second, drifting manifest. M3's builder has S1, S2, S3, S6 and S7; the record looks like this once M12 adds the rest:
 
 ```json
 {"run_id": "r_0007", "call": 2, "budget": 12000, "estimated": 6120,
@@ -1297,13 +1305,13 @@ Each timeout is also capped by the remaining run time plus the critical grace. I
 
 ### 15.2 Outcomes
 
-Every run ends in `respond` with exactly one `RunOutcome`, rendered by a code template with next-step buttons. INV-07 checks it.
+Every run ends in `respond` with exactly one `RunOutcome`, rendered by a code template with next-step buttons. INV-07 checks it. Model text appears only in `REPLIED`, the one-line recommendation on options and the `ClarifyCard`'s question and quick replies, which are `ask_user`'s by contract and are bounded and cleaned in the plan node.
 
 | Outcome | When | User sees |
 |---|---|---|
 | `REPLIED` | normal answer | text |
 | `ASKED_USER` | missing details | ClarifyCard with quick replies |
-| `PRESENTED_OPTIONS` | shortlist ready or alternatives after a failure | comparison card |
+| `PRESENTED_OPTIONS` | shortlist ready (at least one candidate) or alternatives after a failure | comparison card |
 | `AWAITING_APPROVAL` | card shown | ActionCard |
 | `BOOKED_VERIFIED` / `CANCELLED_VERIFIED` / `RESCHEDULED_VERIFIED` | status confirmed | confirmation card with a "verified" badge |
 | `PENDING_VERIFICATION` | status unresolved, or any exit with an open intent | "The provider hasn't confirmed yet, and it can't end up booked twice. I'll know by 09:12 and update you here." [Check now] [Never mind] |
@@ -1311,7 +1319,7 @@ Every run ends in `respond` with exactly one `RunOutcome`, rendered by a code te
 | `DECLINED` | user declined | acknowledgement, options kept |
 | `MEMORY_UPDATED` | memory-only turn | memory chip with Undo |
 | `NOTIFIED` | follow-up delivered | proactive card |
-| `LIMIT_REACHED` | model, tool or cost limit | "I hit my step limit. Here's what I have so far." [Try again] [Narrow search] |
+| `LIMIT_REACHED` | model, tool or cost limit | "I hit my step limit for this turn, so I stopped. So far I have: plumber, Indiranagar, ... Nothing was booked." (the brief's filled search fields; the sentence is left out when none are) [Try again] [Narrow search] |
 | `WALL_CLOCK_EXCEEDED` | deadline | same shape, plus what is still pending |
 | `CONTEXT_TOO_LARGE` / `CONTEXT_EXHAUSTED` | input over cap / loop over cap | "That message is too long for me; can you shorten it?" / partial result |
 | `TOOL_UNAVAILABLE` | read tool down after retries | "Provider search is down right now." [Retry] |
@@ -1335,7 +1343,7 @@ nodes / LLMGateway / ToolGateway / approvals / executor
 Tracer: assigns seq and span ids, sanitizes ONCE, computes latency; cost is priced by the
         caller (LLMGateway via pricing.py) and handed in, so trace/ never imports llm/
    |--> JsonlSink     always on, writes first; the source of truth for evals and the deliverable
-   |--> StreamSink    get_stream_writer() -> SSE trace panel (same records)
+   |--> StreamSink    RunManager's broadcaster -> SSE (same records; replay from the JSONL)
    '--> LangfuseSink  only when keys are set and ERRAND_LANGFUSE is not off; otherwise NullSink
 ```
 
@@ -1444,7 +1452,7 @@ On mobile the inspector becomes a bottom sheet and the sidebar a drawer. A dev d
 | `POST /api/messages/{id}/rendered {client_ts}` | card render ack |
 | `POST /api/conversations/{id}/actions {client_action_id, kind, payload}` | `select_slot`, `refresh_hold`, `edit_brief_field`, `choose_option`, `check_now`, `abandon_errand`, `stop` (the current run), `confirm_forget`, `keep_memory` |
 | `POST /api/approvals/{id}/decision {decision, fingerprint, client_action_id}` | the only button grant path |
-| `GET /api/runs/{run_id}/events` | SSE: `run.started`, `token`, `activity`, `card`, `card.update`, `state`, `trace`, `notice`, `run.finished{outcome}`; resumes from `Last-Event-ID` |
+| `GET /api/runs/{run_id}/events` | SSE: `run.started`, `token`, `activity`, `card`, `card.update`, `state`, `trace`, `notice`, `run.finished{outcome}`; resumes from `Last-Event-ID`. Every replayable event is a trace record with `id: <seq>` (M3 sends `run.started`, `trace` and `run.finished`); `token` has no id and is never replayed. Replay subscribes to the live stream first, then reads the JSONL after `Last-Event-ID`, then tails, deduping by seq; the stream closes after `run.finished` |
 | `GET /api/users/me/events` | SSE: notifications and proactive messages, with replay |
 | `GET/PATCH/DELETE /api/memory[/{id}]`, `POST /api/memory/{id}/confirm`, `POST /api/memory/{id}/dismiss`, `POST /api/memory/{id}/undo` | memory |
 | `GET /api/bookings`, `GET /api/notifications`, `GET /api/runs/{id}/trace[.jsonl]` | reads |
@@ -1505,7 +1513,7 @@ expect:
 notes_metrics: [model_calls, tool_calls, cost_usd, est_tokens_max]
 ```
 
-Step verbs: `say`, `until`, `click_slot`, `approve` (option `fingerprint: stale`), `approve_concurrently: 2`, `decline`, `type_confirm` (text, option `composed_during_run`), `advance`, `world_event`, `watcher_tick`, `reconciler_tick`, `check_now`, `stop`, `crash_at`, `restart`, `memory_api`, `click_forget`, `expect_outcome`, `expect_card`, `expect_no_card`, `expect_question_for`.
+Step verbs (each milestone adds the ones it executes; an unknown verb fails at load; M3 has `say` with `gives`, `answer`, `post` (one `client_msg_id` several times, in sequence or concurrently), `expect_outcome`, `expect_question_for`, `expect_no_card`, `expect_world`, `expect_trace`, `expect_tool_errors`, `expect_search_matches_brief`, `expect_notice`): `say`, `until`, `click_slot`, `approve` (option `fingerprint: stale`), `approve_concurrently: 2`, `decline`, `type_confirm` (text, option `composed_during_run`), `advance`, `world_event`, `watcher_tick`, `reconciler_tick`, `check_now`, `stop`, `crash_at`, `restart`, `memory_api`, `click_forget`, `expect_outcome`, `expect_card`, `expect_no_card`, `expect_question_for`.
 
 ### 18.5 Invariants (run after every scenario)
 
@@ -1522,7 +1530,7 @@ They read three records: trace, agent DB and world `op_log`.
 | INV-07 | exactly one `run.end` per `run.start`, with one outcome and a non-empty user message |
 | INV-08 | every `state.transition` is in `ALLOWED` |
 | INV-09 | counters never exceed limits; simulated wall clock within the deadline |
-| INV-10 | review canaries never appear in planner requests |
+| INV-10 | review canaries never appear in planner requests (from M3: no review text in the world's catalogue, read from world.sqlite, nor any served one, nor its sanitizer digest, appears in any traced planner request; the count checked is in the table's notes, so a vacuous check shows) |
 | INV-11 | no planner request lists a consequential tool |
 | INV-12 | any material change between card and execution yields `approval.invalidated` and a new card |
 | INV-13 | no `ask_user` for a filled or already-asked field reaches the user |
@@ -1621,7 +1629,7 @@ Outside the table:
 
 ### 18.7 Generated eval table
 
-A pytest plugin (`evals/report.py`) collects `ScenarioResult(scenario, category, expected, actual, passed, notes)`. `expected` is rendered from the YAML `expect` block; `actual` is built from observed facts ("world bookings=1 (B-5521); book calls=1; status checks=1; outcome=BOOKED_VERIFIED"); `notes` carries model calls, tool calls, max estimated tokens, max actual input tokens (replay and live), cost and the trace path. Columns are scenario, category, model_mode, world, expected, actual, pass/fail, notes. It writes `docs/EVAL_TABLE.md` and `docs/eval_results.json` (committed, so the table and its data travel with the repo) with a header of git SHA, model mode, seed range and timestamp. Per-scenario traces go to `backend/evals/out/` (gitignored). Nobody edits the table by hand.
+A pytest plugin (`evals/report.py`) collects `ScenarioResult(scenario, category, expected, actual, passed, notes)`. `expected` is rendered from the YAML `expect` block; `actual` is built from observed facts ("world bookings=1 (B-5521); book calls=1; status checks=1; outcome=BOOKED_VERIFIED"); `notes` carries model calls, tool calls, max estimated tokens, max actual input tokens (replay and live), cost, the number of review texts INV-10 checked and the trace path. Columns are scenario, category, model_mode, world, expected, actual, pass/fail, notes. It writes `docs/EVAL_TABLE.md` and `docs/eval_results.json` (committed, so the table and its data travel with the repo) with a header of git SHA, model mode, seed range and timestamp. Per-scenario traces go to `backend/evals/out/` (gitignored). Nobody edits the table by hand. An empty catalogue, or anything in `scenarios/` that is not a `*.yaml` file, is a collection error, any empty parametrize fails at collection, and the plugin refuses to write a table with no rows or without a row for a collected scenario (BUG-M3-1: an empty glob was one skipped test and exit 0).
 
 I rejected wording assertions and LLM-as-judge in the gate: flaky, costly, and they prove nothing about the invariants the brief names.
 
