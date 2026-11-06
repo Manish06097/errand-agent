@@ -69,6 +69,8 @@ module = [
   "errand.approvals", "errand.approvals.*",
   "errand.execution", "errand.execution.*",
   "errand.world", "errand.world.*",
+  "errand.tools", "errand.tools.*",
+  "errand.clock",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true
@@ -113,3 +115,17 @@ name = "The mock world never imports the agent"
 type = "forbidden"
 source_modules = ["errand.world"]
 forbidden_modules = ["errand.agent"]
+
+[[tool.importlinter.contracts]]
+name = "The mock world imports nothing from the tool gateway, execution or the API (errand.clock is its only errand dependency)"
+type = "forbidden"
+source_modules = ["errand.world"]
+forbidden_modules = [
+  "errand.tools",
+  "errand.execution",
+  "errand.api",
+  "errand.approvals",
+  "errand.context",
+  "errand.llm",
+  "errand.quarantine",
+]

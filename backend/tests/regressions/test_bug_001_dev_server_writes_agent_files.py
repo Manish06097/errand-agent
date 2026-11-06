@@ -48,7 +48,7 @@ def wait_for(url: str, deadline: float, dev: subprocess.Popen[str]) -> str | Non
     return f"{url} not ready in {READY_TIMEOUT_S:.0f}s"
 
 
-def test_make_dev_under_a_coding_agent_writes_no_agent_files() -> None:
+def test_make_dev_under_a_coding_agent_writes_no_agent_files(tmp_path: Path) -> None:
     present_before = [name for name in AGENT_FILES if (WEB / name).exists()]
     if present_before:
         pytest.fail(f"remove {present_before} from web/ first; the repro needs a clean tree")
@@ -59,6 +59,8 @@ def test_make_dev_under_a_coding_agent_writes_no_agent_files() -> None:
         ERRAND_WORLD_PORT=str(free_port()),
         ERRAND_API_PORT=str(free_port()),
         ERRAND_WEB_PORT=str(free_port()),
+        # Keep the world's store out of the repo's data/ directory.
+        ERRAND_WORLD_DB=str(tmp_path / "world.sqlite"),
     )
     dev = subprocess.Popen(
         ["uv", "run", "--frozen", "--project", "backend", "python", "scripts/dev.py"],
