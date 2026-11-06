@@ -1,4 +1,4 @@
-"""Each service exposes exactly its health route for now."""
+"""Each service exposes exactly the routes it should: health, and for the world its tools."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from fastapi.routing import APIRoute
 
 from errand.api.app import app as api_app
 from errand.world.server import app as world_app
+from errand.world.server import create_app as create_world_app
 
 
 @pytest.mark.parametrize(
@@ -23,6 +24,27 @@ async def test_health(app: FastAPI, path: str, service: str) -> None:
     assert response.json() == {"status": "ok", "service": service}
 
 
-@pytest.mark.parametrize(("app", "path"), [(api_app, "/api/health"), (world_app, "/health")])
-def test_no_other_routes(app: FastAPI, path: str) -> None:
-    assert [r.path for r in app.routes if isinstance(r, APIRoute)] == [path]
+def routes(app: FastAPI) -> set[str]:
+    return {r.path for r in app.routes if isinstance(r, APIRoute)}
+
+
+def test_api_has_only_health() -> None:
+    assert routes(api_app) == {"/api/health"}
+
+
+def test_world_has_health_and_tools_and_no_dev_routes_by_default() -> None:
+    assert routes(create_world_app(dev=False)) == {"/health", "/tools/{tool}"}
+
+
+def test_world_dev_routes_only_with_the_dev_flag() -> None:
+    dev = {r for r in routes(create_world_app(dev=True)) if r.startswith("/dev")}
+    assert dev == {
+        "/dev/clock",
+        "/dev/clock/advance",
+        "/dev/world/events",
+        "/dev/world/tick",
+        "/dev/scenario",
+        "/dev/op_log",
+        "/dev/bookings",
+        "/dev/operations",
+    }

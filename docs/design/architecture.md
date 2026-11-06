@@ -269,18 +269,22 @@ How I use the source-of-truth tools:
 ### 5.3 World store (`world.sqlite`)
 
 ```
-providers(provider_id PK, name, service, area, base_price_inr, rating, review_count, attributes_json, about)
-slots(provider_id, start_ts, end_ts, status: free|held|booked, PRIMARY KEY(provider_id, start_ts))
+providers(provider_id PK, name, service, area, base_price_inr, rating, review_count, attributes_json, about,
+          listed)                                     -- listed=0: answers get_provider, absent from search (E4)
+slots(provider_id, start_ts, end_ts, status: free|booked, PRIMARY KEY(provider_id, start_ts))
 reviews(review_id PK, provider_id, rating, text, posted_at, is_injection)   -- is_injection is eval metadata only
-holds(hold_id PK, provider_id, slot_start, quoted_price_inr, created_at, expires_at,
-      status: active|consumed|expired)
+holds(hold_id PK, provider_id, slot_start, slot_end, quoted_price_inr, created_at, expires_at,
+      status: active|consumed|expired|released)
 bookings(booking_id PK, user_id, provider_id, service, slot_start, slot_end, price_inr,
          status, hold_id, created_by_key, created_at)
-operations(idempotency_key PK, op, request_hash, outcome: in_progress|applied|not_applied, response_json, booking_id, calls)
+operations(idempotency_key PK, op, request_hash, outcome: in_progress|applied|not_applied, response_json,
+           booking_id, calls, attempts, updated_at)   -- attempts = evaluations; calls also counts replays
 call_counters(tool, subject, n)                       -- drives cancel's first-call 503
 world_events(event_id PK, type, target_json, fire_at, fired_at)
-op_log(seq PK, sim_ts, op, args_json, outcome, response_json, draw)   -- ground truth for evals
-meta(key PK, value)                                   -- seed, scenario_id, sim_now
+op_log(seq PK, sim_ts, op, idempotency_key, args_json, outcome, http_status, response_json, draw, attempt,
+       done_ts, done_seq)                             -- ground truth for evals
+meta(key PK, value)                                   -- scenario_json, seed, clock_mode, sim_now_ms or
+                                                      -- offset_ms, id counters, forced_book_used, done_seq
 ```
 
 Idempotency semantics in the world. The brief names `get_booking_status` the source of truth and gives `book` an idempotency key, so the default world behaves like a provider that dedupes keys. The agent's same-key retry (section 9.4) rests on exactly these rules, and the contract suite proves each one on both transports:
@@ -290,8 +294,22 @@ Idempotency semantics in the world. The brief names `get_booking_status` the sou
 - A same-key call that finds the key `in_progress` waits for that operation to finish (a per-key lock in the engine, so both transports behave the same), then replays it if it applied or evaluates afresh if it did not. This is what makes the late-commit case safe: a retry can never race the original request into a second booking.
 - A key whose operation ended `not_applied` (`timeout_not_booked`) is evaluated again on a same-key call, with a fresh draw (`attempt_for_key` + 1), as any deduping provider would. That is the case the agent's single same-key retry exists for.
 - Reusing a key with a different `request_hash` returns `idempotency_key_reuse`. That would be a bug on our side, so it is loud.
-- Holds never supersede each other. A hold ends only by `book` (consumed) or by passing `expires_at` (expired), which keeps `hold_expired` exactly as the contract defines it.
+- Holds never supersede each other. A hold ends by `book` (consumed), by a `slot_taken` answer (released, see the M1 clarifications below) or by passing `expires_at` (expired), which keeps `hold_expired` exactly as the contract defines it.
 - Scenario flag `world.enforce_idempotency: false` models a provider that does not dedupe: it disables the replay and the in-progress wait, so a second call with an applied key is executed again. The world still writes an `operations` row and `bookings.created_by_key` for every call, so `get_booking_status(key)` resolves a `timeout_booked` key to `confirmed` in both modes (contract test). I keep this as a documented degraded mode rather than a test curiosity: the agent reads the matching capability setting `booking.provider_dedupes_keys`, and when it is false the agent never re-sends `book` on a hold and falls back to the hold-lapse wait rule (section 9.4). The eval harness derives that setting from the scenario, so the world and the agent cannot disagree in a test. The booking-correctness scenarios run in both modes, and INV-03 checks the `book` calls per key and per hold in the world `op_log` against the rule for each mode.
+
+**Clarifications decided at M1.** These pin down cases the rules above left open; the contract suite tests each one on both transports.
+
+- *Re-hold of a live hold.* `hold_slot` on a slot that already has an active hold creates a second hold and does not supersede the first. "Not free" means booked or not one of the provider's slots; a held slot is still free. Without this the agent's near-expiry re-hold (9.4 step 2) would be impossible. The old hold lapses on its own, and `book` on a hold whose slot is already booked (by another key) answers `slot_taken`. Slot rows therefore carry only `free|booked`; holds live in `holds`.
+- *Status after `slot_taken`.* The `slot_taken` draw sets the hold to `released`. While the hold is live, `book` on a released hold answers `slot_taken`, not `hold_expired`. Once the hold is past expiry it answers `hold_expired` like any other hold, because the fixed contract says `book` returns `hold_expired` if past expiry and that outranks this clarification. `hold_expired` comes only from the expiry predicate `hold_is_live(now, expires_at)`, which is `now < expires_at` and is shared with the agent (`world/contracts.py`).
+- *A consumed hold books only for the key that consumed it.* `book` on a hold that a booking has consumed, under any other key, never creates a booking, whatever the slot looks like now. While the consuming booking is live (`confirmed`, including after a reschedule moved it elsewhere) it answers `slot_taken`; once that booking is cancelled, by the user or the provider, it answers `invalid_args` with reason `hold already used`, the argument-validation row of the deviations table. Checking only the slot let a hold book again after its booking was cancelled, and `get_booking_status(hold_id)` then named the cancelled booking while the hold had a live one (BUG-M1-3). The expiry check still runs first, and the consuming key itself is not affected, so the dedupe-off re-send below is unchanged.
+- *Dedupe off really double-books.* With `enforce_idempotency: false`, a re-sent `book` on an applied key gets a fresh draw (`attempt + 1`) and can create a second booking row with the same `created_by_key` on the same slot. That is the point of the mode: a buggy agent has to show up in `bookings` and `op_log`, or INV-02 and INV-03 prove nothing there. `get_booking_status(key)` returns the earliest booking for the key. The key's `operations` row keeps describing its first application (outcome `applied`, that booking and its response) whatever the re-send does, and the re-send's claim does not mark it `in_progress`, so neither a non-booking answer nor a restart mid-latency turns it `not_applied` (BUG-M1-2). The re-send itself is visible in `op_log` and `bookings`. The key-reuse check (different `request_hash`) stays on in both modes, because it catches our bug, not the provider's.
+- *World restart mid-latency.* On startup every `in_progress` operation becomes `not_applied` and its `op_log` row `interrupted`. That is always correct because the commit is atomic with the flip to `applied`; a same-key retry after the restart is evaluated afresh.
+- *What `op_log` records.* One row per call, inserted on receipt (`seq`, `sim_ts`) and completed when the call finishes (`outcome`, `done_ts`, `done_seq`), plus one row per fired event (`event.provider_cancelled`). `seq` is arrival order and `done_seq` completion order, so a late commit shows up as a `book` row that arrived before a status check and finished after it. For `timeout_booked` the row holds the committed success body and `http_status` is null, because nothing reached the client. Elsewhere `http_status` is what the world sent, not what the client saw: under `faults.commit_latency_ms` the original `book` row shows 200 and the success body even though the HTTP client had already timed out and given up, so INV-03 and S53 read what the client saw from the trace, not from this column. Outcomes: `book` uses its draw buckets plus `hold_expired`, `invalid_args`, `replayed`, `idempotency_key_reuse`; other tools use `ok`, `not_found`, the status answers, `slot_conflict`, `service_unavailable`. Any call can also end `internal_error` (`http_status` 500: evaluation raised, which is a world bug, and the exception propagates) or `interrupted` (cancelled, or the world restarted), so every call has exactly one finished row.
+- *Waiting on an in-progress key* uses an in-memory latch per key in the engine; the check-and-claim has no await inside it, and the latch is released when the evaluation commits, before any post-commit timeout sleep. Because the latch is process-local, the HTTP world takes an exclusive lock on `<db>.lock` and refuses `--workers` above 1.
+- *Ids* (`H-n`, `B-n`) come from counters in `meta`, started at a seed-dependent value.
+- *Enum values on the wire* are snake_case for both `Service` and `Area` (`plumber`, `electrician`, `ac_servicing`; `indiranagar`, `koramangala`, `whitefield`, `jayanagar`). An area outside the `Area` enum, HSR Layout included, is `invalid_args`.
+- *Inspector routes.* Besides the `/dev` routes listed for the demo, the world serves `GET /dev/bookings`, `GET /dev/operations` and `POST /dev/world/tick` so the HTTP inspector can do everything the in-process one does. All `/dev` routes exist only with `ERRAND_DEV=1`, and none of them ever serves `is_injection`.
+- *Duplicate delivery* is simulated inside the engine (`World.handle` evaluates the same bytes twice and answers with the second), not by the client transport, so both transports produce it identically and it shows up as two `op_log` rows.
 
 ### 5.4 Seeded randomness that does not depend on call order
 
@@ -340,7 +358,7 @@ faults: {}                            # TEST-ONLY, off by default, shown in the 
                                       # commit_latency_ms: { book: 9000 }   (HTTP: commit lands after the client timeout)
                                       # rehold_slot_shift: { P3: +30m }     (provider moves the slot on a re-hold)
                                       # book_price_mismatch: +100          (booking recorded at a different price)
-                                      # duplicate_delivery: book           (transport sends the same request twice, like a retrying proxy)
+                                      # duplicate_delivery: book | cancel | reschedule   (the engine evaluates the same request twice, like a retrying proxy)
 ```
 
 The cancel 503 is fixed at exactly one failure per booking, as the contract says, and is not configurable.
@@ -349,15 +367,15 @@ The cancel 503 is fixed at exactly one failure per booking, as the contract says
 
 | Failure | Mechanism |
 |---|---|
-| Timeout after success | `timeout_booked` commits the booking and its `operations` row, logs `op_log`, then raises `ToolTimeout` after the `book` timeout. Over HTTP the server commits and then sleeps for the client's `book` timeout plus 2 s (section 15.1 has the one timeout table), so the timeout is a real network timeout. |
+| Timeout after success | `timeout_booked` commits the booking and its `operations` row, logs `op_log`, then raises `ToolTimeout` after the `book` timeout. Over HTTP the server commits and then sleeps for the client's `book` timeout plus 2 s (section 15.1 has the one timeout table), so the timeout is a real network timeout. The world package may not import `tools/`, so the client sends its timeout on every call (`X-Errand-Client-Timeout-Ms`) and the server sleeps exactly that plus the margin. |
 | Timeout, not booked | `timeout_not_booked` writes `operations(outcome=not_applied)` and raises. |
 | Late commit (test-only fault) | `faults.commit_latency_ms`: the HTTP server claims the key at once but waits past the client timeout before it evaluates and commits (the hold-expiry check included), so a status check right after the timeout returns `not_found` for a booking that lands a moment later. With dedupe on, the agent's same-key retry waits on the claimed key and gets the stored booking back (S53); with dedupe off, the agent must use the wait rule (S70). This is the case that makes a bare `not_found` non-definitive on its own (section 9.4). |
-| Duplicate delivery (test-only fault) | `faults.duplicate_delivery: book`: the client transport sends the same `book` request twice, as a retrying proxy would. With dedupe on, the second delivery is a replay and changes nothing (S71). |
+| Duplicate delivery (test-only fault) | `faults.duplicate_delivery: book` (also `cancel` or `reschedule`): the engine, not the client transport, evaluates the same request bytes twice in `World.handle` and answers with the second evaluation, as a retrying proxy in front of the provider would. Both transports therefore produce it identically, and it shows up as two `op_log` rows. With dedupe on, the second delivery is a replay and changes nothing (S71). See the 5.3 clarification. |
 | Slot taken | The slot flips to `booked` for a synthetic user and the hold is released. |
 | Hold expiry | `book` compares world `sim_now` with `holds.expires_at`. Tests cross it with `advance: 11m`. |
 | Price drift | `hold_slot` adds the configured delta to the search price. `on_rehold` applies it only to the second and later holds of the same slot, which is how "price changed after approval" happens. |
 | Slot shift (test-only fault) | `faults.rehold_slot_shift` makes a re-hold return a slot window moved by the provider, which is how "slot changed after approval" happens (S50). |
-| Malformed response (test-only fault) | `faults.malformed` returns invalid JSON, extra fields or wrong types; the gateway must turn it into `ToolUnexpected` with a clear outcome (S63). |
+| Malformed response (test-only fault) | `faults.malformed` returns invalid JSON, extra fields or wrong types; the gateway must turn it into `ToolUnexpected` with a clear outcome (S63). `wrong_types` retypes the first number anywhere in the body, else the first string, else the first top-level value, so every tool's answer fails strict parsing, list-only bodies such as `search_providers` and an empty `list_bookings` included (BUG-M1-1). |
 | Transient 503 on cancel | `call_counters[(cancel, booking_id)]`: the first call returns 503 without applying; the retry succeeds. `faults.cancel: always_503` is the only way to exhaust retries (S48). |
 | Slot conflict | `reschedule` checks `reschedule_conflict_slots`, then real availability. |
 | Provider cancel | A `world_events` row fires when `sim_now >= fire_at`, evaluated on any world call or `world.tick()`. `POST /dev/world/events` fires one immediately in the demo. It flips the booking to `cancelled_by_provider`. The world never calls the agent. |
@@ -375,6 +393,8 @@ class Clock(Protocol):
 - `sleep()` advances time instantly. Each world op advances the clock by its configured latency. A timeout advances it by the gateway timeout and raises with no real wait.
 - Everything time-based reads the injected clock: "this week", hold TTLs, approval TTLs, backoff, wall-clock budgets, watcher ticks. A "wall clock exhausted" eval is deterministic and takes milliseconds.
 - The demo runs `SystemClock` plus an offset that lives in the world (`/dev/clock/advance`). The agent's clock reads that same offset (in process, or from the world's `/dev/clock` endpoint, refreshed on every advance), so "+11 min" expires holds and approval TTLs on both sides at once. The UI receives the same offset for its countdowns. A contract test advances the demo clock and asserts that agent and world agree on `now` to within one second.
+- Over HTTP the world puts `X-World-Clock: <mode>; now_ms=...; offset_ms=...` on every response, and the agent-side `TrackingClock` refreshes from it (the inspector refreshes it again after `/dev/clock/advance`). In `system_offset` mode it keeps ticking in real time between responses.
+- Delays by transport: in process every delay is a clock sleep (instant under `SimClock`). The HTTP world follows the clock for op latency, but `faults.commit_latency_ms` and the post-commit timeout are always real waits so the client's real timeout fires; under a `SimClock` the simulated time is moved by the same amount, so both transports end on the same world time. In process the late commit is therefore instantaneous and lands before the timeout surfaces, which is why S53 runs against the HTTP world.
 - I rejected freezegun and patching `datetime`: global, leaks across async tasks, and does not survive a subprocess restart.
 
 ### 5.8 Separate store and transport

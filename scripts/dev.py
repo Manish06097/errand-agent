@@ -5,6 +5,8 @@
   fails with the variable to set, rather than a stack trace from a half-started stack.
 - The web app's /api rewrite follows the API port: ERRAND_API_URL defaults to
   http://127.0.0.1:$ERRAND_API_PORT unless it is set explicitly.
+- The world serves its /dev controls (ERRAND_DEV=1 unless set) and keeps its store in
+  data/world.sqlite (ERRAND_WORLD_DB), loading bangalore_v1 the first time.
 - Each process's output is prefixed with its name.
 - If any process exits, or on Ctrl-C, all of them are stopped. Each child runs in its
   own process group so pnpm's node and Next's workers go down with it.
@@ -203,6 +205,7 @@ def main() -> int:
     env[api.env_var] = str(api.port)
     env[web.env_var] = str(web.port)
     env.setdefault("ERRAND_API_URL", f"http://127.0.0.1:{api.port}")
+    env.setdefault("ERRAND_DEV", "1")
     env["NEXT_TELEMETRY_DISABLED"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
     log("dev", f"web rewrites /api/* to {env['ERRAND_API_URL']}")
