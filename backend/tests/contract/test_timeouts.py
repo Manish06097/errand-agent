@@ -26,6 +26,11 @@ from tests.contract.conftest import Env
 from tests.contract.helpers import book_ok, hold_first_free, rows
 
 BOOK_TIMEOUT_S = 0.6
+# The late commit lands this long after the claim: the status check has from the
+# first client's timeout (0.6 s) until then to see not_found.
+LATE_COMMIT_MS = 1500
+# The retry gets its own client so it can outwait the commit on a slow machine.
+RETRY_BOOK_TIMEOUT_S = 3.0
 
 
 def forced(*outcomes: str, faults: FaultsConfig | None = None) -> ScenarioConfig:
@@ -76,7 +81,7 @@ async def test_timeout_after_success_commits_before_the_client_gives_up(env: Env
 async def test_late_commit_lands_after_the_client_timeout(env: Env) -> None:
     if env.kind == "inprocess":
         pytest.skip("a late commit needs a real wait; S53 runs against the HTTP world")
-    faults = FaultsConfig(commit_latency_ms=CommitLatency(book=1000))
+    faults = FaultsConfig(commit_latency_ms=CommitLatency(book=LATE_COMMIT_MS))
     client = await env.load(
         forced("success", "success", faults=faults), timeouts=ToolTimeouts(book=BOOK_TIMEOUT_S)
     )
@@ -87,8 +92,10 @@ async def test_late_commit_lands_after_the_client_timeout(env: Env) -> None:
     assert await client.get_booking_status(idempotency_key="k-late") == BookingStatusOut(
         status="not_found"
     )
-    # The same-key retry waits on the claimed key and gets the stored booking.
-    retry = await book_ok(client, held.hold_id, "k-late")
+    # The same-key retry waits on the claimed key and gets the stored booking. Both
+    # timeouts still come from ToolTimeouts, the one table.
+    patient = env.client(ToolTimeouts(book=RETRY_BOOK_TIMEOUT_S))
+    retry = await book_ok(patient, held.hold_id, "k-late")
     log = await env.inspector.op_log()
     book_rows = rows(log, "book", "k-late")
     (status_row,) = rows(log, "get_booking_status")
