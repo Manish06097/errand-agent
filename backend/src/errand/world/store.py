@@ -364,6 +364,12 @@ class WorldStore:
         )
         return None if row is None else _booking(row)
 
+    def bookings_for_hold(self, hold_id: str) -> list[BookingRow]:
+        rows = self._all(
+            "SELECT * FROM bookings WHERE hold_id = ? ORDER BY created_at, rowid", hold_id
+        )
+        return [_booking(r) for r in rows]
+
     def booking_on_slot(self, provider_id: str, slot_start: int) -> BookingRow | None:
         """The live booking holding this slot, if any."""
         row = self._one(

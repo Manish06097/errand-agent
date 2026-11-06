@@ -612,6 +612,22 @@ class World:
         slot = self.store.get_slot(hold.provider_id, hold.slot_start)
         return slot is not None and slot[1] == "booked"
 
+    def _used_by_another_key(self, hold: HoldRow, key: str) -> _Result | None:
+        """A consumed hold never books under a key other than the one that consumed it.
+
+        Checking only the slot is not enough: once the consuming booking is cancelled
+        or moved, the slot is free again. The consuming key itself falls through, so a
+        dedupe-off re-send still executes again as decided in 5.3."""
+        if hold.status != "consumed":
+            return None
+        made = self.store.bookings_for_hold(hold.hold_id)
+        if any(b.created_by_key == key for b in made):
+            return None
+        if any(b.status in ("confirmed", "completed") for b in made):
+            return _not_applied("slot_taken", BookError(error="slot_taken"))
+        reason = "hold already used"
+        return _not_applied("invalid_args", BookError(error="invalid_args", reason=reason))
+
     def _book(self, req: BookIn, key: str, attempt: int, now: int) -> _Result:
         hold = self.store.get_hold(req.hold_id)
         if hold is None:
@@ -623,6 +639,9 @@ class World:
             if hold.status == "active":
                 self.store.set_hold_status(hold.hold_id, "expired")
             return _not_applied("hold_expired", BookError(error="hold_expired"))
+        refused = self._used_by_another_key(hold, key)
+        if refused is not None:
+            return refused
         if hold.status == "released" or self._slot_taken_by_other(hold, key):
             if hold.status == "active":
                 self.store.set_hold_status(hold.hold_id, "released")
