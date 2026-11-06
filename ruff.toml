@@ -8,3 +8,16 @@ src = ["backend/src", "backend", "scripts"]
 
 [lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+# ADR 0010: time comes from the injected clock (errand/clock.py), never the system.
+extend-select = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"datetime.datetime.now".msg = "use the injected Clock (errand.clock); only clock.py reads system time"
+"datetime.datetime.utcnow".msg = "use the injected Clock (errand.clock); only clock.py reads system time"
+"datetime.datetime.today".msg = "use the injected Clock (errand.clock); only clock.py reads system time"
+"datetime.date.today".msg = "use the injected Clock (errand.clock); only clock.py reads system time"
+
+[lint.per-file-ignores]
+"backend/src/errand/clock.py" = ["TID251"]
+"scripts/**" = ["TID251"]
