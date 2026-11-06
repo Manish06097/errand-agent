@@ -5,7 +5,8 @@ Admission, under the thread's lock and nothing else (6.6):
    before the active-run check, or a client retrying its own message mid-run would
    get a 409 for it.
 2. one active run per thread: a different message gets 409 `run_in_progress`;
-3. the thread lease (`thread:<id>`), renewed for the whole run;
+3. the thread lease (`thread:<id>`), renewed for the whole run; the run id is minted
+   only after it, so a refused lease never burns an id;
 4. the interrupt check, which decides plain input or `Command(resume=...)`;
 5. the user message, the runs row and the task, then the lock is released.
 
@@ -132,6 +133,7 @@ class RunManager:
         # Strong references: a task nobody holds can be garbage-collected mid-run.
         self._tasks: set[asyncio.Task[None]] = set()
         self._holder = f"api-{os.getpid()}"
+        self._admissions = 0
         self._closing = False
 
     @property
@@ -160,12 +162,15 @@ class RunManager:
             active = self._active.get(conversation_id)
             if active is not None:
                 raise RunInProgress(active)
-            run_id = self.ids.run_id()
+            # The holder names this admission, not the run: the run id is minted only
+            # once the lease is ours, so a refused lease never burns one (BUG-M3-2).
+            self._admissions += 1
             lease = await LeaseKeeper.acquire(
-                self.db, thread_key(conversation_id), f"{self._holder}:{run_id}"
+                self.db, thread_key(conversation_id), f"{self._holder}:a{self._admissions}"
             )
             if lease is None:
                 raise RunInProgress(None)
+            run_id = self.ids.run_id()
             try:
                 return await self._admit(
                     run_id,

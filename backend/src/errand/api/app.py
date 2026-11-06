@@ -116,10 +116,22 @@ def scripted_factory(policy: Policy) -> ModelFactory:
     return make
 
 
-async def _count(db: AgentDB, table: Literal["conversations", "runs"]) -> int:
-    async with db.session() as repos, repos.conn.execute(f"SELECT COUNT(*) FROM {table}") as cur:
+async def _highest(db: AgentDB, table: Literal["conversations", "runs"]) -> int:
+    """The highest numeric suffix among the table's sim ids (`c_0007` gives 7).
+
+    Not COUNT(*): an admission that mints a run id and then does not insert it (a lost
+    client_msg_id race, an exception before the insert) leaves a gap, and a counter
+    seeded from the row count would then hand out an id that exists (BUG-M3-2). Ids
+    that are not all digits after the prefix (uuid7 ids from a live run) are skipped.
+    """
+    column = "conversation_id" if table == "conversations" else "run_id"
+    sql = (
+        f"SELECT MAX(CAST(SUBSTR({column}, 3) AS INTEGER)) FROM {table} "
+        f"WHERE LENGTH({column}) > 2 AND SUBSTR({column}, 3) NOT GLOB '*[^0-9]*'"
+    )
+    async with db.session() as repos, repos.conn.execute(sql) as cur:
         row = await cur.fetchone()
-    return int(row[0]) if row else 0
+    return int(row[0]) if row and row[0] is not None else 0
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
@@ -156,8 +168,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 )
                 ids = (
                     SequentialIds(
-                        conversations=await _count(db, "conversations"),
-                        runs=await _count(db, "runs"),
+                        conversations=await _highest(db, "conversations"),
+                        runs=await _highest(db, "runs"),
                     )
                     if id_mode == "sim"
                     else Uuid7Ids()

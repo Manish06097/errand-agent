@@ -2,7 +2,9 @@
 
 Nothing random or wall-clock based may reach a model request, a replay hash or the
 eval table, so evals mint `c_0001`, `r_0001`, ... from counters. The counters start
-past whatever agent.sqlite already holds, so a restarted process never reuses an id.
+past the highest id agent.sqlite already holds (not its row count: a minted id that
+was never inserted leaves a gap), so a restarted process never reuses an id. Sim ids
+assume one API process per data directory; two would mint the same ids.
 
 Every other id is derived from these two and a stable key, never minted: a message is
 `<run_id>-u` or `<run_id>-<kind>`, an errand is `e_<run_id>`. That keeps nodes free of
