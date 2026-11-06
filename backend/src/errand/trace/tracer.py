@@ -6,8 +6,9 @@ same dict and line to every sink, JsonlSink first. A rejected record uses up not
 A failing JSONL write raises (it is the record of truth); any other sink failing is
 logged and skipped.
 
-`ts` comes from the injected `now` callable (the Clock, once M1 lands); `wall_ts` is
-always real time. Ids are deterministic per run: seq counts from 1, spans are s_1,
+`ts` comes from the injected `now` callable, normally a `Clock.now` (simulated time in
+tests and evals, `SystemClock` by default); `wall_ts` is always real time from
+`errand.clock.wall_now`. Ids are deterministic per run: seq counts from 1, spans are s_1,
 s_2, ... in emit order, and the run span is s_1.
 """
 
@@ -21,10 +22,11 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from errand.clock import SystemClock, wall_now
 from errand.trace.sanitize import sanitize
 from errand.trace.schema import RECORD_ADAPTER, RECORD_TYPES, RunTotals
 from errand.trace.sinks.base import Sink, encode_record
@@ -32,7 +34,6 @@ from errand.usage import Usage
 
 log = logging.getLogger(__name__)
 
-IST = timezone(timedelta(hours=5, minutes=30))
 _ENVELOPE_KEYS = frozenset(
     {
         "v",
@@ -66,10 +67,6 @@ def format_ts(moment: datetime) -> str:
     return moment.isoformat(timespec="milliseconds")
 
 
-def _system_now() -> datetime:
-    return datetime.now(IST)
-
-
 @dataclass(frozen=True)
 class _Frame:
     tracer_id: int
@@ -95,8 +92,8 @@ class Tracer:
         run_id: str,
         thread_id: str,
         sinks: Sequence[Sink],
-        now: Callable[[], datetime] = _system_now,
-        wall_now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        now: Callable[[], datetime] | None = None,
+        wall_now: Callable[[], datetime] = wall_now,
         perf: Callable[[], float] = time.perf_counter,
         errand_id: str | None = None,
     ) -> None:
@@ -105,7 +102,7 @@ class Tracer:
         self.errand_id = errand_id
         self.trace_id = trace_id_for(run_id)
         self._sinks = list(sinks)
-        self._now = now
+        self._now = now if now is not None else SystemClock().now
         self._wall_now = wall_now
         self._perf = perf
         self._seq = 0

@@ -37,6 +37,15 @@ def from_ms(ms: int) -> datetime:
     return datetime.fromtimestamp(ms / 1000, tz=IST)
 
 
+def wall_now() -> datetime:
+    """Real UTC time, never simulated and never offset.
+
+    For records that must say when something really happened, such as the trace's
+    `wall_ts` next to its clock-driven `ts`. Business logic uses an injected Clock.
+    """
+    return datetime.now(UTC)
+
+
 class Clock(Protocol):
     def now(self) -> datetime: ...
 

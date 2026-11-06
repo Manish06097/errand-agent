@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from pydantic import SecretStr, ValidationError
 
+from errand.clock import IST, wall_now
 from errand.config import LangfuseKeys, TraceSettings
 from errand.trace.reader import read_trace
 from errand.trace.schema import RECORD_TYPES
@@ -21,7 +22,7 @@ from errand.trace.sinks import make_sink
 from errand.trace.sinks.jsonl import JsonlSink, trace_path
 from errand.trace.sinks.null import NullSink
 from errand.trace.sinks.stream import StreamSink
-from errand.trace.tracer import IST, Tracer, UnknownTraceType, trace_id_for
+from errand.trace.tracer import Tracer, UnknownTraceType, trace_id_for
 from errand.usage import Usage
 from tests.hygiene.repo import REPO_ROOT
 
@@ -273,7 +274,7 @@ def test_ids_are_deterministic_and_spans_nest(tmp_path: Path) -> None:
 def test_ts_comes_from_the_injected_clock_and_wall_ts_is_real_time(tmp_path: Path) -> None:
     sim = datetime(2026, 11, 9, 8, 42, 10, 512_000, tzinfo=IST)
     tracer, _ = _tracer(tmp_path, now=lambda: sim)
-    before = datetime.now(IST)
+    before = wall_now()
     record = tracer.emit("budget.tick", counters={"model_calls": 1})
     assert record["ts"] == "2026-11-09T08:42:10.512+05:30"
     assert datetime.fromisoformat(record["wall_ts"]) >= before.replace(microsecond=0)
