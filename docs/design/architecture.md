@@ -1319,7 +1319,7 @@ Every run ends in `respond` with exactly one `RunOutcome`, rendered by a code te
 | `DECLINED` | user declined | acknowledgement, options kept |
 | `MEMORY_UPDATED` | memory-only turn | memory chip with Undo |
 | `NOTIFIED` | follow-up delivered | proactive card |
-| `LIMIT_REACHED` | model, tool or cost limit | "I hit my step limit. Here's what I have so far." [Try again] [Narrow search] |
+| `LIMIT_REACHED` | model, tool or cost limit | "I hit my step limit for this turn, so I stopped. So far I have: plumber, Indiranagar, ... Nothing was booked." (the brief's filled search fields; the sentence is left out when none are) [Try again] [Narrow search] |
 | `WALL_CLOCK_EXCEEDED` | deadline | same shape, plus what is still pending |
 | `CONTEXT_TOO_LARGE` / `CONTEXT_EXHAUSTED` | input over cap / loop over cap | "That message is too long for me; can you shorten it?" / partial result |
 | `TOOL_UNAVAILABLE` | read tool down after retries | "Provider search is down right now." [Retry] |

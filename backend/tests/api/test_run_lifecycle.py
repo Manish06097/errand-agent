@@ -23,7 +23,7 @@ from errand.world.engine import WorldHost
 from errand.world.scenario import ScenarioConfig, WorldConfig
 from evals import invariants
 from evals.policies import reference
-from evals.policies.common import tool_calls
+from evals.policies.common import read, tool_calls
 from evals.runner import harness
 from tests.api.support import OPENER, world
 
@@ -85,6 +85,41 @@ async def test_the_iteration_cap_ends_limit_reached(tmp_path: Path) -> None:
         rec = await h.records()
     assert view.outcome == "LIMIT_REACHED"
     assert rec.runs[0]["model_calls"] == 6 and rec.runs[0]["tool_calls"] == 6
+
+
+async def test_a_limit_notice_shows_what_is_known_and_claims_nothing_else(
+    tmp_path: Path,
+) -> None:
+    def record_then_loop(request: ScriptedRequest) -> AIMessage:
+        view = read(request)
+        if not view.loop:
+            patch = reference.extract(view.current, view)
+            return tool_calls(
+                request, "Record it.", ("update_brief", reference.update_brief_args(patch))
+            )
+        return tool_calls(request, "Again.", ("list_bookings", {}))
+
+    async with harness(tmp_path, world(), policy=record_then_loop) as h:
+        view = await h.say(OPENER)
+        state = (await h.conversation())["state"]
+    assert view.outcome == "LIMIT_REACHED"
+    notice = view.notice()
+    assert notice is not None
+    window = state["errand"]["brief"]["window"]["value"]["label"]
+    assert notice["text"] == (
+        "I hit my step limit for this turn, so I stopped. "
+        f"So far I have: plumber, {window}, under ₹1,500. Nothing was booked."
+    )
+
+
+async def test_a_limit_notice_with_nothing_known_says_only_that_it_stopped(
+    tmp_path: Path,
+) -> None:
+    async with harness(tmp_path, world(), policy=looping(1)) as h:
+        view = await h.say("hello")
+    notice = view.notice()
+    assert view.outcome == "LIMIT_REACHED" and notice is not None
+    assert notice["text"] == "I hit my step limit for this turn, so I stopped. Nothing was booked."
 
 
 async def test_the_tool_call_cap_ends_limit_reached(tmp_path: Path) -> None:

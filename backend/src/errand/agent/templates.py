@@ -66,6 +66,24 @@ def _join(words: list[str]) -> str:
     return ", ".join(words[:-1]) + " and " + words[-1]
 
 
+def _so_far(errand: Errand | None) -> str:
+    """The brief's filled search fields in plain words, for a notice that stops early."""
+    if errand is None:
+        return ""
+    brief = errand.brief
+    parts: list[str] = []
+    if brief.service is not None:
+        parts.append(brief.service.value.value.replace("_", " "))
+    if brief.area is not None:
+        parts.append(brief.area.value.value.replace("_", " ").title())
+    if brief.window is not None:
+        parts.append(brief.window.value.label)
+    if brief.budget_max_inr is not None:
+        budget = brief.budget_max_inr.value
+        parts.append("any price" if budget == "none" else f"under ₹{budget:,}")
+    return ", ".join(parts)
+
+
 def internal_error(run_id: str) -> OutcomeNotice:
     return OutcomeNotice(
         outcome=RunOutcome.INTERNAL_ERROR,
@@ -144,11 +162,11 @@ def render(
     if isinstance(result, Options) and errand is not None and errand.shortlist is not None:
         return RunOutcome.PRESENTED_OPTIONS, shortlist_card(errand, result.recommendation, tz)
     if isinstance(result, Limit):
+        known = _so_far(errand)
+        so_far = f" So far I have: {known}." if known else ""
         return RunOutcome.LIMIT_REACHED, OutcomeNotice(
             outcome=RunOutcome.LIMIT_REACHED,
-            text=(
-                "I hit my step limit for this turn. Here's what I have so far; nothing was booked."
-            ),
+            text=f"I hit my step limit for this turn, so I stopped.{so_far} Nothing was booked.",
             actions=[
                 NoticeAction(kind="retry", label="Try again"),
                 NoticeAction(kind="narrow_search", label="Narrow search"),
