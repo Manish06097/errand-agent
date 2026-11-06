@@ -1,0 +1,125 @@
+"""Planner construction (architecture 10.1) and the canonical form of a request.
+
+Construction is identical in every model mode; the mode only decides which transport
+carries the request. The canonical request is what ChatAnthropic would put on the wire,
+so scripted, replay, record and live runs of the same conversation hash the same.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
+
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import BaseMessage
+from pydantic import SecretStr
+
+from errand.config import LimitSettings, ModelSettings
+
+PLANNER_THINKING: Mapping[str, str] = {"type": "adaptive", "display": "summarized"}
+STRICT_BINDING: Mapping[str, str] = {"prefix_mismatch_behavior": "error"}
+# Scripted and replay modes never send anything, but ChatAnthropic still needs a key
+# to exist so its request payload can be computed. This is not a credential.
+OFFLINE_API_KEY = SecretStr("offline-no-key")
+
+# Keys that change how the server validates or delivers a request, not what the model
+# is asked. They differ between modes on purpose, so the hash leaves them out.
+_TRANSPORT_ONLY_KEYS = ("betas", "stream")
+
+
+def build_planner(
+    settings: ModelSettings,
+    limits: LimitSettings,
+    *,
+    strict_binding: bool,
+    api_key: SecretStr = OFFLINE_API_KEY,
+) -> ChatAnthropic:
+    thinking: dict[str, Any] = dict(PLANNER_THINKING)
+    betas: list[str] | None = None
+    if strict_binding:
+        thinking["block_binding"] = dict(STRICT_BINDING)
+        betas = [settings.thinking_binding_beta]
+    return ChatAnthropic(
+        model=settings.planner_model,
+        max_tokens=settings.planner_max_tokens,
+        thinking=thinking,
+        # Effort goes through output_config only, never the `effort` alias.
+        output_config={"effort": settings.planner_effort},
+        betas=betas,
+        anthropic_api_key=api_key,
+        default_request_timeout=limits.planner_timeout_s,
+        max_retries=settings.planner_max_retries,
+    )
+
+
+def planner_bind_kwargs(wire: ChatAnthropic, tools: Sequence[Any]) -> dict[str, Any]:
+    """The request kwargs ChatAnthropic.bind_tools produces for the planner tools.
+
+    Every transport is bound with exactly these, so a scripted model sees the same tool
+    schemas and tool_choice that would reach the API.
+    """
+    if not tools:
+        return {}
+    bound = wire.bind_tools(tools, tool_choice="auto", strict=True)
+    kwargs = dict(bound.kwargs)  # type: ignore[attr-defined]
+    # bind_tools passes a tool that is already an Anthropic dict through untouched and
+    # silently ignores strict=True for it, so set it here for every custom tool.
+    kwargs["tools"] = [
+        {**t, "strict": True} if "input_schema" in t and "type" not in t else t
+        for t in kwargs["tools"]
+    ]
+    return kwargs
+
+
+# (messages, request kwargs such as tools and tool_choice) -> canonical request
+Canonicalizer = Callable[[Sequence[BaseMessage], Mapping[str, Any]], dict[str, Any]]
+
+
+class PayloadCanonicalizer:
+    """Canonical request from ChatAnthropic's own payload builder.
+
+    `_get_request_payload` is private, but the version is pinned and this is the only
+    place that calls it. tests/llm/test_construction.py::
+    test_canonical_request_is_what_the_sdk_sends_and_hashes_the_same_in_every_mode fails
+    if its output stops matching what the SDK sends.
+    """
+
+    def __init__(self, wire: ChatAnthropic) -> None:
+        self._wire = wire
+
+    def __call__(
+        self, messages: Sequence[BaseMessage], kwargs: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        payload = self._wire._get_request_payload(list(messages), **dict(kwargs))
+        return canonical_from_payload(payload)
+
+
+def canonical_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    # Top-level keys are sorted, which is also the order the SDK writes them in the
+    # request body. Everything below the top level keeps the order it was built in.
+    canon = {k: payload[k] for k in sorted(payload) if k not in _TRANSPORT_ONLY_KEYS}
+    thinking = canon.get("thinking")
+    if isinstance(thinking, Mapping):
+        canon["thinking"] = {k: v for k, v in thinking.items() if k != "block_binding"}
+    # A JSON round trip deep-copies the payload, so nothing here aliases the caller's
+    # message objects, and fails loudly on anything that is not plain JSON.
+    result: dict[str, Any] = json.loads(json.dumps(canon, ensure_ascii=False))
+    return result
+
+
+def canonical_bytes(canonical: Mapping[str, Any]) -> bytes:
+    # No sort_keys: nested key order is part of the request, as it is on the wire.
+    return json.dumps(canonical, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def request_sha256(canonical: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical_bytes(canonical)).hexdigest()
+
+
+def default_canonicalizer() -> PayloadCanonicalizer:
+    """The planner canonicalizer for default settings, for fakes used outside a gateway."""
+    return PayloadCanonicalizer(
+        build_planner(ModelSettings(), LimitSettings(), strict_binding=False)
+    )

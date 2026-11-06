@@ -30,6 +30,7 @@ dev = [
   "import-linter==2.15",
   "pre-commit==4.7.0",
   "httpx==0.28.1",
+  "hypothesis==6.170.8",
 ]
 
 [build-system]
@@ -70,6 +71,7 @@ module = [
   "errand.world", "errand.world.*",
   "errand.store", "errand.store.*",
   "errand.trace", "errand.trace.*",
+  "errand.llm", "errand.llm.*",
   "errand.usage",
 ]
 disallow_any_generics = true
@@ -115,3 +117,14 @@ name = "The mock world never imports the agent"
 type = "forbidden"
 source_modules = ["errand.world"]
 forbidden_modules = ["errand.agent"]
+
+[[tool.importlinter.contracts]]
+name = "Foundations (store, trace, llm) never import the agent, the API, the world or the executor"
+type = "forbidden"
+source_modules = ["errand.store", "errand.trace", "errand.llm", "errand.usage"]
+forbidden_modules = ["errand.agent", "errand.api", "errand.world", "errand.execution"]
+
+[[tool.importlinter.contracts]]
+name = "The model gateway uses the tracer, never the other way round; usage depends on neither"
+type = "layers"
+layers = ["errand.llm", "errand.trace", "errand.usage"]
