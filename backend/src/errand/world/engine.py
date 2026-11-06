@@ -26,7 +26,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Protocol, cast
@@ -111,6 +111,9 @@ class WireResponse:
     # transport raises after advancing the clock; the HTTP server holds the
     # connection open past the client's timeout.
     wire_timeout: bool = False
+    # The op_log row of this call, so the agent's trace can point at the world's record
+    # (the HTTP server sends it as WORLD_SEQ_HEADER).
+    seq: int | None = None
 
 
 class Pacing(Protocol):
@@ -317,7 +320,7 @@ class World:
             seq = self.store.log_received(now, tool, key, args_json)
             wire = self._wire(tool, _Result("invalid_args", body))
             self.store.log_done(seq, now, "invalid_args", 200, wire.body.decode(errors="replace"))
-        return wire
+        return replace(wire, seq=seq)
 
     async def _plain(self, tool: ToolName, model: WireModel, args_json: str) -> WireResponse:
         with self.store.tx():
@@ -338,7 +341,7 @@ class World:
                     wire.body.decode(errors="replace"),
                     result.draw,
                 )
-            return wire
+            return replace(wire, seq=seq)
 
     async def _keyed(self, tool: ToolName, model: WireModel, args_json: str) -> WireResponse:
         assert isinstance(model, BookIn | CancelIn | RescheduleIn)
@@ -347,7 +350,8 @@ class World:
         with self.store.tx():
             seq = self.store.log_received(self.now_ms(), tool, key, args_json)
         with self._finishes_row(seq):
-            return await self._keyed_call(tool, model, key, request_hash, seq)
+            wire = await self._keyed_call(tool, model, key, request_hash, seq)
+            return replace(wire, seq=seq)
 
     async def _keyed_call(
         self,

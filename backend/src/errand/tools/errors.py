@@ -57,3 +57,24 @@ class ToolDefinitive(ToolError):
     def __init__(self, tool: str, error: str) -> None:
         super().__init__(tool, error)
         self.error = error
+
+
+class PlannerToolRejected(ToolInvalid):
+    """The caller may not use this tool (the planner asked for a consequential one)."""
+
+
+class ToolUnavailable(ToolError):
+    """A read tool still failed after its one retry. `cause` is the last error class."""
+
+    def __init__(self, tool: str, cause: ToolError) -> None:
+        super().__init__(tool, f"unavailable after retry ({type(cause).__name__})")
+        self.cause = cause
+        self.error_class = type(cause).__name__
+
+
+class ToolBudgetExceeded(ToolError):
+    """The run's tool-call cap or deadline left no room for this call; nothing was sent."""
+
+    def __init__(self, tool: str, limit: str) -> None:
+        super().__init__(tool, f"run limit reached: {limit}")
+        self.limit = limit

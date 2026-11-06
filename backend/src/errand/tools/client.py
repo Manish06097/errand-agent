@@ -12,6 +12,10 @@ the separate inspector in `tools/inspector.py`. It is never part of WorldClient.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from types import TracebackType
 from typing import Protocol, TypeVar
 
@@ -20,9 +24,10 @@ from pydantic import ValidationError
 
 from errand.clock import CLOCK_HEADER, TrackingClock
 from errand.tools.errors import ToolTimeout, ToolTransient, ToolUnexpected
-from errand.tools.timeouts import ToolTimeouts
+from errand.tools.timeouts import ToolTimeouts, effective_timeout
 from errand.world.contracts import (
     CLIENT_TIMEOUT_HEADER,
+    WORLD_SEQ_HEADER,
     Area,
     BookError,
     BookIn,
@@ -59,6 +64,33 @@ from errand.world.engine import WorldHost
 
 OkT = TypeVar("OkT", bound=WireModel)
 ErrT = TypeVar("ErrT", bound=WireModel)
+
+
+@dataclass
+class CallInfo:
+    """What a transport learned about one call besides its answer."""
+
+    world_seq: int | None = None
+
+
+_call_info: ContextVar[CallInfo | None] = ContextVar("errand_world_call_info", default=None)
+
+
+@contextmanager
+def observe_call() -> Iterator[CallInfo]:
+    """Collect the world's op_log seq of the call made inside the block, when known."""
+    info = CallInfo()
+    token = _call_info.set(info)
+    try:
+        yield info
+    finally:
+        _call_info.reset(token)
+
+
+def _note_seq(seq: int | None) -> None:
+    info = _call_info.get()
+    if info is not None:
+        info.world_seq = seq
 
 
 class WorldClient(Protocol):
@@ -172,9 +204,10 @@ class InProcessTransport(_Transport):
     async def _send(self, tool: ToolName, payload: bytes) -> tuple[int, bytes]:
         world = self._host.world
         clock = world.clock
-        timeout = self._timeouts.for_tool(tool)
+        timeout = effective_timeout(self._timeouts, tool)
         started = clock.now()
         response = await world.handle(tool, payload)
+        _note_seq(response.seq)
         elapsed = (clock.now() - started).total_seconds()
         if response.wire_timeout:
             await clock.sleep(max(0.0, timeout - elapsed))
@@ -215,7 +248,7 @@ class HttpTransport(_Transport):
             await self._http.aclose()
 
     async def _send(self, tool: ToolName, payload: bytes) -> tuple[int, bytes]:
-        timeout = self._timeouts.for_tool(tool)
+        timeout = effective_timeout(self._timeouts, tool)
         headers = {
             "content-type": "application/json",
             CLIENT_TIMEOUT_HEADER: str(round(timeout * 1000)),
@@ -232,4 +265,6 @@ class HttpTransport(_Transport):
             raise ToolTransient(tool, None, b"", type(exc).__name__) from exc
         if self._clock is not None:
             self._clock.update_from_header(response.headers.get(CLOCK_HEADER))
+        seq = response.headers.get(WORLD_SEQ_HEADER)
+        _note_seq(int(seq) if seq and seq.isdigit() else None)
         return response.status_code, response.content
