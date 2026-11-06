@@ -176,8 +176,10 @@ class PlannerLoop:
     def _finish(self, text: str) -> PlanResult:
         shortlist = self.errand.shortlist
         fresh = shortlist is not None and shortlist.brief_version == self.errand.brief.version
-        if self.searched and fresh:
+        if self.searched and fresh and shortlist is not None and shortlist.candidates:
             return Options(recommendation=recommendation_line(text))
+        # A search that found nobody has nothing to present: the model's answer goes out
+        # as a reply until M8 replaces it with a code-written no-fit template.
         return Reply(text=text)
 
     def _past_deadline(self) -> bool:

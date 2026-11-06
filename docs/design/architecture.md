@@ -1311,7 +1311,7 @@ Every run ends in `respond` with exactly one `RunOutcome`, rendered by a code te
 |---|---|---|
 | `REPLIED` | normal answer | text |
 | `ASKED_USER` | missing details | ClarifyCard with quick replies |
-| `PRESENTED_OPTIONS` | shortlist ready or alternatives after a failure | comparison card |
+| `PRESENTED_OPTIONS` | shortlist ready (at least one candidate) or alternatives after a failure | comparison card |
 | `AWAITING_APPROVAL` | card shown | ActionCard |
 | `BOOKED_VERIFIED` / `CANCELLED_VERIFIED` / `RESCHEDULED_VERIFIED` | status confirmed | confirmation card with a "verified" badge |
 | `PENDING_VERIFICATION` | status unresolved, or any exit with an open intent | "The provider hasn't confirmed yet, and it can't end up booked twice. I'll know by 09:12 and update you here." [Check now] [Never mind] |

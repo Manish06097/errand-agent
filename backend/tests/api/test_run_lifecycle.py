@@ -122,6 +122,23 @@ async def test_a_limit_notice_with_nothing_known_says_only_that_it_stopped(
     assert notice["text"] == "I hit my step limit for this turn, so I stopped. Nothing was booked."
 
 
+async def test_a_search_that_finds_nobody_is_a_reply_not_an_empty_shortlist(
+    tmp_path: Path,
+) -> None:
+    async with harness(tmp_path, world()) as h:
+        await h.say("Find a plumber for my kitchen tap this week, mornings only, under ₹100.")
+        view = await h.say("indiranagar")
+        op_log = await h.op_log()
+        state = (await h.conversation())["state"]
+    assert [r["op"] for r in op_log].count("search_providers") == 1
+    assert state["errand"]["shortlist"]["candidates"] == []
+    assert view.outcome == "REPLIED"
+    assert [m["body"]["type"] for m in view.messages] == ["text"]
+    assert view.messages[0]["body"]["text"] == (
+        "No provider has a free slot in that window and budget."
+    )
+
+
 async def test_the_tool_call_cap_ends_limit_reached(tmp_path: Path) -> None:
     async with harness(tmp_path, world(), policy=looping(5)) as h:
         view = await h.say(OPENER)
