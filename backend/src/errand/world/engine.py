@@ -822,18 +822,53 @@ def _corrupt(body: bytes, mode: str) -> bytes:
     if mode == "extra_fields":
         data["internal_rank_score"] = 0.97
     elif mode == "wrong_types":
-        for k, v in data.items():
-            if isinstance(v, bool):
-                continue
-            if isinstance(v, int | float):
-                data[k] = str(v)
-                break
-        else:
-            for k, v in data.items():
-                if isinstance(v, str):
-                    data[k] = 12345
-                    break
+        _retype(data)
     return json.dumps(data).encode()
+
+
+def _retype(data: dict[str, object]) -> None:
+    """Give one value the wrong type: the first number, else the first string, else
+    the first top-level value. The searches go to any depth because some bodies are
+    a single list (search_providers, list_bookings); a top-level-only rewrite left
+    those valid, and an empty list has no scalar at all (BUG-M1-1)."""
+    if _replace_first(data, _is_number, str) or _replace_first(data, _is_string, _int):
+        return
+    for key, value in data.items():
+        data[key] = json.dumps(value)
+        return
+
+
+def _int(_: object) -> object:
+    return 12345
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _is_string(value: object) -> bool:
+    return isinstance(value, str)
+
+
+def _replace_first(
+    node: object, match: Callable[[object], bool], replace: Callable[[object], object]
+) -> bool:
+    """Depth-first, in document order: replace the first scalar `match` accepts."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if match(value):
+                node[key] = replace(value)
+                return True
+            if _replace_first(value, match, replace):
+                return True
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            if match(value):
+                node[index] = replace(value)
+                return True
+            if _replace_first(value, match, replace):
+                return True
+    return False
 
 
 class WorldHost:
