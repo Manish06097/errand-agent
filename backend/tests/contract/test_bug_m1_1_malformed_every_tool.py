@@ -87,3 +87,20 @@ async def test_malformed_reaches_the_client_as_tool_unexpected(
         assert isinstance(decoded, dict)
         if mode == "extra_fields":
             assert "internal_rank_score" in decoded
+
+
+@pytest.mark.parametrize("mode", MODES)
+async def test_malformed_breaks_a_body_with_no_scalars(env: Env, mode: str) -> None:
+    # {"bookings": []} has no scalar at any depth to retype.
+    scenario = ScenarioConfig(
+        id="malformed-empty-body",
+        seed=3,
+        faults=FaultsConfig(
+            malformed=MalformedFault.model_validate({"tool": "list_bookings", "mode": mode})
+        ),
+    )
+    client = await env.load(scenario)
+    with pytest.raises(ToolUnexpected) as raised:
+        answer = await client.list_bookings("u_nobody")
+        pytest.fail(f"malformed={mode} decoded as a valid {type(answer).__name__}")
+    assert raised.value.raw
