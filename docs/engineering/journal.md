@@ -76,3 +76,40 @@ Second review found two more, each reproduced through a real Tracer with JSONL a
 - BUG-M2-3: a record rejected by schema v1 still used up a seq number and a span id, so the trace read seq [1, 3]. The counters now advance only after validation (7543bee, 984c93e).
 
 **Next.** M3: graph skeleton, API, RunManager and the eval harness on top of these pieces. For M13: SDK retries happen inside one `model.call`, so retry time is in its latency but not shown on its own; trace it when the retry and deadline caps land.
+
+## M3: graph skeleton, API and eval harness
+
+**Goal.** The first end-to-end path: a user message goes through FastAPI, the RunManager, the LangGraph graph (`ingress -> plan -> respond`), the planner loop and the world, and comes back over SSE. On the same path, the harness that proves it: the scenario DSL, SimUser, the reference policy, five invariants and the generated eval table.
+
+**Decisions.**
+- `ThreadState` is the full 7.1 tree from day one, including fields later milestones fill, so the checkpoint shape does not change under them. Facts are concrete classes (`ServiceFact`, `AreaFact`, ...): I checked the lead's doubt first, and a parametrised `Fact[Service]` comes back from a strict-msgpack checkpoint as a plain dict, silently, which a later validation would paper over. A fresh-process round-trip test walks every restored value's type.
+- `LANGGRAPH_STRICT_MSGPACK` is set in `errand/__init__.py`, not in `errand.agent`: ruff's import sorting put `langgraph` above `errand.agent` in `api/app.py`, which would have loaded langgraph with strict mode off. The root package always runs first. `build_graph` refuses to compile if strict mode did not take.
+- `TimeWindowExpr` has no `days` (the lead's call); `update_brief`'s window is `{phrase, part_of_day}` only in M3. `not_before`/`not_after` stay on the domain type for M8 but left the tool schema, both because M3's closed set does not include them and because the tool list sat 40 tokens under its 2,000-token section cap. It is at 1,785 now; M4's `propose_*` tools will need the same discipline.
+- One `RunCounters` type (`domain/counters.py`), shared by both gateways for a run and copied into state when `plan` ends. The gateway's old dataclass is gone.
+- `context.built` is one record per model call: the gateway merges the builder's manifest into its own, rather than two manifests that could disagree.
+- Ids: `c_0001`/`r_0001` in sim mode, counters started past what agent.sqlite holds, so a restart never reuses one; uuid7 live. Message and errand ids are derived from the run id, so no node mints anything a re-run would mint differently.
+- `respond` upserts on `(run_id, kind)` (migration 0002, a partial unique index over assistant rows; the user's row carries the run id it started, which is how a dedupe hit finds its run).
+- Leases run on real time, never the simulated clock: they measure whether the process is alive, and a scenario that advances simulated time by 11 minutes must not expire a run's lease mid-run.
+- The tool gateway caps each call's timeout by the run time left through a context variable the transports read, and learns the world's `op_log` seq the same way (new `X-World-Seq` header over HTTP, a `seq` on the engine's response in process), so `tool.call.world_seq` points at the world's own record.
+- A planner call to a world tool that is not a planner tool (`book`) is forwarded to the ToolGateway as the planner, so its allowlist is the control that refuses it, not just a branch in `plan`.
+- `make dev` gives the API `ERRAND_WORLD_URL` and puts `backend/` on its `PYTHONPATH`, so scripted mode loads `evals.policies.reference` by name (`ERRAND_SCRIPTED_POLICY`); nothing in `errand` imports `evals`.
+- The report plugin writes `docs/EVAL_TABLE.md` only when `make evals` asks (`--write-report`), so a filtered run, or the make-target tests, never overwrite the committed table.
+
+**Deviations from the brief.**
+- The `ask_user` guard treats "the user's reply after the first ask did not fill it" as "the field is still missing". A field filled after its first ask and cleared again by a later correction could then be asked once more; corrections arrive in M8, which should keep the fill history. INV-13 checks the stricter rule from the records, so the two would disagree loudly rather than quietly.
+- An illegal transition is recorded (`reason: "rejected: ..."`) before `IllegalTransition` is raised, so INV-08 sees the attempt as well as the run failing.
+- `update_brief` is all or nothing: one rejected value rejects the patch, as 10.7 describes, rather than applying the good fields.
+
+**Verified.** `make check` and `make evals` green on 9100/9101/9102; two `make evals` runs differ only in the timestamp. I applied each review mutation by hand and each turned something red: forwarding search args (search-args test), no ask guard (S67, INV-13), `book` in the tool list (INV-11, in every scenario), an illegal transition (INV-08), skipping `run.end` on an exception (lifecycle test), no dedupe or dedupe after the 409 (S30, admission tests), cancelling on SSE disconnect (disconnect test), reviews back in `ProviderView` (INV-10, view test), a tolerant SimUser (harness test), and a generic `Fact` (round-trip test). Manual run on `make dev`: curl create, post, `-N` events, replay with `Last-Event-ID`, and a second API process continuing S03's turn 3 from the checkpoint over the HTTP world.
+
+**What broke.** BUG-M3-1, found by the lead in review: `make evals` was not strict. pytest turns an empty `parametrize` list into one skipped test and exits 0, not 5, so with the YAML renamed to `.yml` the suite went green and the report plugin kept the old table. I had deleted the M0 tests that would have caught it instead of adapting them. Repro on a copy of the real evals tree (cd29408), fix (8ced0c1): an empty or misnamed catalogue is a collection error, pytest fails any empty parametrize at collection, and the plugin refuses an empty or incomplete table.
+
+**Review round 2.**
+- Committed in dependency order (domain, llm, transitions, tools, brief ops, store, context, graph, API, harness, tests, scenarios, the bug pair, docs, table), each built in a clean clone so the pre-commit hooks checked exactly that commit.
+- INV-10 now reads every review in world.sqlite, plus any served, so S46 and S67, which never open a provider, check the whole catalogue too; the count is in the table's notes.
+- `ask_user`'s question and options are cleaned like world text and bounded in code (6 options, 40 characters each). The bound lives in the Pydantic model and the tool description, not the schema, because strict mode rejects `maxItems` and `maxLength`. The reference policy now sends at most 6 quick replies, round-robin over the missing fields.
+- `get_provider` honours only a shortlist built for the current brief version; a hostile two-turn policy shows the stale open never reaches the op_log.
+- `LeaseKeeper.release` waits on the renew task without re-raising, so the release UPDATE always runs, and a failed renewal is logged and retried.
+- The import-linter contract waives two edges only (`tools.runtime` and `tools.client` to `world.engine`); adding `import errand.world.store` to `tools/gateway.py` breaks it for both `errand.agent` and `errand.api`.
+
+**Next.** M4: `await_approval` lands on the routing check that already exists, `propose_*` on the fixed tool list, and the run lifecycle as built here.
