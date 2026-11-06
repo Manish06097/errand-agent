@@ -43,4 +43,8 @@ A short entry per milestone: what I set out to do, what I decided, what review c
 
 **What broke.** BUG-M2-1: filling the Observability section of the design note turned `make check` red, because the M0 design-note tests used the real note as an empty template. I reproduced it with a test that runs those tests against a copy of the repo whose note has every section filled (red on purpose, 8273ef1), fixed the tests to use a skeleton of the note (e533650), re-ran the same repro green, and logged it in `docs/BUGS.md`.
 
-**Next.** M3: graph skeleton, API, RunManager and the eval harness on top of these pieces.
+Second review found two more, each reproduced through a real Tracer with JSONL and stream sinks, committed red, fixed, re-run green and logged:
+- BUG-M2-2: a landline in a `phone` field ("080 4123 4567") or in free text reached the trace in the clear, and so did a pincode after a city name. Phones were masked only by a mobile and +country regex. Phone-like keys are now masked by name, and free text also masks landlines and city pincodes (056c990, 4b6042e).
+- BUG-M2-3: a record rejected by schema v1 still used up a seq number and a span id, so the trace read seq [1, 3]. The counters now advance only after validation (7543bee, 984c93e).
+
+**Next.** M3: graph skeleton, API, RunManager and the eval harness on top of these pieces. For M13: SDK retries happen inside one `model.call`, so retry time is in its latency but not shown on its own; trace it when the retry and deadline caps land.
