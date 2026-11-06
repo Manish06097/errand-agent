@@ -11,6 +11,9 @@ const nextConfig: NextConfig = {
   // Pin the workspace root to web/: without it Turbopack walks up and adopts any stray
   // lockfile it finds in a parent directory.
   turbopack: { root: path.dirname(fileURLToPath(import.meta.url)) },
+  // next dev otherwise writes an AGENTS.md into web/ whenever it detects a coding agent
+  // (BUG-001). The repo carries no tool-generated agent instructions.
+  agentRules: false,
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${apiUrl}/api/:path*` }];
   },
