@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta, tzinfo
@@ -132,7 +133,10 @@ class RunManager:
         self._active: dict[str, str] = {}
         # Strong references: a task nobody holds can be garbage-collected mid-run.
         self._tasks: set[asyncio.Task[None]] = set()
-        self._holder = f"api-{os.getpid()}"
+        # Unique per live owner: a restarted process often gets the same pid back (always,
+        # in a container), and its admission counter starts at 1 again (BUG-M3-4). The
+        # holder stays in the leases table, so the random part never reaches a trace.
+        self._holder = f"api-{os.getpid()}-{secrets.token_hex(8)}"
         self._admissions = 0
         self._closing = False
 
