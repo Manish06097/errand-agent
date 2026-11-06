@@ -17,3 +17,20 @@ A short entry per milestone: what I set out to do, what I decided, what review c
 **What review caught.** BUG-001: after `make dev` under a coding agent, an untracked `web/AGENTS.md` appeared. Next 16's dev server writes a managed agent-rules file when it detects one, and that file contains em dashes, so `git add -A` tripped the guard and would otherwise have committed tool-generated instructions. I reproduced it end to end with a test that runs the real supervisor and checks `web/` afterwards (red on purpose, 8d14f54), fixed it with `agentRules: false` in `web/next.config.ts` (48c2d0d), re-ran the same repro green, and logged it in `docs/BUGS.md`.
 
 **Next.** M1: the mock provider world with all 8 tools, the seeded failure model, and booking-timeout handling as signed off in GATE-01 (retry with the same idempotency key on the live hold, re-check status, then report).
+
+## M1: the mock provider world
+
+**Goal.** Build `errand.world` and the `WorldClient` that reaches it, strictly enough that the world's `op_log` and `bookings` can serve as ground truth for every later invariant: exactly on the brief's contract by default, every extra failure a named test-only fault, deterministic, and one engine behind both transports.
+
+**Decisions.**
+- One entry point, `World.handle(tool, payload_bytes) -> bytes`. The in-process transport calls it with JSON bytes and decodes the answer with the same strict decoder as HTTP, so malformed responses, key sets and datetime formats cannot drift between transports. A parity test runs the same script on both and compares the responses byte for byte.
+- Every wire model is `extra="forbid"` and strict. Business answers are typed results with a closed error set per tool; timeouts, 5xx and anything that fails strict parsing raise `ToolTimeout`, `ToolTransient` and `ToolUnexpected`. The contract tests check key sets written out by hand, so a field added to a model on both sides still fails.
+- Idempotency: the key is claimed `in_progress` in its own committed transaction, then the world sleeps, then it evaluates and commits. Waiting on an in-progress key is a per-key in-memory latch that is released at commit, before any post-commit timeout sleep, so no transaction or latch is ever held across a delay. The latch is process-local, so the HTTP world locks `<db>.lock` and refuses more than one worker.
+- The world may only import `errand.clock`. That rules out reading `tools/timeouts.py`, so the HTTP client sends its timeout on every call and the server holds a timed-out connection open for exactly that plus the margin. Tests shrink the timeout to 0.3 to 0.6 s through settings.
+- `op_log` rows are inserted on receipt and completed at the end, with both arrival and completion order, so the late-commit case reads directly off the log.
+- `bangalore_v1` fixes provider ids and identities. The seed only decides which optional providers are listed and which hours are free, always through keyed draws. E4 is an unlisted Indiranagar electrician, so it answers `get_provider` but never shows up in search.
+- The lead's four clarifications (no hold supersede, a `released` hold status, dedupe-off double booking, `in_progress` to `not_applied` on restart) are written into architecture 5.3 with the other M1 clarifications.
+
+**What review caught.** No real bugs reached a test run. Before handing over, I ran the review mutations myself (no replay branch, no in-progress wait, `hold_expired` a second early, an extra `get_provider` field on both sides, a global `random.Random`). Each one turns contract tests red on both transports.
+
+**Next.** M2 (store, tracer, model gateway) lands in parallel. M3 builds the ToolGateway on `WorldClient` and starts reading `fault_names()` for the eval table's `world` column.
