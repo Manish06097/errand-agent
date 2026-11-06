@@ -209,7 +209,7 @@ Three SQLite files plus JSONL traces.
 | `message_redactions` | message_id, start, end, memory_id | spans removed by a forget (section 12) |
 | `runs` | run_id, conversation_id, trigger, status(`running`/`ended`/`recovered`), outcome, model_calls, tool_calls, tokens_in, tokens_out, cost_usd, trace_path, started_at, ended_at | derived index; rebuildable from traces except `status` |
 | `errands` | errand_id, conversation_id, kind, phase, brief_json, replaces_booking_id, outcome, created_at, closed_at | archived errands for the ledger |
-| `holds` | hold_record_id, errand_id, provider_id, slot_start, hold_id, quoted_price_inr, expires_at, UNIQUE(errand_id, provider_id, slot_start, generation) | reuse an unexpired hold on node re-run |
+| `holds` | hold_record_id, errand_id, provider_id, slot_start, generation, hold_id, quoted_price_inr, expires_at, UNIQUE(errand_id, provider_id, slot_start, generation) | reuse an unexpired hold on node re-run |
 | `approvals` | section 8.2 | |
 | `action_intents`, `intent_attempts` | section 9.2 | write-ahead |
 | `known_bookings` | booking_id, user_id, provider_id, service, slot_start, slot_end, status, last_seen_at, origin_conversation_id, origin_brief_json, source_intent_id | agent's mirror of world bookings, for the watcher diff and the ledger |
@@ -1072,16 +1072,22 @@ CREATE TABLE memories (
   scope TEXT NOT NULL,            -- 'global' | 'service:<name>'
   value_json TEXT,                -- NULL once forgotten
   value_hash TEXT NOT NULL,
-  kind TEXT CHECK (kind IN ('explicit','inferred')),
-  status TEXT CHECK (status IN ('active','pending_confirmation','superseded','forgotten','rejected')),
+  kind TEXT NOT NULL CHECK (kind IN ('explicit','inferred')),
+  status TEXT NOT NULL CHECK (status IN ('active','pending_confirmation','superseded','forgotten','rejected')),
   evidence_json TEXT,             -- {message_id, quote} | {rule, booking_ids}
   supersedes TEXT, superseded_by TEXT,
-  created_at TEXT, confirmed_at TEXT, forgotten_at TEXT, last_used_at TEXT);
+  created_at INTEGER NOT NULL, confirmed_at INTEGER, forgotten_at INTEGER, last_used_at INTEGER);  -- epoch ms
 CREATE UNIQUE INDEX one_active ON memories(user_id, key, scope) WHERE status = 'active';
-CREATE TABLE memory_events (event_id, memory_id, type, actor, run_id, at, details_json);  -- append-only
-CREATE TABLE memory_blocklist (user_id, key, scope, value_hash, reason);  -- stops re-inference
+CREATE TABLE memory_events (      -- append-only: BEFORE UPDATE and BEFORE DELETE triggers abort
+  event_id TEXT PRIMARY KEY, memory_id TEXT NOT NULL REFERENCES memories(memory_id),
+  type TEXT NOT NULL, actor TEXT NOT NULL, run_id TEXT, at INTEGER NOT NULL, details_json TEXT);
+CREATE TABLE memory_blocklist (   -- stops re-inference
+  user_id TEXT NOT NULL, key TEXT NOT NULL, scope TEXT NOT NULL, value_hash TEXT NOT NULL,
+  reason TEXT NOT NULL, PRIMARY KEY (user_id, key, scope, value_hash));
 CREATE VIEW memories_eligible AS SELECT * FROM memories WHERE status = 'active';
 ```
+
+Timestamps are INTEGER epoch milliseconds like every other `agent.sqlite` timestamp (section 4).
 
 `active` already implies "explicit, or inferred and confirmed": inferred rows enter as `pending_confirmation` and become `active` only on a user confirm. The view is the only thing the context builder reads.
 
@@ -1444,7 +1450,7 @@ On mobile the inspector becomes a bottom sheet and the sidebar a drawer. A dev d
 | Mode | Use |
 |---|---|
 | `scripted` (CI default) | `ScriptedChatModel` driven by a policy function reading the last tool results and state. `policies/reference.py` is a competent planner. `policies/hostile.py` has `DirectBookPolicy` (calls `book`), `FalseClaimPolicy` ("Booked!" without proposing), `ParaphraseClaimPolicy` ("You're all set for Thursday", cross-object claims), `LoopForeverPolicy`, `ReaskPolicy`, `InjectionFollowerPolicy` (proposes P9), `GarbageToolPolicy` (unknown tools, invalid args), `NoEvidencePolicy` (patches a budget the user never said), `MatchingQuotePolicy` (real but irrelevant quotes as evidence), `EagerForgetPolicy` (calls `propose_forget` on an ambiguous "forget about X"). |
-| `replay` | cassettes keyed by `sha256(canonical(model, effort, system, messages, tools))`; a miss fails with a diff against the nearest recorded request. Deterministic because the clock is simulated and the context builder is a pure function. |
+| `replay` | cassettes keyed by `sha256(canonical request)`, where the canonical request is ChatAnthropic's own request payload (model, effort, thinking, system, messages, tools, tool_choice) with top-level keys sorted and the transport-only fields (`stream`, `betas`, `thinking.block_binding`) removed, so scripted, replay, record and live hash the same; a miss fails with a diff against the nearest recorded request. Deterministic because the clock is simulated and the context builder is a pure function. |
 | `record` | real Opus and Haiku, refreshes cassettes, about $0.05 per scenario |
 | `live` | manual smoke against the real API; invariant-only assertions; never in the offline gate |
 
