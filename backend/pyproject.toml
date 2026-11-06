@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 errand-api = "errand.api.app:main"
 errand-world = "errand.world.server:main"
+errand-trace = "errand.trace.cli:main"
 
 [dependency-groups]
 dev = [
@@ -31,6 +32,7 @@ dev = [
   "import-linter==2.15",
   "pre-commit==4.7.0",
   "types-pyyaml==6.0.12.20250915",
+  "hypothesis==6.170.8",
 ]
 
 [build-system]
@@ -71,6 +73,10 @@ module = [
   "errand.world", "errand.world.*",
   "errand.tools", "errand.tools.*",
   "errand.clock",
+  "errand.store", "errand.store.*",
+  "errand.trace", "errand.trace.*",
+  "errand.llm", "errand.llm.*",
+  "errand.usage",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true
@@ -129,3 +135,14 @@ forbidden_modules = [
   "errand.llm",
   "errand.quarantine",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Foundations (store, trace, llm) never import the agent, the API, the world or the executor"
+type = "forbidden"
+source_modules = ["errand.store", "errand.trace", "errand.llm", "errand.usage"]
+forbidden_modules = ["errand.agent", "errand.api", "errand.world", "errand.execution"]
+
+[[tool.importlinter.contracts]]
+name = "The model gateway uses the tracer, never the other way round; usage depends on neither"
+type = "layers"
+layers = ["errand.llm", "errand.trace", "errand.usage"]

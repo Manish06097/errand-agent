@@ -21,6 +21,7 @@ and in pre-commit. The long-form design is docs/design/architecture.md.
 
 ## Observability
 <!-- budget: 70 words -->
+Each run writes `data/traces/{thread}/{run}.jsonl`, the trace of record. One Tracer assigns sequence and span ids, sanitizes once (review text hashed, phones, addresses and keys masked, thinking reduced to summary and signature hash), validates schema v1 and fans the same line to every sink. Each `model.call` carries the request hash, usage split and cost; `run.end` totals are summed from those records. Langfuse is an optional view.
 
 ## Trade-offs
 <!-- budget: 80 words -->
