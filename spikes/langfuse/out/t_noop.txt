@@ -1,0 +1,29 @@
+$ python scripts/t_noop.py nokeys
+MODE=nokeys output='hello' tracing_enabled=True resources=False
+import=0.55s flush=0.00s shutdown=0.00s
+NETWORK: []
+LOGS (non-DEBUG):
+   WARNING langfuse: Authentication error: Langfuse client initialized without public_key. Client will be disabled. Provide a public_key parameter or set LANGFUSE_PUBLIC_KEY environ
+   WARNING langfuse: Langfuse was not able to parse the LLM model. The LLM call will be recorded without model name. Please create an issue: https://github.com/langfuse/langfuse/iss
+   WARNING langfuse: Authentication error: Langfuse client initialized without public_key. Client will be disabled. Provide a public_key parameter or set LANGFUSE_PUBLIC_KEY environ
+[exit 0]
+
+$ python scripts/t_noop.py disabled
+MODE=disabled output='hello' tracing_enabled=False resources=True
+import=0.32s flush=0.00s shutdown=0.00s
+NETWORK: []
+LOGS (non-DEBUG):
+   WARNING langfuse: Langfuse was not able to parse the LLM model. The LLM call will be recorded without model name. Please create an issue: https://github.com/langfuse/langfuse/iss
+[exit 0]
+
+$ python scripts/t_noop.py unreachable
+MODE=unreachable output='hello' tracing_enabled=True resources=True
+import=0.32s flush=3.13s shutdown=0.00s
+NETWORK: [('getaddrinfo', '127.0.0.1', 'MainThread'), ('connect', ('127.0.0.1', 9), 'MainThread'), ('getaddrinfo', '127.0.0.1', 'MainThread'), ('connect', ('127.0.0.1', 9), 'MainThread'), ('getaddrinfo', '127.0.0.1', 'MainThread'), ('connect', ('127.0.0.1', 9), 'MainThread'), ('getaddrinfo', '127.0.0.1', 'MainThread'), ('connect', ('127.0.0.1', 9), 'MainThread'), ('getaddrinfo', '127.0.0.1', 'MainThread'), ('connect', ('127.0.0.1', 9), 'MainThread'), ('getaddrinfo', '127.0.0.1', 'MainThread'), ('connect', ('127.0.0.1', 9), 'MainThread')]
+LOGS (non-DEBUG):
+   WARNING langfuse: Langfuse was not able to parse the LLM model. The LLM call will be recorded without model name. Please create an issue: https://github.com/langfuse/langfuse/iss
+   WARNING opentelemetry.exporter.otlp.proto.http.trace_exporter: Transient error HTTPConnectionPool(host='127.0.0.1', port=9): Max retries exceeded with url: /api/public/otel/v1/traces (Caused by NewConnectionError("HTTPConne
+   WARNING opentelemetry.exporter.otlp.proto.http.trace_exporter: Transient error HTTPConnectionPool(host='127.0.0.1', port=9): Max retries exceeded with url: /api/public/otel/v1/traces (Caused by NewConnectionError("HTTPConne
+   ERROR opentelemetry.exporter.otlp.proto.http.trace_exporter: Failed to export spans batch due to timeout, max retries or shutdown.
+[exit 0]
+

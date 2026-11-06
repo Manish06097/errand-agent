@@ -1,0 +1,61 @@
+$ CRASH=1 python scripts/s3_crash.py run s3_async.sqlite s3_async.ledger async
+  [book] side effect done, crashing with os._exit(1) before return
+[exit 1]
+
+$ python scripts/s3_crash.py inspect s3_async.sqlite s3_async.ledger async
+  get_state: next=() values={'plan': 'P1@Tue09'} step=0
+  history (newest first): [(0, 'loop', ('plan',)), (-1, 'input', ('__start__',))]
+[exit 0]
+
+$ python scripts/s3_crash.py restart s3_async.sqlite s3_async.ledger async
+  get_state: next=() values={'plan': 'P1@Tue09'} step=0
+  history (newest first): [(0, 'loop', ('plan',)), (-1, 'input', ('__start__',))]
+  -> invoke(None, cfg) to resume from last checkpoint
+  final: {'plan': 'P1@Tue09', 'hold_id': 'H1', 'booking_id': 'B1', 'confirmed': True}
+[exit 0]
+
+$ CRASH=1 python scripts/s3_crash.py run s3_sync.sqlite s3_sync.ledger sync
+  [book] side effect done, crashing with os._exit(1) before return
+[exit 1]
+
+$ python scripts/s3_crash.py inspect s3_sync.sqlite s3_sync.ledger sync
+  get_state: next=('book',) values={'plan': 'P1@Tue09', 'hold_id': 'H1'} step=2
+  history (newest first): [(2, 'loop', ('book',)), (1, 'loop', ('hold',)), (0, 'loop', ('plan',)), (-1, 'input', ('__start__',))]
+[exit 0]
+
+$ python scripts/s3_crash.py restart s3_sync.sqlite s3_sync.ledger sync
+  get_state: next=('book',) values={'plan': 'P1@Tue09', 'hold_id': 'H1'} step=2
+  history (newest first): [(2, 'loop', ('book',)), (1, 'loop', ('hold',)), (0, 'loop', ('plan',)), (-1, 'input', ('__start__',))]
+  -> invoke(None, cfg) to resume from last checkpoint
+  final: {'plan': 'P1@Tue09', 'hold_id': 'H1', 'booking_id': 'B1', 'confirmed': True}
+[exit 0]
+
+$ CRASH=1 python scripts/s3_crash.py run s3_exit.sqlite s3_exit.ledger exit
+  [book] side effect done, crashing with os._exit(1) before return
+[exit 1]
+
+$ python scripts/s3_crash.py inspect s3_exit.sqlite s3_exit.ledger exit
+  get_state: next=() values={} step=None
+  history (newest first): []
+[exit 0]
+
+$ python scripts/s3_crash.py restart s3_exit.sqlite s3_exit.ledger exit
+  get_state: next=() values={} step=None
+  history (newest first): []
+  -> invoke(None, cfg) to resume from last checkpoint
+Traceback (most recent call last):
+  File "/Users/recro/assignment/errand-agent/spikes/langgraph/scripts/s3_crash.py", line 50, in <module>
+    out = app.invoke(None, cfg, durability=DUR)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/claude-501/-Users-recro-assignment/2807a0de-3460-477b-9e6d-2eafe72813cd/scratchpad/spikes/langgraph/.venv/lib/python3.11/site-packages/langgraph/pregel/main.py", line 4000, in invoke
+    for chunk in self.stream(
+  File "/private/tmp/claude-501/-Users-recro-assignment/2807a0de-3460-477b-9e6d-2eafe72813cd/scratchpad/spikes/langgraph/.venv/lib/python3.11/site-packages/langgraph/pregel/main.py", line 2988, in stream
+    with SyncPregelLoop(
+  File "/private/tmp/claude-501/-Users-recro-assignment/2807a0de-3460-477b-9e6d-2eafe72813cd/scratchpad/spikes/langgraph/.venv/lib/python3.11/site-packages/langgraph/pregel/_loop.py", line 1919, in __enter__
+    self.updated_channels = self._first(
+                            ^^^^^^^^^^^^
+  File "/private/tmp/claude-501/-Users-recro-assignment/2807a0de-3460-477b-9e6d-2eafe72813cd/scratchpad/spikes/langgraph/.venv/lib/python3.11/site-packages/langgraph/pregel/_loop.py", line 1217, in _first
+    raise EmptyInputError(f"Received no input for {input_keys}")
+langgraph.errors.EmptyInputError: Received no input for __start__
+[exit 1]
+

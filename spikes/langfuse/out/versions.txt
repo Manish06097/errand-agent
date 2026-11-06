@@ -1,0 +1,6 @@
+re-run: 2026-11-06T13:02:58Z
+python 3.11.11
+langfuse 5.2.0
+opentelemetry-sdk 1.45.2
+langgraph 1.2.20
+langchain-core 1.7.6

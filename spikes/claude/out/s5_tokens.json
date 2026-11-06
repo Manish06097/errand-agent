@@ -1,0 +1,66 @@
+{
+  "overhead_single_user_msg_x": 9,
+  "claude-opus-5-5:english": {
+    "chars": 1404,
+    "tokens": 500,
+    "chars_per_token": 2.81,
+    "chars_per_token_minus_overhead": 2.86
+  },
+  "claude-opus-5-5:json_compact": {
+    "chars": 1682,
+    "tokens": 888,
+    "chars_per_token": 1.89,
+    "chars_per_token_minus_overhead": 1.91
+  },
+  "claude-opus-5-5:json_pretty": {
+    "chars": 2500,
+    "tokens": 1202,
+    "chars_per_token": 2.08,
+    "chars_per_token_minus_overhead": 2.1
+  },
+  "claude-opus-5-5:memory_lines": {
+    "chars": 3679,
+    "tokens": 1757,
+    "chars_per_token": 2.09,
+    "chars_per_token_minus_overhead": 2.1
+  },
+  "claude-opus-5-5:hindi_mixed": {
+    "chars": 396,
+    "tokens": 236,
+    "chars_per_token": 1.68,
+    "chars_per_token_minus_overhead": 1.74
+  },
+  "claude-haiku-5-5:english": {
+    "chars": 1404,
+    "tokens": 500,
+    "chars_per_token": 2.81,
+    "chars_per_token_minus_overhead": 2.86
+  },
+  "claude-haiku-5-5:json_compact": {
+    "chars": 1682,
+    "tokens": 888,
+    "chars_per_token": 1.89,
+    "chars_per_token_minus_overhead": 1.91
+  },
+  "claude-haiku-5-5:json_pretty": {
+    "chars": 2500,
+    "tokens": 1202,
+    "chars_per_token": 2.08,
+    "chars_per_token_minus_overhead": 2.1
+  },
+  "claude-haiku-5-5:memory_lines": {
+    "chars": 3679,
+    "tokens": 1757,
+    "chars_per_token": 2.09,
+    "chars_per_token_minus_overhead": 2.1
+  },
+  "claude-haiku-5-5:hindi_mixed": {
+    "chars": 396,
+    "tokens": 236,
+    "chars_per_token": 1.68,
+    "chars_per_token_minus_overhead": 1.74
+  },
+  "one_tool_overhead": 386,
+  "count_tokens_forced": "Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'tool_choice: type \"tool\" and \"any\" are not supported for this model.'}, 'request_id': 'req_011CgmbanZpE9V5vPU",
+  "langchain_get_num_tokens_from_messages": 507
+}

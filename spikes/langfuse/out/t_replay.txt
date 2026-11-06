@@ -1,0 +1,4 @@
+$ python scripts/t_replay.py 
+tool:book(public) start_offset_s=0.00 end_offset_s=-4.20
+[exit 0]
+

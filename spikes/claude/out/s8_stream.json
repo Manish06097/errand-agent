@@ -1,0 +1,94 @@
+[
+  {
+    "call": 1,
+    "chunks": 17,
+    "ttft_s": 1.59,
+    "total_s": 2.19,
+    "chunk_block_types": [
+      "input_json_delta",
+      "tool_use"
+    ],
+    "final_blocks": [
+      "tool_use"
+    ],
+    "thinking_sig_lens": [],
+    "tool_calls": [
+      "search_providers"
+    ],
+    "usage": {
+      "input_tokens": 579,
+      "output_tokens": 111,
+      "total_tokens": 690,
+      "input_token_details": {
+        "cache_creation": 0,
+        "cache_read": 0
+      },
+      "output_token_details": {
+        "reasoning": 0
+      }
+    }
+  },
+  {
+    "call": 2,
+    "chunks": 19,
+    "ttft_s": 1.35,
+    "total_s": 2.37,
+    "chunk_block_types": [
+      "input_json_delta",
+      "thinking",
+      "tool_use"
+    ],
+    "final_blocks": [
+      "thinking",
+      "tool_use"
+    ],
+    "thinking_sig_lens": [
+      904
+    ],
+    "tool_calls": [
+      "get_provider"
+    ],
+    "usage": {
+      "input_tokens": 871,
+      "output_tokens": 82,
+      "total_tokens": 953,
+      "input_token_details": {
+        "cache_creation": 0,
+        "cache_read": 0
+      },
+      "output_token_details": {
+        "reasoning": 29
+      }
+    }
+  },
+  {
+    "call": 3,
+    "chunks": 74,
+    "ttft_s": 4.81,
+    "total_s": 8.3,
+    "chunk_block_types": [
+      "text",
+      "thinking"
+    ],
+    "final_blocks": [
+      "thinking",
+      "text"
+    ],
+    "thinking_sig_lens": [
+      1016
+    ],
+    "tool_calls": [],
+    "usage": {
+      "input_tokens": 1009,
+      "output_tokens": 394,
+      "total_tokens": 1403,
+      "input_token_details": {
+        "cache_creation": 0,
+        "cache_read": 0
+      },
+      "output_token_details": {
+        "reasoning": 36
+      }
+    }
+  }
+]

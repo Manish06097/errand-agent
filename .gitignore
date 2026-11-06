@@ -1,0 +1,32 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# brief (not part of the submission repo)
+ASSIGNMENT.pdf
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# runtime data (dev traces contain user text)
+data/
+var/
+backend/evals/out/
+*.sqlite
+*.sqlite-journal
+*.db
+
+# node
+node_modules/
+.next/
+web/out/
+
+# os
+.DS_Store

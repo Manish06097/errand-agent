@@ -1,0 +1,10 @@
+$ python scripts/t_sink.py 
+unconfigured -> NullSink | langfuse imported: False
+planner                      type=generation trace=4e65d3fb session=conv-42 tname=errand_run cost={"input": 0.0036, "output": 0.0024, "total": 0.006}
+book                         type=tool       trace=4e65d3fb session=conv-42 tname=errand_run cost=None
+state:BOOKING->VERIFYING     type=event      trace=4e65d3fb session=conv-42 tname=errand_run cost=None
+errand_turn                  type=agent      trace=4e65d3fb session=conv-42 tname=errand_run cost=None
+NETWORK: []
+LOGS: []
+[exit 0]
+

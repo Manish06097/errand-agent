@@ -1,0 +1,7 @@
+$ python scripts/s4b_concurrency.py 
+messages chunks from nostream-tagged model: 0
+30 concurrent threads: book ran 30 times, 0.15s, all done: True
+double resume same thread: book side effect ran 2 times; results: ['dict', 'dict']
+with per-thread lock + pending-interrupt check: book ran 1 times; ["{'ok': 'yes', 'note': 'structured review", 'no pending interrupt, ignored']
+[exit 0]
+

@@ -1,0 +1,5 @@
+{"node": "plan", "pid": 15532}
+{"node": "hold", "pid": 15532}
+{"node": "book", "side_effect": "BOOKED", "hold": "H1", "pid": 15532}
+{"node": "book", "side_effect": "BOOKED", "hold": "H1", "pid": 15533}
+{"node": "confirm", "pid": 15533}

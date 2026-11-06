@@ -1,0 +1,31 @@
+$ python scripts/s4_stream.py 
+=== v1 multi-mode: tuples (mode, data)
+  custom: {'type': 'tool_call', 'tool': 'search_providers', 'args': {'service': 'plumber'}, 't': 1793970136.8974788}
+  custom: {'type': 'tool_result', 'tool': 'search_providers', 'latency_ms': 10, 'n': 3}
+  updates: {'search': {'log': ['searched']}}
+  custom: {'type': 'model_call_start', 'model': 'fake'}
+  messages: 'Found' node=respond
+  messages: ' ' node=respond
+  messages: 'three' node=respond
+  messages: ' ' node=respond
+  messages: 'plumbers' node=respond
+  messages: ' ' node=respond
+  messages: 'near' node=respond
+  messages: ' ' node=respond
+  messages: 'you' node=respond
+  custom: {'type': 'model_call_end', 'usage': None}
+  updates: {'respond': {'reply': 'Found three plumbers near you'}}
+  updates: {'__interrupt__': (Interrupt(value={'approve': 'P1 Tue 09:00 Rs1200'}, id='dfb789235920afdc58b3b94b00993d01', response_schema=None),)}
+=== v2 resume: StreamPart dicts
+  keys=['data', 'interrupts', 'ns', 'type'] type=values ns=() data={'log': ['searched'], 'reply': 'Found three plumbers near you'}
+  keys=['data', 'ns', 'type'] type=checkpoints ns=() data={'next': ['approve'], 'step': 2}
+  keys=['data', 'ns', 'type'] type=tasks ns=() data={'id': '1fec9a56-a52b-4f2a-301f-c36db6b24a32', 'name': 'approve', 'input': {'log': ['searched'], 'reply': 'Fou
+  keys=['data', 'ns', 'type'] type=updates ns=() data={'approve': {'ok': 'yes'}}
+  keys=['data', 'ns', 'type'] type=tasks ns=() data={'id': '1fec9a56-a52b-4f2a-301f-c36db6b24a32', 'name': 'approve', 'error': None, 'result': {'ok': 'yes'}, 'int
+  keys=['data', 'interrupts', 'ns', 'type'] type=values ns=() data={'log': ['searched'], 'reply': 'Found three plumbers near you', 'ok': 'yes'}
+  keys=['data', 'ns', 'type'] type=checkpoints ns=() data={'next': [], 'step': 3}
+aget_state next: () values: {'log': ['searched'], 'reply': 'Found three plumbers near you', 'ok': 'yes'}
+aget_state_history(limit=3): [(3, ()), (2, ('approve',)), (1, ('respond',))]
+sync get_state on AsyncSqliteSaver inside loop -> InvalidStateError Synchronous calls to AsyncSqliteSaver are only allowed from a different thread. From the main thread, use the async inte
+[exit 0]
+

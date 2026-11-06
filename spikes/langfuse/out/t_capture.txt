@@ -1,0 +1,91 @@
+$ python scripts/t_capture.py 
+--- span name='GenericFakeChatModel' trace_id=302aa61015d20d93ce981a9d347c97b0 parent=yes
+     langfuse.observation.input = [{"role": "user", "content": "plumber, call [PHONE]"}]
+     langfuse.observation.metadata.checkpoint_ns = "plan:52c9fbc0-7733-3628-a378-941538cd14cb"
+     langfuse.observation.metadata.langgraph_checkpoint_ns = "plan:52c9fbc0-7733-3628-a378-941538cd14cb"
+     langfuse.observation.metadata.langgraph_node = "plan"
+     langfuse.observation.metadata.langgraph_path = ["__pregel_pull","plan"]
+     langfuse.observation.metadata.langgraph_step = 1
+     langfuse.observation.metadata.langgraph_triggers = ["branch:to:plan"]
+     langfuse.observation.metadata.lc_versions = {"langchain-core":"1.7.6"}
+     langfuse.observation.metadata.ls_integration = "langchain_chat_model"
+     langfuse.observation.metadata.ls_model_type = "chat"
+     langfuse.observation.metadata.ls_provider = "genericfakechatmodel"
+     langfuse.observation.metadata.run_id = "run-0001"
+     langfuse.observation.metadata.tags = ["seq:step:1"]
+     langfuse.observation.model.parameters = {}
+     langfuse.observation.output = {"role": "assistant", "content": "ok"}
+     langfuse.observation.type = generation
+     langfuse.observation.usage_details = {"input": 200, "output": 300, "total": 1500, "input_cache_creation": 0, "input_cache_read": 1000}
+     langfuse.trace.metadata.ls_integration = "langgraph"
+     langfuse.trace.metadata.run_id = "run-0001"
+     langfuse.trace.tags = ('eval',)
+     session.id = conv-42
+     user.id = u-7
+--- span name='plan' trace_id=302aa61015d20d93ce981a9d347c97b0 parent=yes
+     langfuse.observation.input = {"q": "plumber, call [PHONE]"}
+     langfuse.observation.metadata.langgraph_checkpoint_ns = "plan:52c9fbc0-7733-3628-a378-941538cd14cb"
+     langfuse.observation.metadata.langgraph_node = "plan"
+     langfuse.observation.metadata.langgraph_path = ["__pregel_pull","plan"]
+     langfuse.observation.metadata.langgraph_step = 1
+     langfuse.observation.metadata.langgraph_triggers = ["branch:to:plan"]
+     langfuse.observation.metadata.ls_integration = "langgraph"
+     langfuse.observation.metadata.run_id = "run-0001"
+     langfuse.observation.metadata.tags = ["graph:step:1"]
+     langfuse.observation.output = {"a": "ok"}
+     langfuse.observation.type = chain
+     langfuse.trace.metadata.ls_integration = "langgraph"
+     langfuse.trace.metadata.run_id = "run-0001"
+     langfuse.trace.tags = ('eval',)
+     session.id = conv-42
+     user.id = u-7
+--- span name='errand_turn' trace_id=302aa61015d20d93ce981a9d347c97b0 parent=yes
+     langfuse.internal.as_root = True
+     langfuse.internal.is_app_root = True
+     langfuse.observation.input = {"q": "plumber, call [PHONE]"}
+     langfuse.observation.metadata.is_langchain_root = true
+     langfuse.observation.metadata.ls_integration = "langgraph"
+     langfuse.observation.metadata.run_id = "run-0001"
+     langfuse.observation.output = {"q": "plumber, call [PHONE]", "a": "ok"}
+     langfuse.observation.type = chain
+     langfuse.trace.metadata.ls_integration = "langgraph"
+     langfuse.trace.metadata.run_id = "run-0001"
+     langfuse.trace.tags = ('eval',)
+     session.id = conv-42
+     user.id = u-7
+--- span name='tool:book' trace_id=302aa61015d20d93ce981a9d347c97b0 parent=yes
+     langfuse.observation.input = {"hold_id": "h1", "idempotency_key": "k1"}
+     langfuse.observation.level = WARNING
+     langfuse.observation.output = {"error": "timeout"}
+     langfuse.observation.status_message = timeout
+     langfuse.observation.type = tool
+     langfuse.trace.name = errand_turn
+     session.id = conv-42
+     user.id = u-7
+--- span name='planner' trace_id=302aa61015d20d93ce981a9d347c97b0 parent=yes
+     langfuse.observation.cost_details = {"input": 0.0008, "input_cache_read": 0.0004, "output": 0.006}
+     langfuse.observation.model.name = claude-opus-5-5
+     langfuse.observation.type = generation
+     langfuse.observation.usage_details = {"input": 200, "input_cache_read": 1000, "output": 300}
+     langfuse.trace.name = errand_turn
+     session.id = conv-42
+     user.id = u-7
+--- span name='approval_granted' trace_id=302aa61015d20d93ce981a9d347c97b0 parent=yes
+     langfuse.observation.metadata.fingerprint = "sha256:abc"
+     langfuse.observation.type = event
+     langfuse.trace.name = errand_turn
+     session.id = conv-42
+     user.id = u-7
+--- span name='state_transition' trace_id=302aa61015d20d93ce981a9d347c97b0 parent=yes
+     langfuse.internal.as_root = True
+     langfuse.internal.is_app_root = True
+     langfuse.observation.input = {"from": "COLLECTING", "to": "AWAITING_APPROVAL"}
+     langfuse.observation.type = span
+     langfuse.trace.name = errand_turn
+     session.id = conv-42
+     user.id = u-7
+trace_id_expected 302aa61015d20d93ce981a9d347c97b0
+NETWORK: []
+LOGS: ['WARNING langfuse: Langfuse was not able to parse the LLM model. The LLM call will be recorded without model name. Please create an issue: https://github.com/langfuse/langfuse/iss']
+[exit 0]
+

@@ -1,0 +1,35 @@
+$ python scripts/s1_interrupt.py start s1.sqlite s1_counter.json
+  [approve] entered node, pre-interrupt counter=1, pid=23970
+  invoke returned: {'proposal': 'book P1 @ Tue 09:00 for 1200', '__interrupt__': [Interrupt(value={'ask': 'approve?', 'proposal': 'book P1 @ Tue 09:00 for 1200'}, id='dbcc5114f6f00996d8884edb5f5ddbdc', response_schema=None)]}
+  counters: {'propose': 1, 'approve_before_interrupt': 1}
+[exit 0]
+
+$ python scripts/s1_interrupt.py inspect s1.sqlite s1_counter.json
+  next: ('approve',)
+  values: {'proposal': 'book P1 @ Tue 09:00 for 1200'}
+  interrupts: (Interrupt(value={'ask': 'approve?', 'proposal': 'book P1 @ Tue 09:00 for 1200'}, id='dbcc5114f6f00996d8884edb5f5ddbdc', response_schema=None),)
+  tasks: [('approve', (Interrupt(value={'ask': 'approve?', 'proposal': 'book P1 @ Tue 09:00 for 1200'}, id='dbcc5114f6f00996d8884edb5f5ddbdc', response_schema=None),))]
+  counters: {'propose': 1, 'approve_before_interrupt': 1}
+[exit 0]
+
+$ python scripts/s1_interrupt.py resume s1.sqlite s1_counter.json
+  [approve] entered node, pre-interrupt counter=2, pid=23972
+  [approve] got resume value='yes'
+  invoke returned: {'proposal': 'book P1 @ Tue 09:00 for 1200', 'decision': 'yes', 'booked': True}
+  counters: {'propose': 1, 'approve_before_interrupt': 2, 'approve_after_interrupt': 1, 'book': 1}
+[exit 0]
+
+$ python scripts/s1_interrupt.py inspect s1.sqlite s1_counter.json
+  next: ()
+  values: {'proposal': 'book P1 @ Tue 09:00 for 1200', 'decision': 'yes', 'booked': True}
+  interrupts: ()
+  tasks: []
+  counters: {'propose': 1, 'approve_before_interrupt': 2, 'approve_after_interrupt': 1, 'book': 1}
+[exit 0]
+
+$ python scripts/s1_interrupt.py start_v2 s1_v2.sqlite s1_v2_counter.json
+  [approve] entered node, pre-interrupt counter=1, pid=23976
+  invoke(v2) returned type: GraphOutput -> GraphOutput(value={'proposal': 'book P1 @ Tue 09:00 for 1200'}, interrupts=(Interrupt(value={'ask': 'approve?', 'proposal': 'book P1 @ Tue 09:00 for 1200'}, id='ac68d4efc4fe29b183e562c03cced9ed', response_schema=None),))
+  counters: {'propose': 1, 'approve_before_interrupt': 1}
+[exit 0]
+

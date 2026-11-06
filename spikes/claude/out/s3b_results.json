@@ -1,0 +1,20 @@
+[
+  {
+    "blocks": [
+      "thinking",
+      "tool_use"
+    ],
+    "transforms": [],
+    "in": 1526,
+    "out": 119
+  },
+  {
+    "blocks": [
+      "thinking",
+      "text"
+    ],
+    "transforms": [],
+    "in": 1701,
+    "out": 432
+  }
+]

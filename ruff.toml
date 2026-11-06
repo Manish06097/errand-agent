@@ -1,0 +1,10 @@
+# One ruff config for every Python file in the repo (backend, scripts).
+# spikes/ is pre-design throwaway code kept as evidence, so it is left as written.
+target-version = "py311"
+line-length = 100
+# Markdown is excluded: ruff would reformat the illustrative snippets in docs/.
+extend-exclude = ["spikes", "*.md"]
+src = ["backend/src", "backend", "scripts"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]

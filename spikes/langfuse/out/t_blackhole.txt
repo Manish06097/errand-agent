@@ -1,0 +1,12 @@
+$ T=2 python scripts/t_blackhole.py 
+ERROR:opentelemetry.exporter.otlp.proto.http.trace_exporter:Failed to export spans batch due to timeout, max retries or shutdown.
+flush blocked 2.0s (timeout=2)
+shutdown 0.0s
+[exit 0]
+
+$ T=5 python scripts/t_blackhole.py 
+ERROR:opentelemetry.exporter.otlp.proto.http.trace_exporter:Failed to export spans batch due to timeout, max retries or shutdown.
+flush blocked 5.0s (timeout=5)
+shutdown 0.0s
+[exit 0]
+

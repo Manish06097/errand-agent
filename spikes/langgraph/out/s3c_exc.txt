@@ -1,0 +1,6 @@
+$ python scripts/s3c_exc.py 
+raised: RuntimeError tool 503
+after error: next= ('b',) tasks= [('a', None), ('b', "RuntimeError('tool 503')")] calls= ['a', 'b']
+resume: {'log': ['a', 'b', 'flaky ok']} calls= ['b', 'flaky', 'flaky', 'flaky']
+[exit 0]
+

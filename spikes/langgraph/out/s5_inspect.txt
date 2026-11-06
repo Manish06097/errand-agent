@@ -1,0 +1,42 @@
+$ python scripts/s5_inspect.py 
+StateSnapshot fields: ('values', 'next', 'config', 'metadata', 'created_at', 'parent_config', 'tasks', 'interrupts')
+values: {'log': ['a'], 'phase': 'searching'}
+next: ('b',)
+metadata: {'source': 'loop', 'step': 1, 'parents': {}}
+created_at: 2026-11-06T13:02:17.910240+00:00
+config: {'configurable': {'thread_id': 'i', 'checkpoint_ns': '', 'checkpoint_id': '1f1d9e24-b953-66f2-8001-fbdc2b994e2d'}}
+parent_config: {'configurable': {'thread_id': 'i', 'checkpoint_ns': '', 'checkpoint_id': '1f1d9e24-b952-654a-8000-68adf731c4a2'}}
+tasks[0]: PregelTask(id='2c36db84-4ba4-1b2e-136d-dfb1447d5e57', name='b', path=('__pregel_pull', 'b'), error=None, interrupts=(Interrupt(value='approve?', id='e0e059377aea57b20f6bca4597226bfe', response_schema=None),), state=None, result=None)
+interrupts: (Interrupt(value='approve?', id='e0e059377aea57b20f6bca4597226bfe', response_schema=None),)
+
+history newest-first:
+  step= 2 source=loop   next=() phase=approved ckpt=1f1d9e24-b955
+  step= 1 source=loop   next=('b',) phase=searching ckpt=1f1d9e24-b953
+  step= 0 source=loop   next=('a',) phase=None ckpt=1f1d9e24-b952
+  step=-1 source=input  next=('__start__',) phase=None ckpt=1f1d9e24-b951
+
+filter={'source':'input'}: [-1]
+limit=2: [2, 1]
+before=<step1 cfg>: [0, -1]
+get_state at a past checkpoint_id -> step 0 next ('a',)
+saver.list() tuples: [(2, ['log', 'phase']), (1, ['log', 'phase', 'branch:to:b'])]
+get_graph().draw_mermaid():
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	a(a)
+	b(b)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> a;
+	a --> b;
+	b --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+[exit 0]
+

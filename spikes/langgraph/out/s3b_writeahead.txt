@@ -1,0 +1,14 @@
+$ CRASH=1 python scripts/s3b_writeahead.py run s3b.sqlite s3b_provider.sqlite
+  [book] provider booked, crashing before recording outcome
+[exit 1]
+
+$ python scripts/s3b_writeahead.py restart s3b.sqlite s3b_provider.sqlite
+  next before restart: ('book',)
+  [book] found in-flight intent idem-aa480758, get_booking_status -> {'status': 'confirmed', 'booking_id': 'B-82e44f'}
+  final: {'hold_id': 'H1', 'booking_id': 'B-82e44f', 'recovered': True}
+  provider bookings: [('idem-aa480758', 'H1', 'B-82e44f')]
+  intents: [('t', 'H1', 'idem-aa480758', 'done', 'B-82e44f')]
+[exit 0]
+
+$ tables in s3b.sqlite (checkpointer and our table, one file)
+['booking_intents', 'checkpoints', 'writes']

@@ -1,0 +1,59 @@
+# Every hook is local and runs from the backend uv environment, so hook versions are
+# the ones in backend/uv.lock and installing the hooks needs no network.
+# Without default_install_hook_types, `pre-commit install` sets up only the
+# pre-commit stage and the attribution guard (commit-msg) would never run.
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --frozen --project backend ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --frozen --project backend ruff format --check --force-exclude
+        language: system
+        types_or: [python, pyi]
+
+      - id: mypy
+        name: mypy
+        entry: uv run --frozen --project backend mypy --config-file backend/pyproject.toml
+        language: system
+        files: ^(backend/|scripts/).*\.py$|^backend/pyproject\.toml$
+        pass_filenames: false
+
+      - id: lint-imports
+        name: import-linter contracts
+        entry: uv run --frozen --project backend lint-imports --config backend/pyproject.toml
+        language: system
+        files: ^backend/(src/.*\.py|pyproject\.toml)$
+        pass_filenames: false
+
+      - id: em-dash-guard
+        name: em-dash guard
+        entry: uv run --frozen --project backend python scripts/check_em_dash.py
+        language: system
+        types: [file]
+
+      - id: secret-scan
+        name: secret scan
+        entry: uv run --frozen --project backend python scripts/secret_scan.py
+        language: system
+        types: [file]
+
+      - id: design-note-budget
+        name: design note word budget
+        entry: uv run --frozen --project backend python scripts/check_design_note.py
+        language: system
+        files: ^docs/DESIGN_NOTE\.md$
+
+      - id: attribution-guard
+        name: attribution guard (commit message)
+        entry: uv run --frozen --project backend python scripts/check_attribution.py --msg-file
+        language: system
+        stages: [commit-msg]

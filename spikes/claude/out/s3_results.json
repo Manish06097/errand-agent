@@ -1,0 +1,251 @@
+{
+  "A_call1": {
+    "ok": true,
+    "latency": 1.8,
+    "blocks": [
+      "tool_use"
+    ],
+    "usage": {
+      "input_tokens": 591,
+      "output_tokens": 120,
+      "total_tokens": 711,
+      "input_token_details": {
+        "cache_read": 0,
+        "cache_creation": 0,
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_token_details": {
+        "reasoning": 0
+      }
+    },
+    "input_transformations": [],
+    "rm_keys": [
+      "container",
+      "context_management",
+      "diagnostics",
+      "id",
+      "input_transformations",
+      "model",
+      "model_name",
+      "model_provider",
+      "stop_details",
+      "stop_reason",
+      "stop_sequence",
+      "usage"
+    ]
+  },
+  "A_call2": {
+    "ok": true,
+    "latency": 2.05,
+    "blocks": [
+      "thinking",
+      "tool_use"
+    ],
+    "usage": {
+      "input_tokens": 892,
+      "output_tokens": 111,
+      "total_tokens": 1003,
+      "input_token_details": {
+        "cache_read": 0,
+        "cache_creation": 0,
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_token_details": {
+        "reasoning": 58
+      }
+    },
+    "input_transformations": [],
+    "rm_keys": [
+      "container",
+      "context_management",
+      "diagnostics",
+      "id",
+      "input_transformations",
+      "model",
+      "model_name",
+      "model_provider",
+      "stop_details",
+      "stop_reason",
+      "stop_sequence",
+      "usage"
+    ]
+  },
+  "A_call3": {
+    "ok": true,
+    "latency": 5.46,
+    "blocks": [
+      "thinking",
+      "text"
+    ],
+    "usage": {
+      "input_tokens": 1059,
+      "output_tokens": 536,
+      "total_tokens": 1595,
+      "input_token_details": {
+        "cache_read": 0,
+        "cache_creation": 0,
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_token_details": {
+        "reasoning": 53
+      }
+    },
+    "input_transformations": [],
+    "rm_keys": [
+      "container",
+      "context_management",
+      "diagnostics",
+      "id",
+      "input_transformations",
+      "model",
+      "model_name",
+      "model_provider",
+      "stop_details",
+      "stop_reason",
+      "stop_sequence",
+      "usage"
+    ]
+  },
+  "thinking_idx": [
+    4,
+    6
+  ],
+  "B_plaintext_rebuild_new_system": {
+    "ok": true,
+    "latency": 4.45,
+    "blocks": [
+      "thinking",
+      "tool_use"
+    ],
+    "usage": {
+      "input_tokens": 1101,
+      "output_tokens": 382,
+      "total_tokens": 1483,
+      "input_token_details": {
+        "cache_read": 0,
+        "cache_creation": 0,
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_token_details": {
+        "reasoning": 263
+      }
+    },
+    "input_transformations": [],
+    "rm_keys": [
+      "container",
+      "context_management",
+      "diagnostics",
+      "id",
+      "input_transformations",
+      "model",
+      "model_name",
+      "model_provider",
+      "stop_details",
+      "stop_reason",
+      "stop_sequence",
+      "usage"
+    ]
+  },
+  "C_verbatim_replay": {
+    "ok": true,
+    "latency": 3.09,
+    "blocks": [
+      "thinking",
+      "tool_use"
+    ],
+    "usage": {
+      "input_tokens": 1616,
+      "output_tokens": 180,
+      "total_tokens": 1796,
+      "input_token_details": {
+        "cache_read": 0,
+        "cache_creation": 0,
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_token_details": {
+        "reasoning": 127
+      }
+    },
+    "input_transformations": [],
+    "rm_keys": [
+      "container",
+      "context_management",
+      "diagnostics",
+      "id",
+      "input_transformations",
+      "model",
+      "model_name",
+      "model_provider",
+      "stop_details",
+      "stop_reason",
+      "stop_sequence",
+      "usage"
+    ]
+  },
+  "D_edit_earlier_user_error": {
+    "ok": false,
+    "error": "AnthropicInvalidRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'messages.1.content.2: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \"drop_block\". Content before this block differs from when it was created, first at `messages.0.content.0`.'}, 'request_id': 'req_011CgmbV35mhpfM3gNJZXNuT'}"
+  },
+  "E_edit_no_beta_default": {
+    "ok": false,
+    "error": "AnthropicInvalidRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'messages.1.content.2: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \"drop_block\". That setting requires the `thinking-binding-controls-2026-08-01` value in the `anthropic-beta` header. Content before this block differs from when it was created, first at `messages.0.content.0`.'}, 'reques"
+  },
+  "F_edit_drop_block": {
+    "ok": true,
+    "latency": 3.81,
+    "blocks": [
+      "thinking",
+      "tool_use",
+      "tool_use"
+    ],
+    "usage": {
+      "input_tokens": 1509,
+      "output_tokens": 307,
+      "total_tokens": 1816,
+      "input_token_details": {
+        "cache_read": 0,
+        "cache_creation": 0,
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_token_details": {
+        "reasoning": 205
+      }
+    },
+    "input_transformations": [
+      {
+        "path": "messages.3.content.0",
+        "reason": "prefix_binding_mismatch",
+        "type": "thinking_dropped"
+      },
+      {
+        "path": "messages.5.content.0",
+        "reason": "prefix_binding_mismatch",
+        "type": "thinking_dropped"
+      }
+    ],
+    "rm_keys": [
+      "container",
+      "context_management",
+      "diagnostics",
+      "id",
+      "input_transformations",
+      "model",
+      "model_name",
+      "model_provider",
+      "stop_details",
+      "stop_reason",
+      "stop_sequence",
+      "usage"
+    ]
+  },
+  "G_changed_system_error": {
+    "ok": false,
+    "error": "AnthropicInvalidRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'messages.1.content.2: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \"drop_block\". The `system` prompt differs from the one this block was created with.'}, 'request_id': 'req_011CgmbVNDheP1kRbDGZzt2t'}"
+  }
+}

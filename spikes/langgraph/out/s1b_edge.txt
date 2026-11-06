@@ -1,0 +1,14 @@
+$ python scripts/s1b_edge.py 
+--- two interrupts in one node
+1: first? ['start', 'ask-enter']
+2: second? ['start', 'ask-enter', 'ask-enter', 'after-first a=A']
+3: {'log': ['start', 'ask done'], 'a': 'A', 'b': 'B'} ['start', 'ask-enter', 'ask-enter', 'after-first a=A', 'ask-enter', 'after-first a=A', 'after-second b=B']
+--- new plain input while an interrupt is pending
+pending: ('ask',)
+after plain input -> next: ('ask',) | log: ['start', 'user said something else', 'start'] | calls: ['start', 'ask-enter', 'start', 'ask-enter']
+--- resume keyed by interrupt id
+by id -> [Interrupt(value='second?', id='00f9381e420a0848cbd384f659f41277', response_schema=None)] ['start', 'ask-enter', 'ask-enter', 'after-first a=A-by-id']
+--- update_state while interrupted (out-of-band edit, e.g. price changed)
+after update_state next: ('ask',) log: ['start', 'price changed by app']
+[exit 0]
+
