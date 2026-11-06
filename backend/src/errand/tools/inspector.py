@@ -17,7 +17,7 @@ import httpx
 from errand.clock import CLOCK_HEADER, ClockMode, TrackingClock, from_ms
 from errand.world.engine import WorldHost
 from errand.world.scenario import ScenarioConfig
-from errand.world.store import BookingRow, EventRow, OpLogRow
+from errand.world.store import BookingRow, EventRow, OperationRow, OpLogRow
 
 
 class WorldInspector(Protocol):
@@ -34,6 +34,8 @@ class WorldInspector(Protocol):
     async def op_log(self) -> list[OpLogRow]: ...
 
     async def bookings(self) -> list[BookingRow]: ...
+
+    async def operations(self) -> list[OperationRow]: ...
 
     async def load_scenario(
         self, scenario: ScenarioConfig, clock_mode: ClockMode = "sim"
@@ -66,6 +68,9 @@ class InProcessInspector:
 
     async def bookings(self) -> list[BookingRow]:
         return self._host.world.bookings()
+
+    async def operations(self) -> list[OperationRow]:
+        return self._host.world.operations()
 
     async def load_scenario(self, scenario: ScenarioConfig, clock_mode: ClockMode = "sim") -> None:
         self._host.load(scenario, clock_mode)
@@ -134,6 +139,9 @@ class HttpInspector:
 
     async def bookings(self) -> list[BookingRow]:
         return [BookingRow(**b) for b in await self._request("GET", "/dev/bookings")]
+
+    async def operations(self) -> list[OperationRow]:
+        return [OperationRow(**o) for o in await self._request("GET", "/dev/operations")]
 
     async def load_scenario(self, scenario: ScenarioConfig, clock_mode: ClockMode = "sim") -> None:
         body = {"scenario": scenario.model_dump(mode="json"), "clock_mode": clock_mode}

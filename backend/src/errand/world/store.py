@@ -401,6 +401,9 @@ class WorldStore:
         row = self._one("SELECT * FROM operations WHERE idempotency_key = ?", key)
         return None if row is None else _operation(row)
 
+    def all_operations(self) -> list[OperationRow]:
+        return [_operation(r) for r in self._all("SELECT * FROM operations ORDER BY rowid")]
+
     def count_call(self, key: str, now: int) -> None:
         self.conn.execute(
             "UPDATE operations SET calls = calls + 1, updated_at = ? WHERE idempotency_key = ?",

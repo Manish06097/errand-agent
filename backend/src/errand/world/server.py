@@ -35,7 +35,7 @@ from errand.clock import CLOCK_HEADER, ClockMode, SimClock, to_ms
 from errand.world.contracts import CLIENT_TIMEOUT_HEADER, SERVICE_UNAVAILABLE, encode
 from errand.world.engine import ClockPacing, Pacing, UnknownTool, World, WorldClosed, WorldHost
 from errand.world.scenario import ScenarioConfig, WorldConfig, parse_duration
-from errand.world.store import BookingRow, EventRow, OpLogRow
+from errand.world.store import BookingRow, EventRow, OperationRow, OpLogRow
 
 SERVICE = "errand-world"
 # Only used when a caller (curl, say) sends no timeout header; HttpTransport always
@@ -162,6 +162,19 @@ def _booking_json(b: BookingRow) -> dict[str, Any]:
         "hold_id": b.hold_id,
         "created_by_key": b.created_by_key,
         "created_at": b.created_at,
+    }
+
+
+def _operation_json(o: OperationRow) -> dict[str, Any]:
+    return {
+        "idempotency_key": o.idempotency_key,
+        "op": o.op,
+        "request_hash": o.request_hash,
+        "outcome": o.outcome,
+        "response_json": o.response_json,
+        "booking_id": o.booking_id,
+        "calls": o.calls,
+        "attempts": o.attempts,
     }
 
 
@@ -326,6 +339,10 @@ def _add_dev_routes(app: FastAPI, host: WorldHost, settings: ServeSettings) -> N
     @app.get("/dev/bookings")
     async def bookings() -> list[dict[str, Any]]:
         return [_booking_json(b) for b in host.world.bookings()]
+
+    @app.get("/dev/operations")
+    async def operations() -> list[dict[str, Any]]:
+        return [_operation_json(o) for o in host.world.operations()]
 
 
 app = create_app()

@@ -85,6 +85,7 @@ from errand.world.store import (
     BookingRow,
     EventRow,
     HoldRow,
+    OperationRow,
     OpLogRow,
     OpOutcome,
     ProviderRow,
@@ -270,6 +271,9 @@ class World:
 
     def bookings(self) -> list[BookingRow]:
         return self.store.all_bookings()
+
+    def operations(self) -> list[OperationRow]:
+        return self.store.all_operations()
 
     def reviews(self) -> list[ReviewRow]:
         return self.store.all_reviews()

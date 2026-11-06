@@ -57,6 +57,14 @@ async def test_replay_of_an_applied_key_is_a_no_op(env: Env) -> None:
     assert [r.outcome for r in log] == ["success", "replayed"]
     assert log[1].draw is None and log[1].attempt is None
     assert log[1].response_json == first[1].decode()
+    [op] = [o for o in await env.inspector.operations() if o.idempotency_key == "k-replay"]
+    assert (op.outcome, op.booking_id, op.calls, op.attempts) == (
+        "applied",
+        booked[0].booking_id,
+        2,
+        1,
+    )
+    assert op.response_json == first[1].decode()
 
 
 async def test_same_key_on_an_in_progress_key_waits_then_replays(env: Env) -> None:

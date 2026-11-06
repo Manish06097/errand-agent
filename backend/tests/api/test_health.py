@@ -46,4 +46,5 @@ def test_world_dev_routes_only_with_the_dev_flag() -> None:
         "/dev/scenario",
         "/dev/op_log",
         "/dev/bookings",
+        "/dev/operations",
     }
