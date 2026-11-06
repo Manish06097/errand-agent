@@ -16,6 +16,10 @@ dependencies = [
   "pydantic-settings==2.16.2",
   "httpx==0.28.1",
   "pyyaml==6.0.3",
+  # Optional Langfuse dashboard (ADR 0008), same pins as spikes/langfuse. Imported
+  # only by errand.trace.sinks.langfuse, and only when keys are set.
+  "langfuse==5.2.0",
+  "opentelemetry-sdk==1.45.2",
 ]
 
 [project.scripts]
