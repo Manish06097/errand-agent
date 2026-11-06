@@ -411,7 +411,9 @@ class WorldStore:
         )
 
     def claim_operation(self, key: str, op: str, request_hash: str, now: int) -> int:
-        """Mark `key` in_progress for a new evaluation; return its 0-based attempt."""
+        """Claim `key` for a new evaluation and return its 0-based attempt.
+
+        The key goes in_progress unless it already applied."""
         existing = self.get_operation(key)
         if existing is None:
             self.conn.execute(
@@ -419,9 +421,12 @@ class WorldStore:
                 (key, op, request_hash, now),
             )
             return 0
+        # A dedupe-off re-send on an applied key is evaluated again, but the key stays
+        # applied while it runs: a restart mid-latency must not turn it not_applied.
         self.conn.execute(
-            "UPDATE operations SET outcome = 'in_progress', calls = calls + 1,"
-            " attempts = attempts + 1, updated_at = ? WHERE idempotency_key = ?",
+            "UPDATE operations SET calls = calls + 1, attempts = attempts + 1, updated_at = ?,"
+            " outcome = CASE WHEN outcome = 'applied' THEN outcome ELSE 'in_progress' END"
+            " WHERE idempotency_key = ?",
             (now, key),
         )
         return existing.attempts
@@ -434,10 +439,18 @@ class WorldStore:
         booking_id: str | None,
         now: int,
     ) -> None:
+        # An applied key keeps the record of its first application. Only the
+        # dedupe-off mode evaluates an applied key again; what that re-send does is in
+        # op_log and bookings, and it must not rewrite the key to not_applied or to a
+        # later booking (BUG-M1-2).
         self.conn.execute(
-            "UPDATE operations SET outcome = ?, response_json = ?,"
-            " booking_id = COALESCE(booking_id, ?), updated_at = ? WHERE idempotency_key = ?",
-            (outcome, response_json, booking_id, now, key),
+            "UPDATE operations SET updated_at = ?,"
+            " response_json = CASE WHEN outcome = 'applied' THEN response_json ELSE ? END,"
+            " booking_id = CASE WHEN outcome = 'applied' THEN booking_id"
+            " ELSE COALESCE(booking_id, ?) END,"
+            " outcome = CASE WHEN outcome = 'applied' THEN outcome ELSE ? END"
+            " WHERE idempotency_key = ?",
+            (now, response_json, booking_id, outcome, key),
         )
 
     def abandon_in_progress(self, now: int) -> int:
