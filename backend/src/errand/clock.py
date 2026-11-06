@@ -136,11 +136,12 @@ class TrackingClock:
 
     In `system_offset` mode it is real time plus the world's offset, so it keeps
     ticking between responses. In `sim` mode it is the world's simulated time as of
-    the last response, and `sleep` asks the world to advance (through `advance_hook`,
-    which the dev inspector provides).
+    the last response, and `sleep` asks the world to advance through `advance_hook`.
+    `HttpInspector` sets the hook to its `POST /dev/clock/advance` when it is given
+    this clock and no hook is set yet; without one, a sim-mode `sleep` raises.
     """
 
-    def __init__(self, advance_hook: Callable[[float], Awaitable[None]] | None = None) -> None:
+    def __init__(self, advance_hook: Callable[[float], Awaitable[object]] | None = None) -> None:
         self._reading: ClockReading | None = None
         self.advance_hook = advance_hook
 

@@ -105,6 +105,8 @@ async def test_late_commit_lands_after_the_client_timeout(env: Env) -> None:
     assert original.done_seq > status_row.done_seq, "the commit landed after the status check"
     assert original.seq < status_row.seq < replay.seq
     assert (original.done_ts or 0) > status_row.sim_ts
+    # What the world sent, to a client that had already given up (architecture 5.3).
+    assert original.http_status == 200
     (booking,) = [b for b in await env.inspector.bookings() if b.created_by_key == "k-late"]
     assert retry.booking_id == booking.booking_id
     status = await client.get_booking_status(idempotency_key="k-late")
@@ -140,3 +142,14 @@ async def test_demo_clock_agent_and_world_agree_after_advance(env: Env) -> None:
     assert abs((agent_now - world_now).total_seconds()) < 1
     # Real time keeps flowing in the demo clock.
     assert world_now >= advanced
+
+
+async def test_sim_agent_clock_sleep_moves_the_world(env: Env) -> None:
+    # Over HTTP the agent's TrackingClock sleeps through the inspector's advance hook.
+    await env.load()
+    before = await env.inspector.now()
+    assert env.agent_clock.now() == before
+    await env.agent_clock.sleep(90)
+    after = await env.inspector.now()
+    assert after - before >= timedelta(seconds=90)
+    assert env.agent_clock.now() == after

@@ -85,7 +85,10 @@ def row_to_json(row: Any) -> dict[str, Any]:
 
 
 class HttpInspector:
-    """The `/dev` routes. Every response refreshes `clock`, the agent-side view."""
+    """The `/dev` routes. Every response refreshes `clock`, the agent-side view.
+
+    It also becomes that clock's `advance_hook` unless one is already set, so a
+    sim-mode `clock.sleep` moves the world's clock (and so the agent's) forward."""
 
     def __init__(
         self,
@@ -94,6 +97,8 @@ class HttpInspector:
         http: httpx.AsyncClient | None = None,
     ) -> None:
         self.clock = clock
+        if clock is not None and clock.advance_hook is None:
+            clock.advance_hook = self.advance
         self._owns_http = http is None
         self._http = http or httpx.AsyncClient(base_url=base_url, timeout=30)
 
