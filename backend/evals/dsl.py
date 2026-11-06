@@ -194,3 +194,30 @@ def load_scenario(path: Path) -> Scenario:
     if scenario.id != path.stem:
         raise ValueError(f"{path}: id {scenario.id!r} must match the file name")
     return scenario
+
+
+class CatalogueError(Exception):
+    """The scenarios directory cannot be trusted to say what the suite covers."""
+
+
+def find_scenarios(directory: Path) -> list[Path]:
+    """Every scenario file, sorted; anything that would silently not run is an error.
+
+    pytest turns an empty parametrize list into one skipped test and exits 0, so an
+    empty or misnamed catalogue would pass `make evals` (BUG-M3-1). A scenario is a
+    `*.yaml` file directly in `directory`; any other entry there (a `.yml` file, a
+    subdirectory) is refused rather than left out. Dotfiles (.DS_Store) are ignored.
+    """
+    if not directory.is_dir():
+        raise CatalogueError(f"{directory} does not exist")
+    entries = sorted(p for p in directory.iterdir() if not p.name.startswith("."))
+    stray = [p.name for p in entries if not (p.is_file() and p.suffix == ".yaml")]
+    if stray:
+        raise CatalogueError(
+            f"{directory} holds entries that are not scenarios and would never run: "
+            + ", ".join(stray)
+            + " (a scenario is a *.yaml file directly in scenarios/)"
+        )
+    if not entries:
+        raise CatalogueError(f"{directory} has no *.yaml scenarios; make evals needs at least one")
+    return entries

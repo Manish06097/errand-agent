@@ -1,4 +1,9 @@
-"""Every scenario in scenarios/*.yaml, through the real API, with its invariants."""
+"""Every scenario in scenarios/*.yaml, through the real API, with its invariants.
+
+The catalogue is checked at collection: no scenarios, or a file that would not be
+picked up (a .yml, a subdirectory), is a collection error, so `make evals` fails
+instead of passing on one skipped test (BUG-M3-1).
+"""
 
 from __future__ import annotations
 
@@ -7,10 +12,10 @@ from pathlib import Path
 import pytest
 
 from evals import report
-from evals.dsl import load_scenario
+from evals.dsl import find_scenarios, load_scenario
 from evals.runner import run_scenario
 
-SCENARIOS = sorted((Path(__file__).parent / "scenarios").glob("*.yaml"))
+SCENARIOS = find_scenarios(Path(__file__).parent / "scenarios")
 
 
 @pytest.mark.parametrize("path", SCENARIOS, ids=[p.stem for p in SCENARIOS])

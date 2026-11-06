@@ -99,6 +99,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+# An empty parametrize list is a collection error, not one skipped test that exits 0
+# (BUG-M3-1: an empty scenario catalogue passed make evals that way).
+empty_parameter_set_mark = "fail_at_collect"
 markers = [
   "live: calls the real Claude API; skipped unless ERRAND_LIVE=1",
 ]

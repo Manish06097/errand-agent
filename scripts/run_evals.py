@@ -2,8 +2,11 @@
 
 Strict since the first scenarios landed (M3): pytest's exit code passes through
 unchanged, so an empty collection (exit 5) fails `make evals` like any other failure.
-A misnamed scenario file or a conftest whose collection broke can no longer pass as
-"nothing to evaluate".
+Exit 5 alone is not enough, though: an empty `scenarios/*.yaml` glob parametrizes to
+one skipped test and exits 0 (BUG-M3-1). So `test_scenarios.py` refuses an empty or
+misnamed catalogue at collection (exit 2), pytest is configured to fail any empty
+parametrize at collection, and the report plugin refuses to write a table with no
+rows or a missing one.
 
 `--write-report` (what `make evals` passes) regenerates docs/EVAL_TABLE.md and
 docs/eval_results.json through the report plugin; without it nothing under docs/ is

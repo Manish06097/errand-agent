@@ -3,7 +3,8 @@
 `test_scenarios.py` records one `ScenarioResult` per scenario; at the end of the
 session this plugin writes both files, but only when ERRAND_EVAL_REPORT_DIR is set
 (`make evals` sets it through scripts/run_evals.py --write-report), so a filtered or
-ad hoc run never overwrites the committed table.
+ad hoc run never overwrites the committed table. It refuses, and fails the session,
+rather than write a table with no rows or without a row for a collected scenario.
 
 The table carries only deterministic values: no latencies, and rows in scenario order.
 A clean re-run produces the same bytes apart from the `Generated` timestamp in the
@@ -93,8 +94,38 @@ def write_report(
     )
 
 
+def refusal(results: list[ScenarioResult], collected: list[str]) -> str | None:
+    """Why the table must not be written, or None. An empty table, or one missing a
+    scenario that was collected (it crashed before recording a row), would replace the
+    committed ledger with something that looks green and proves less."""
+    if not results:
+        return "no scenario produced a row (empty or broken catalogue)"
+    missing = sorted(set(collected) - {r.scenario for r in results})
+    if missing:
+        return "no row for " + ", ".join(missing)
+    return None
+
+
+def _collected_scenarios(session: pytest.Session) -> list[str]:
+    ids = []
+    for item in session.items:
+        callspec = getattr(item, "callspec", None)
+        if getattr(item, "originalname", None) == "test_scenario" and callspec is not None:
+            ids.append(str(callspec.id))
+    return ids
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     target = os.environ.get(REPORT_DIR_ENV)
-    if not target or not _results:
+    if not target:
+        return
+    problem = refusal(_results, _collected_scenarios(session))
+    if problem is not None:
+        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+        message = f"eval report not written to {target}: {problem}"
+        if reporter is not None:
+            reporter.write_line(message, red=True, bold=True)
+        if session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
         return
     write_report(Path(target), _results, _seeds, wall_now())

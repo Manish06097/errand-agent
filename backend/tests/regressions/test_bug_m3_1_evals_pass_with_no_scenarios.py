@@ -18,6 +18,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from evals import report
+from evals.dsl import CatalogueError, find_scenarios
+from evals.runner import ScenarioResult
 from tests.hygiene.repo import REPO_ROOT
 
 BACKEND = REPO_ROOT / "backend"
@@ -101,3 +106,24 @@ def test_no_table_is_written_for_an_empty_catalogue(tmp_path: Path) -> None:
     result = run_with_report(evals, report_dir)
     assert result.returncode != 0, result.stdout + result.stderr
     assert sorted(p.name for p in report_dir.iterdir()) == []
+
+
+def _row(scenario: str) -> ScenarioResult:
+    return ScenarioResult(scenario, "c", "scripted:reference", "default", "e", "a", True, "n")
+
+
+def test_the_report_refuses_a_table_missing_a_collected_scenario() -> None:
+    # A scenario that crashed before recording its row must not vanish from the table.
+    assert report.refusal([], []) is not None
+    assert report.refusal([_row("S02")], ["S02", "S03"]) == "no row for S03"
+    assert report.refusal([_row("S02")], ["S02"]) is None
+
+
+def test_a_subdirectory_of_scenarios_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "S02_only_area_missing.yaml").write_text("id: S02_only_area_missing\n")
+    (tmp_path / "later").mkdir()
+    (tmp_path / ".DS_Store").write_text("")
+    with pytest.raises(CatalogueError, match="would never run: later"):
+        find_scenarios(tmp_path)
+    (tmp_path / "later").rmdir()
+    assert [p.name for p in find_scenarios(tmp_path)] == ["S02_only_area_missing.yaml"]
