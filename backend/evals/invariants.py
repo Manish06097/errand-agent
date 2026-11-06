@@ -227,8 +227,9 @@ def inv13_no_ask_for_filled_or_asked(rec: Records) -> Violations:
 
     Rebuilt from the records only: "filled" from applied `brief.patch` records, "asked"
     from the ClarifyCards persisted in agent.sqlite. A field may be asked a second time
-    only if no patch filled it since the first ask and the second card offers options;
-    never a third time.
+    only if it is unfilled when asked and the second card offers options; never a third
+    time. An applied clear un-fills a field: a user who takes a value back has not given
+    it, so the one re-ask after a retraction is legal (it still counts toward the two).
     """
     out: Violations = []
     filled: dict[str, set[str]] = defaultdict(set)
@@ -247,6 +248,7 @@ def inv13_no_ask_for_filled_or_asked(rec: Records) -> Violations:
                     filled_since_ask[(errand, name)] = True
             for name in fields.get("clear", []):
                 filled[errand].discard(name)
+                filled_since_ask[(errand, name)] = False
         card = cards.get(run["run_id"])
         if card is None:
             continue
