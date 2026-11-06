@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -10,7 +11,20 @@ import pytest
 from tests.hygiene.repo import CLEAN_DESIGN_NOTE, REPO_ROOT
 
 SCRIPT = REPO_ROOT / "scripts" / "check_design_note.py"
-NOTE = CLEAN_DESIGN_NOTE.read_text(encoding="utf-8")
+_STRUCTURE = re.compile(r"(?m:^#{1,2} [^\n]*$)|(?s:<!--.*?-->)")
+
+
+def skeleton(note: str) -> str:
+    """The real note's headings and comments, with all prose removed.
+
+    The tests below add words to sections and count them, so they need every section
+    empty. The real note fills up milestone by milestone (BUG-M2-1), so its structure
+    is reused and its content is not.
+    """
+    return "\n".join(m.group(0) for m in _STRUCTURE.finditer(note)) + "\n"
+
+
+NOTE = skeleton(CLEAN_DESIGN_NOTE.read_text(encoding="utf-8"))
 
 
 def run_check(tmp_path: Path, text: str) -> subprocess.CompletedProcess[str]:
