@@ -7,6 +7,9 @@
   http://127.0.0.1:$ERRAND_API_PORT unless it is set explicitly.
 - The world serves its /dev controls (ERRAND_DEV=1 unless set) and keeps its store in
   data/world.sqlite (ERRAND_WORLD_DB), loading bangalore_v1 the first time.
+- The API reaches that world over HTTP (ERRAND_WORLD_URL, derived from the world port
+  unless set) and, in scripted mode, plans with the eval suite's reference policy, so
+  backend/ is put on its PYTHONPATH for `evals.policies.reference`.
 - Each process's output is prefixed with its name.
 - If any process exits, or on Ctrl-C, all of them are stopped. Each child runs in its
   own process group so pnpm's node and Next's workers go down with it.
@@ -26,6 +29,7 @@ import threading
 import time
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import IO
 
 STOP_GRACE_S = 5.0
@@ -205,6 +209,9 @@ def main() -> int:
     env[api.env_var] = str(api.port)
     env[web.env_var] = str(web.port)
     env.setdefault("ERRAND_API_URL", f"http://127.0.0.1:{api.port}")
+    env.setdefault("ERRAND_WORLD_URL", f"http://127.0.0.1:{world.port}")
+    backend = str(Path(__file__).resolve().parent.parent / "backend")
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (backend, env.get("PYTHONPATH")) if p)
     env.setdefault("ERRAND_DEV", "1")
     env["NEXT_TELEMETRY_DISABLED"] = "1"
     env["PYTHONUNBUFFERED"] = "1"

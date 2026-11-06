@@ -55,6 +55,7 @@ mypy_path = [
 files = [
   "$MYPY_CONFIG_FILE_DIR/src",
   "$MYPY_CONFIG_FILE_DIR/tests",
+  "$MYPY_CONFIG_FILE_DIR/evals",
   "$MYPY_CONFIG_FILE_DIR/../scripts",
 ]
 explicit_package_bases = true

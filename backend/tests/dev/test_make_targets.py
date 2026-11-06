@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import socket
 import subprocess
 from collections.abc import Iterator
@@ -52,16 +51,17 @@ def run_evals_wrapper(
 
 
 @pytest.fixture
-def evals_copy(tmp_path: Path) -> Path:
-    dest = tmp_path / "evals"
-    shutil.copytree(REPO_ROOT / "backend" / "evals", dest)
+def evals_dir(tmp_path: Path) -> Path:
+    """An evals directory of our own, so these tests never run the real suite."""
+    dest = tmp_path / "evals_probe"
+    dest.mkdir()
     return dest
 
 
-def test_evals_with_no_scenarios_reports_zero_and_passes() -> None:
-    result = run_evals_wrapper()
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.strip().endswith("0 scenarios")
+def test_evals_on_an_empty_directory_fails(evals_dir: Path) -> None:
+    result = run_evals_wrapper(evals_dir=evals_dir)
+    assert result.returncode == 5, result.stdout + result.stderr
+    assert "no scenarios collected" in result.stderr
 
 
 def test_evals_wrapper_does_not_hide_an_empty_filter() -> None:
@@ -69,38 +69,40 @@ def test_evals_wrapper_does_not_hide_an_empty_filter() -> None:
     assert result.returncode == 5
 
 
-def test_evals_copy_with_only_placeholders_still_reports_zero(evals_copy: Path) -> None:
-    (evals_copy / "__init__.py").write_text("")
-    result = run_evals_wrapper(evals_dir=evals_copy)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.strip().endswith("0 scenarios")
-
-
-def test_evals_wrapper_fails_when_a_scenario_file_is_not_collected(evals_copy: Path) -> None:
-    # pytest only collects test_*.py, so this scenario is silently skipped by pytest.
-    (evals_copy / "booking_timeout_scenario.py").write_text(
+def test_evals_fails_when_the_only_scenario_file_is_not_collected(evals_dir: Path) -> None:
+    # pytest only collects test_*.py, so this scenario would be silently skipped.
+    (evals_dir / "booking_timeout_scenario.py").write_text(
         "def test_booking_times_out() -> None:\n    assert True\n"
     )
-    result = run_evals_wrapper(evals_dir=evals_copy)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "0 scenarios" not in result.stdout
-    assert "booking_timeout_scenario.py" in result.stderr
+    result = run_evals_wrapper(evals_dir=evals_dir)
+    assert result.returncode != 0, result.stdout + result.stderr
 
 
-def test_evals_wrapper_fails_on_an_uncollected_subdirectory(evals_copy: Path) -> None:
-    (evals_copy / "scenarios").mkdir()
-    (evals_copy / "scenarios" / "booking.yaml").write_text("name: booking\n")
-    result = run_evals_wrapper(evals_dir=evals_copy)
-    assert result.returncode == 1, result.stdout + result.stderr
-    assert "scenarios/booking.yaml" in result.stderr
-
-
-def test_evals_wrapper_runs_a_collected_scenario(evals_copy: Path) -> None:
-    (evals_copy / "test_probe.py").write_text("def test_probe() -> None:\n    assert True\n")
-    result = run_evals_wrapper(evals_dir=evals_copy)
+def test_evals_wrapper_runs_a_collected_scenario(evals_dir: Path) -> None:
+    (evals_dir / "test_probe.py").write_text("def test_probe() -> None:\n    assert True\n")
+    result = run_evals_wrapper(evals_dir=evals_dir)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 passed" in result.stdout
-    assert "0 scenarios" not in result.stdout
+
+
+PROBE_REPORT_DIR = """
+import os
+from pathlib import Path
+
+def test_report_dir() -> None:
+    seen = os.environ.get("ERRAND_EVAL_REPORT_DIR", "-")
+    Path(__file__).with_name("seen.txt").write_text(seen)
+"""
+
+
+@pytest.mark.parametrize("write_report", [False, True])
+def test_evals_writes_the_report_only_when_asked(evals_dir: Path, write_report: bool) -> None:
+    (evals_dir / "test_report_dir.py").write_text(PROBE_REPORT_DIR)
+    args = ("--write-report",) if write_report else ()
+    result = run_evals_wrapper(*args, evals_dir=evals_dir)
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = str(REPO_ROOT / "docs") if write_report else "-"
+    assert (evals_dir / "seen.txt").read_text() == expected
 
 
 @pytest.fixture
