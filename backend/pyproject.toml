@@ -67,6 +67,7 @@ module = [
   "errand.approvals", "errand.approvals.*",
   "errand.execution", "errand.execution.*",
   "errand.world", "errand.world.*",
+  "errand.store", "errand.store.*",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true
