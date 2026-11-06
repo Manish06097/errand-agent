@@ -532,6 +532,13 @@ class WorldStore:
             (outcome, http_status, response_json, draw, attempt, now, done_seq, seq),
         )
 
+    def log_unfinished(self, seq: int, now: int, outcome: str, http_status: int | None) -> None:
+        """Finish `seq` with `outcome` if it is still in_progress; a row that was
+        already completed keeps what it recorded."""
+        row = self._one("SELECT outcome FROM op_log WHERE seq = ?", seq)
+        if row is not None and row["outcome"] == "in_progress":
+            self.log_done(seq, now, outcome, http_status, None)
+
     def op_log(self) -> list[OpLogRow]:
         return [
             OpLogRow(

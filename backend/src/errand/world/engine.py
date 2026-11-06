@@ -24,7 +24,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from pathlib import Path
@@ -321,31 +322,42 @@ class World:
     async def _plain(self, tool: ToolName, model: WireModel, args_json: str) -> WireResponse:
         with self.store.tx():
             seq = self.store.log_received(self.now_ms(), tool, None, args_json)
-        await self.pacing.latency(self.scenario.world.latency_s(tool))
-        self._check_open()
-        with self.store.tx():
-            now = self.now_ms()
-            events.fire_due(self.store, now)
-            result = self._evaluate_plain(tool, model, now)
-            wire = self._wire(tool, result)
-            self.store.log_done(
-                seq,
-                now,
-                result.outcome,
-                wire.status,
-                wire.body.decode(errors="replace"),
-                result.draw,
-            )
-        return wire
+        with self._finishes_row(seq):
+            await self.pacing.latency(self.scenario.world.latency_s(tool))
+            self._check_open()
+            with self.store.tx():
+                now = self.now_ms()
+                events.fire_due(self.store, now)
+                result = self._evaluate_plain(tool, model, now)
+                wire = self._wire(tool, result)
+                self.store.log_done(
+                    seq,
+                    now,
+                    result.outcome,
+                    wire.status,
+                    wire.body.decode(errors="replace"),
+                    result.draw,
+                )
+            return wire
 
     async def _keyed(self, tool: ToolName, model: WireModel, args_json: str) -> WireResponse:
         assert isinstance(model, BookIn | CancelIn | RescheduleIn)
         key = model.idempotency_key
         request_hash = _request_hash(tool, model)
-        enforce = self.scenario.world.enforce_idempotency
         with self.store.tx():
             seq = self.store.log_received(self.now_ms(), tool, key, args_json)
+        with self._finishes_row(seq):
+            return await self._keyed_call(tool, model, key, request_hash, seq)
 
+    async def _keyed_call(
+        self,
+        tool: ToolName,
+        model: BookIn | CancelIn | RescheduleIn,
+        key: str,
+        request_hash: str,
+        seq: int,
+    ) -> WireResponse:
+        enforce = self.scenario.world.enforce_idempotency
         # Check and claim. There is no await between reading the operation row and
         # committing the claim, so on one event loop nothing can interleave there;
         # waiting for an in-flight call happens outside, on that key's latch.
@@ -409,6 +421,29 @@ class World:
             mine.set()
             if self._latches.get(key) is mine:
                 del self._latches[key]
+
+    @contextmanager
+    def _finishes_row(self, seq: int) -> Iterator[None]:
+        """Every call ends with a finished op_log row, even when evaluation raises.
+
+        An exception is a bug in the world: the row says internal_error (the HTTP
+        client gets a 500) and the exception propagates. A cancelled call is
+        interrupted, the same outcome a restart gives. A world that was reset
+        meanwhile has no store to write to, and its log is gone anyway.
+        """
+        try:
+            yield
+        except BaseException as exc:
+            if not self._closed:
+                failed = isinstance(exc, Exception)
+                with self.store.tx():
+                    self.store.log_unfinished(
+                        seq,
+                        self.now_ms(),
+                        "internal_error" if failed else "interrupted",
+                        500 if failed else None,
+                    )
+            raise
 
     def _finish_early(
         self, tool: ToolName, seq: int, now: int, outcome: str, body: dict[str, str]
