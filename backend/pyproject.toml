@@ -134,6 +134,10 @@ forbidden_modules = [
   "errand.context",
   "errand.llm",
   "errand.quarantine",
+  "errand.store",
+  "errand.trace",
+  "errand.usage",
+  "errand.config",
 ]
 
 [[tool.importlinter.contracts]]
