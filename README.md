@@ -29,7 +29,8 @@ git and make. macOS or Linux.
 | `make dev` | Starts the world (8765), the API (8000) and the web app (3200) with prefixed logs. Stops all three if one exits or on Ctrl-C. |
 | `make check` | `uv sync --locked` (fails if `uv.lock` disagrees with the pins in `pyproject.toml`), ruff, ruff format, mypy, import-linter, the em-dash, attribution and secret guards, the design-note budget, `pytest backend/tests`, web typecheck and lint. |
 | `make evals` | The offline eval suite. There are no scenarios yet, so it prints `0 scenarios`. If pytest collects nothing while `backend/evals` holds anything besides placeholders, it fails instead. |
-| `make e2e`, `make record`, `make langfuse-up` | Not built yet; they say so and exit 2. |
+| `make e2e`, `make record` | Not built yet; they say so and exit 2. |
+| `make langfuse-up`, `make langfuse-down` | Optional self-hosted Langfuse on 127.0.0.1:3100 (`infra/langfuse`, about 4 GiB of Docker memory). `make dev` then sends each run's spans there; nothing else needs it. |
 
 Ports come from `ERRAND_WORLD_PORT`, `ERRAND_API_PORT` and `ERRAND_WEB_PORT`. If one is
 taken, `make dev` stops before starting anything and names the variable to set. The

@@ -991,6 +991,7 @@ The reader has no tools, no `tool_choice`, no temperature, no prefill and no `bl
 - No assistant prefill.
 - `max_tokens` is 16,000 so adaptive thinking at medium effort is not cut off mid-plan. Output size does not threaten the input budget, because the loop measures real usage and compacts (section 13.1).
 - Every `stop_reason` maps to a typed result: `end_turn` and `tool_use` are normal; `max_tokens` counts as a reprompt (one per run) and then ends `MODEL_NO_PROGRESS`; `refusal` ends `MODEL_REFUSED` with a code message and the UI controls still usable; anything unknown is `INTERNAL_ERROR`.
+- Live planner and reader calls on Opus 5.5 send the server-side refusal fallback (`betas: ["server-side-fallback-2026-07-01"]`, `fallbacks: "default"`), so a false-positive safety refusal on an ordinary errand is retried by the API on a fallback model instead of ending the run. The trace records which model actually answered (`response.model`) and prices the call at that model's rates. Only a refusal that survives the fallback ends `MODEL_REFUSED`. The scripted model can emit both shapes (refused, and answered by a fallback model) so the evals cover them offline. Haiku has no server-side fallback, so a reader refusal is handled as "digest unavailable": the provider shows without a review signal, and nothing is ranked on missing data.
 - Thinking summaries go to the trace only, sanitized. They never appear in chat.
 - Live and CI-live runs send the `thinking-binding-controls-2026-08-01` beta with `prefix_mismatch_behavior: "error"`, so any history-mutation bug fails loudly instead of being silently patched by `drop_block`.
 - Prompt caching: the static rules block carries `cache_control`; the tool list is in a fixed order with stable bytes.
@@ -1428,7 +1429,11 @@ The design note's annotated excerpt is cut from that file and shows one planner 
 - Kind mapping: run to agent, node to chain, model and reader to generation, tool to tool, approval guard to guardrail, everything else to event.
 - No LangChain `CallbackHandler` in the product path: it would duplicate model calls and send raw graph state past our sanitizer.
 - `flush()` blocks the caller for up to `LANGFUSE_TIMEOUT` when the server is down, so it is never called per request; `shutdown()` runs once in the lifespan exit, `LANGFUSE_TIMEOUT=2`, every sink call is in try/except, and JSONL is always written first.
-- Self-hosting: pinned compose plus an override (web on 3100, redis host port removed, AI gateway behind a profile, `TELEMETRY_ENABLED=false`, headless init keys). Docker needs more memory than this machine currently gives it; see section 21.
+- Self-hosting: pinned compose plus an override (web on `127.0.0.1:3100` only, every other host port removed, AI gateway behind a profile, `TELEMETRY_ENABLED=false`, headless init keys). Docker needs more memory than this machine currently gives it; see section 21.
+- Health: `{"state": "on", "host", "export_failures"}`, or `{"state": "off", "reason"}` with reason `disabled`, `no_keys`, or `init_failed` (the client could not be built; the run goes on with JSONL only).
+- Off means no `langfuse` and no OTel export machinery (`opentelemetry.exporter.*`, `opentelemetry.sdk.trace.export`) in `sys.modules`. `opentelemetry` as a whole cannot be kept out: FastAPI imports the API package and langsmith imports `opentelemetry.sdk.trace` whenever the SDK is installed (M15).
+- Langfuse 5.2.0 keeps one resource manager per public key for the life of the process; `shutdown()` unregisters it (private API, guarded) so a second client with the same key in one process still exports.
+- The live check (`scripts/langfuse_check.py`) reads `/api/public/v2/observations`, because Langfuse 4 answers 404 on `/api/public/traces` in its events-only mode.
 
 ### 16.5 Tooling
 

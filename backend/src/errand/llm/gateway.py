@@ -259,59 +259,62 @@ class LLMGateway:
         if needed > budget:
             raise ContextOverBudget(needed=needed, est_request=est, floor=floor, budget=budget)
 
-        perf = self.tracer.perf
-        started = perf()
-        first: float | None = None
-        chunks: list[AIMessageChunk] = []
-        try:
-            async for chunk in self._bound.astream(list(messages)):
-                if not isinstance(chunk, AIMessageChunk):
-                    raise TypeError(f"stream yielded {type(chunk).__name__}, not AIMessageChunk")
-                if first is None and _carries_output(chunk):
-                    first = perf()
-                chunks.append(chunk)
-                if on_token is not None and chunk.text:
-                    result = on_token(chunk.text)
-                    if inspect.isawaitable(result):
-                        await result
-            if not chunks:
-                raise RuntimeError("the model stream produced no chunks")
-            message = aggregate(chunks)
-            if not message.usage_metadata:
-                raise MissingUsage("response has no usage_metadata; it cannot be priced")
-            usage = usage_from_metadata(message.usage_metadata)
-        except Exception as exc:
-            self.tracer.emit(
-                "error",
-                where="llm.gateway",
-                exception_type=type(exc).__name__,
-                message=str(exc)[:2000],
-            )
-            raise
-        ended = perf()
+        with self.tracer.opening("model.call", self.settings.planner_model):
+            perf = self.tracer.perf
+            started = perf()
+            first: float | None = None
+            chunks: list[AIMessageChunk] = []
+            try:
+                async for chunk in self._bound.astream(list(messages)):
+                    if not isinstance(chunk, AIMessageChunk):
+                        raise TypeError(
+                            f"stream yielded {type(chunk).__name__}, not AIMessageChunk"
+                        )
+                    if first is None and _carries_output(chunk):
+                        first = perf()
+                    chunks.append(chunk)
+                    if on_token is not None and chunk.text:
+                        result = on_token(chunk.text)
+                        if inspect.isawaitable(result):
+                            await result
+                if not chunks:
+                    raise RuntimeError("the model stream produced no chunks")
+                message = aggregate(chunks)
+                if not message.usage_metadata:
+                    raise MissingUsage("response has no usage_metadata; it cannot be priced")
+                usage = usage_from_metadata(message.usage_metadata)
+            except Exception as exc:
+                self.tracer.emit(
+                    "error",
+                    where="llm.gateway",
+                    exception_type=type(exc).__name__,
+                    message=str(exc)[:2000],
+                )
+                raise
+            ended = perf()
 
-        stop_reason = message.response_metadata.get("stop_reason")
-        record = self.tracer.model_call(
-            model=self.settings.planner_model,
-            usage=usage,
-            cost=cost_decimal(self.settings.planner_model, usage),
-            started=started,
-            first_token=first,
-            ended=ended,
-            mode=self.mode,
-            effort=self.settings.planner_effort,
-            thinking_display=PLANNER_THINKING["display"],
-            request_sha256=sha,
-            request=dict(canonical),
-            response=_response_view(message),
-            stop_reason=stop_reason,
-            input_transformations=list(
-                message.response_metadata.get("input_transformations") or []
-            ),
-            est_request_tokens=est,
-            floor_tokens=floor,
-            budget_tokens=budget,
-        )
+            stop_reason = message.response_metadata.get("stop_reason")
+            record = self.tracer.model_call(
+                model=self.settings.planner_model,
+                usage=usage,
+                cost=cost_decimal(self.settings.planner_model, usage),
+                started=started,
+                first_token=first,
+                ended=ended,
+                mode=self.mode,
+                effort=self.settings.planner_effort,
+                thinking_display=PLANNER_THINKING["display"],
+                request_sha256=sha,
+                request=dict(canonical),
+                response=_response_view(message),
+                stop_reason=stop_reason,
+                input_transformations=list(
+                    message.response_metadata.get("input_transformations") or []
+                ),
+                est_request_tokens=est,
+                floor_tokens=floor,
+                budget_tokens=budget,
+            )
         self.counters.model_calls += 1
         self.counters.tokens_in += usage.input_total
         self.counters.tokens_out += usage.output

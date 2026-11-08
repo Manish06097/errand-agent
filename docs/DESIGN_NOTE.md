@@ -22,7 +22,7 @@ One LangGraph thread per conversation holds one errand: a typed brief where ever
 
 ## Observability
 <!-- budget: 70 words -->
-Each run writes `data/traces/{thread}/{run}.jsonl`, the trace of record. One Tracer assigns sequence and span ids, sanitizes once (review text hashed, phones, addresses and keys masked, thinking reduced to summary and signature hash), validates schema v1 and fans the same line to every sink. Each `model.call` carries the request hash, usage split and cost; `run.end` totals are summed from those records. Langfuse is an optional view.
+Each run writes `data/traces/{thread}/{run}.jsonl`, the trace of record. One Tracer assigns sequence and span ids, sanitizes once (review text hashed, phones, addresses and keys masked, thinking reduced to summary and signature hash), validates schema v1 and fans the same line to every sink. Each `model.call` carries the request hash, usage split and cost; `run.end` totals are summed from those records. Langfuse, off by default, mirrors it live with our costs.
 
 ## Trade-offs
 <!-- budget: 80 words -->

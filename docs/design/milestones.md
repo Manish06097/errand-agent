@@ -171,7 +171,7 @@ Acceptance:
 
 ## M13. Bounded execution, every exit path
 
-Scope: remaining `RunOutcome` templates, `stop_reason` mapping (`max_tokens`, `refusal` to `MODEL_REFUSED`), cost cap, wall-clock deadline, outer backstop, node exception wrapper, `MODEL_UNAVAILABLE` retry, `ToolUnexpected` from malformed world responses, `LoopForeverPolicy`, `GarbageToolPolicy`.
+Scope: remaining `RunOutcome` templates, `stop_reason` mapping (`max_tokens`, `refusal` to `MODEL_REFUSED`), server-side refusal fallback on live Opus calls with the answering model recorded and priced in the trace (architecture section 10.1), cost cap, wall-clock deadline, outer backstop, node exception wrapper, `MODEL_UNAVAILABLE` retry, `ToolUnexpected` from malformed world responses, `LoopForeverPolicy`, `GarbageToolPolicy`.
 
 Acceptance:
 - S44, S45, S63 pass; a `GarbageToolPolicy` scenario ends with a clear outcome and no crash.

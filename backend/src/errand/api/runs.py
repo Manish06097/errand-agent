@@ -56,7 +56,9 @@ from errand.store.repos.messages import Message
 from errand.store.repos.runs import RunTotals
 from errand.tools.gateway import ToolGateway, ToolLimits
 from errand.tools.runtime import WorldAccess
+from errand.trace.sinks.base import ProcessSink, Sink
 from errand.trace.sinks.jsonl import JsonlSink, trace_path
+from errand.trace.sinks.null import NullSink
 from errand.trace.sinks.stream import StreamSink
 from errand.trace.tracer import Tracer
 
@@ -125,6 +127,7 @@ class RunManager:
         broadcaster: Broadcaster | None = None,
         reader_factory: ModelFactory | None = None,
         reader_settings: ReaderSettings | None = None,
+        trace_sink: ProcessSink | None = None,
     ) -> None:
         self.graph = graph
         self.db = db
@@ -139,6 +142,8 @@ class RunManager:
         self.reader_factory = reader_factory or _no_reader
         self.reader_settings = reader_settings or ReaderSettings()
         self.broadcaster = broadcaster or Broadcaster()
+        # The optional dashboard sink (Langfuse or NullSink), owned by the lifespan.
+        self.trace_sink: ProcessSink = trace_sink or NullSink()
         self._locks = ThreadLocks()
         self._active: dict[str, str] = {}
         # Strong references: a task nobody holds can be garbage-collected mid-run.
@@ -296,7 +301,7 @@ class RunManager:
         tracer = Tracer(
             run_id=run.run_id,
             thread_id=run.conversation_id,
-            sinks=[sink, StreamSink(run.stream.publish_record)],
+            sinks=[sink, StreamSink(run.stream.publish_record), self._dashboard(run)],
             now=self.clock.now,
         )
         outcome: RunOutcome = RunOutcome.INTERNAL_ERROR
@@ -321,6 +326,13 @@ class RunManager:
             await self._finish(run, tracer, outcome)
         if cancelled:
             raise asyncio.CancelledError()
+
+    def _dashboard(self, run: _Run) -> Sink:
+        try:
+            return self.trace_sink.for_run(run.run_id, run.conversation_id)
+        except Exception:
+            log.exception("run %s: no dashboard sink; the JSONL trace is unaffected", run.run_id)
+            return NullSink()
 
     def _deps(self, run: _Run, tracer: Tracer) -> RunDeps:
         llm = LLMGateway(

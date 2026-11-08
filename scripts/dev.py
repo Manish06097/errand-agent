@@ -10,6 +10,9 @@
 - The API reaches that world over HTTP (ERRAND_WORLD_URL, derived from the world port
   unless set) and, in scripted mode, plans with the eval suite's reference policy, so
   backend/ is put on its PYTHONPATH for `evals.policies.reference`.
+- Langfuse: when infra/langfuse/.env exists (written by `make langfuse-up`) and
+  ERRAND_LANGFUSE is not off, the project keys and host from it are exported to the API
+  process, and only to it. Otherwise LANGFUSE_* is left as the caller set it.
 - Each process's output is prefixed with its name.
 - If any process exits, or on Ctrl-C, all of them are stopped. Each child runs in its
   own process group so pnpm's node and Next's workers go down with it.
@@ -128,6 +131,33 @@ def preflight(services: list[Service]) -> None:
         sys.exit(1)
 
 
+LANGFUSE_ENV = Path(__file__).resolve().parent.parent / "infra" / "langfuse" / ".env"
+
+
+def langfuse_env(env: dict[str, str], env_file: Path = LANGFUSE_ENV) -> dict[str, str]:
+    """The LANGFUSE_* variables to add to the API's environment (empty if none apply)."""
+    if env.get("ERRAND_LANGFUSE", "").strip().lower() in ("off", "0", "false"):
+        return {}
+    if not env_file.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for raw in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            name, _, value = line.partition("=")
+            values[name.strip()] = value.strip().strip("'\"")
+    public = values.get("LANGFUSE_INIT_PROJECT_PUBLIC_KEY")
+    secret = values.get("LANGFUSE_INIT_PROJECT_SECRET_KEY")
+    if not public or not secret:
+        return {}
+    port = values.get("ERRAND_LANGFUSE_PORT", "3100")
+    return {
+        "LANGFUSE_PUBLIC_KEY": public,
+        "LANGFUSE_SECRET_KEY": secret,
+        "LANGFUSE_HOST": f"http://localhost:{port}",
+    }
+
+
 def pump(name: str, stream: IO[bytes]) -> None:
     for raw in iter(stream.readline, b""):
         log(name, raw.decode("utf-8", errors="replace").rstrip("\r\n"))
@@ -136,6 +166,11 @@ def pump(name: str, stream: IO[bytes]) -> None:
 
 def start(svc: Service, env: dict[str, str]) -> None:
     log("dev", f"starting {svc.name} on port {svc.port}: {' '.join(svc.cmd)}")
+    if svc.name == "api":
+        extra = langfuse_env(env)
+        if extra:
+            log("dev", f"api sends traces to Langfuse at {extra['LANGFUSE_HOST']}")
+        env = {**env, **extra}
     svc.proc = subprocess.Popen(
         svc.cmd,
         env=env,

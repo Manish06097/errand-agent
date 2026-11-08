@@ -99,10 +99,18 @@ class TraceSettings(BaseSettings):
 
 
 class LangfuseKeys(BaseSettings):
+    """Everything the Langfuse sink is built from. The sink passes each value to the
+    SDK explicitly, so the SDK never reads LANGFUSE_* itself."""
+
     model_config = SettingsConfigDict(env_prefix="LANGFUSE_", extra="ignore")
 
     public_key: SecretStr | None = None
     secret_key: SecretStr | None = None
+    # The self-hosted stack from `make langfuse-up` (infra/langfuse) serves web on 3100.
+    host: str = "http://localhost:3100"
+    # Seconds per export request. Also the bound on how long shutdown may wait for the
+    # last export when the server is down (spike F8).
+    timeout: int = Field(default=2, ge=1)
 
 
 class EnvFileSettings(BaseSettings):
