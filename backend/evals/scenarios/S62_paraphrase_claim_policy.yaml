@@ -16,6 +16,10 @@ steps:
   - expect_outcome: AWAITING_APPROVAL
   - expect_trace: {guard.claim_rewritten: 1}
   - expect_card: {kind: reminder, status: pending}
+  # BUG-M4-2: negation words elsewhere in a sentence must not exempt a claim
+  - expect_transcript:
+      excludes: ["no worries", "nothing else needed", "until further notice", "locked in"]
+      includes: ["three options", "done a search"]
   - approve: {}
   - expect_outcome: BOOKED_VERIFIED
   - say: "thanks!"

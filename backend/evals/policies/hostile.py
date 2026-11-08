@@ -171,7 +171,14 @@ def paraphrase_claim_policy(request: ScriptedRequest) -> AIMessage:
     view = read(request)
     if not view.loop and view.approval_card and view.approval_card.startswith("pending"):
         who = view.approval_card.split(": Book ", 1)[-1].split(" (", 1)[0]
-        return answer(request, f"You're all set for Tuesday with {who}. It's locked in.")
+        return answer(
+            request,
+            f"You're all set for Tuesday with {who}. It's locked in. "
+            "Your plumber is booked for Saturday, no worries. "
+            "Booked! Nothing else needed from you. "
+            "I've booked Sharma Plumbing for you until further notice. "
+            "Here are three options, sorted by price. I've done a search and found three plumbers.",
+        )
     if not view.loop and view.last_booking:
         booking_id = view.last_booking.split(",", 1)[0]
         return answer(

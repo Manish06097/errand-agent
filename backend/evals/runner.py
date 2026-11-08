@@ -66,6 +66,7 @@ from evals.dsl import (
     ExpectSearchMatchesBrief,
     ExpectToolErrors,
     ExpectTrace,
+    ExpectTranscript,
     ExpectWorld,
     Post,
     RefreshHold,
@@ -425,6 +426,22 @@ def describe(step: Step) -> str | None:
     if isinstance(step, ExpectCard):
         spec = step.expect_card.model_dump(exclude_none=True)
         return "card " + ", ".join(f"{k}={v}" for k, v in spec.items())
+    if isinstance(step, ExpectTranscript):
+        tr = step.expect_transcript
+        parts = []
+        if tr.excludes:
+            parts.append("transcript never says " + " / ".join(repr(x) for x in tr.excludes))
+        if tr.includes:
+            parts.append("transcript keeps " + " / ".join(repr(x) for x in tr.includes))
+        if tr.last_includes:
+            parts.append("last message says " + " / ".join(repr(x) for x in tr.last_includes))
+        if tr.status_line_includes:
+            parts.append("status line has " + " / ".join(repr(x) for x in tr.status_line_includes))
+        if tr.status_line_excludes:
+            parts.append(
+                "status line lacks " + " / ".join(repr(x) for x in tr.status_line_excludes)
+            )
+        return "; ".join(parts)
     if isinstance(step, ExpectBooking):
         spec = step.expect_booking.model_dump(exclude_none=True)
         return "bookings " + ", ".join(f"{k}={v}" for k, v in spec.items())
@@ -735,6 +752,41 @@ class Runner:
                 f"card price {action.get('quoted_price_inr')}, world hold quote {quote}",
             )
 
+    async def _expect_transcript(self, step: ExpectTranscript) -> None:
+        spec = step.expect_transcript
+        convo = await self.h.conversation()
+        assistant = [m for m in convo["messages"] if m["role"] == "assistant"]
+
+        def strings(value: Any) -> list[str]:
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, dict):
+                return [t for v in value.values() for t in strings(v)]
+            if isinstance(value, list):
+                return [t for v in value for t in strings(v)]
+            return []
+
+        everything = " \n".join(t for m in assistant for t in strings(m["body"])).lower()
+        for needle in spec.excludes:
+            self.expect(
+                needle.lower() not in everything, f"transcript contains {needle!r}: {everything!r}"
+            )
+        for needle in spec.includes:
+            self.expect(needle.lower() in everything, f"transcript lost {needle!r}")
+        body = assistant[-1]["body"] if assistant else {}
+        last_text = " ".join(strings({k: v for k, v in body.items() if k != "status_line"}))
+        status = str(body.get("status_line") or "")
+        for needle in spec.last_includes:
+            self.expect(needle.lower() in last_text.lower(), f"last message lacks {needle!r}")
+        for needle in spec.status_line_includes:
+            self.expect(
+                needle.lower() in status.lower(), f"status line {status!r} lacks {needle!r}"
+            )
+        for needle in spec.status_line_excludes:
+            self.expect(
+                needle.lower() not in status.lower(), f"status line {status!r} has {needle!r}"
+            )
+
     async def _held_quote(self, card: dict[str, Any]) -> int | None:
         """The world's quote for the latest hold on the card's provider and slot."""
         quote = None
@@ -819,6 +871,8 @@ class Runner:
             await self.h.switch(step.conversation)
         elif isinstance(step, ExpectCard):
             await self._expect_card(step)
+        elif isinstance(step, ExpectTranscript):
+            await self._expect_transcript(step)
         elif isinstance(step, ExpectBooking):
             await self._expect_booking(step)
         elif isinstance(step, Post):

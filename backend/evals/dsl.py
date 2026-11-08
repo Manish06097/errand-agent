@@ -206,6 +206,25 @@ class ExpectCard(_Strict):
     expect_card: CardSpec
 
 
+class TranscriptSpec(_Strict):
+    # substrings (case-insensitive) no assistant message of the conversation may contain
+    excludes: list[str] = Field(default_factory=list)
+    # substrings (case-insensitive) the transcript must still contain (harmless text kept)
+    includes: list[str] = Field(default_factory=list)
+    # substrings the LAST assistant message's text must contain; the status line of that
+    # message must contain every status_line_includes and none of status_line_excludes
+    last_includes: list[str] = Field(default_factory=list)
+    status_line_includes: list[str] = Field(default_factory=list)
+    status_line_excludes: list[str] = Field(default_factory=list)
+
+
+class ExpectTranscript(_Strict):
+    """What the user can read: every assistant message of the current conversation, or its
+    last message's text and status line."""
+
+    expect_transcript: TranscriptSpec
+
+
 class BookingSpec(_Strict):
     count: int
     slot_hour: int | None = None
@@ -312,6 +331,7 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "advance": Advance,
     "conversation": SwitchConversation,
     "expect_card": ExpectCard,
+    "expect_transcript": ExpectTranscript,
     "expect_booking": ExpectBooking,
     "twin": Twin,
     "expect_rank": ExpectRank,
@@ -343,6 +363,7 @@ Step = (
     | Advance
     | SwitchConversation
     | ExpectCard
+    | ExpectTranscript
     | ExpectBooking
     | Twin
     | ExpectRank
