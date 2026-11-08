@@ -362,3 +362,76 @@ async def test_a_failing_langfuse_costs_one_log_line_per_run_and_nothing_else(
     }
     # The Tracer never saw a sink error: the view swallowed them all.
     assert not [r for r in caplog.records if r.name == "errand.trace.tracer"]
+
+
+class Observation:
+    """A Langfuse observation that records what was done to it; `broken` ones raise."""
+
+    def __init__(self, name: str, broken: frozenset[str]) -> None:
+        self.name = name
+        self.broken = broken
+        self.ended = False
+        self.children: list[Observation] = []
+
+    def start_observation(self, *, name: str, **kwargs: Any) -> Observation:
+        child = Observation(name, self.broken)
+        self.children.append(child)
+        return child
+
+    def update(self, **kwargs: Any) -> None:
+        if self.name in self.broken:
+            raise RuntimeError(f"update of {self.name} failed")
+
+    def end(self) -> None:
+        self.ended = True
+        if self.name in self.broken:
+            raise RuntimeError(f"end of {self.name} failed")
+
+
+class Client:
+    def __init__(self, broken: frozenset[str]) -> None:
+        self.broken = broken
+        self.roots: list[Observation] = []
+
+    def start_observation(self, *, name: str, **kwargs: Any) -> Observation:
+        root = Observation(name, self.broken)
+        self.roots.append(root)
+        return root
+
+    def shutdown(self) -> None:
+        return None
+
+
+def test_close_ends_every_leftover_even_when_one_fails(caplog: pytest.LogCaptureFixture) -> None:
+    # A run cut short leaves three calls open under its root. Ending the first one
+    # raises; the other two, and the root, must still be ended, with one log line.
+    broken = frozenset({"call_1"})
+    client = Client(broken)
+    sink = make_sink(ON, fresh_keys(), client_factory=lambda **_: client)
+    assert isinstance(sink, LangfuseSink)
+    try:
+        view = sink.for_run("r_1", "c_1")
+        view.write(
+            {
+                "type": "run.start",
+                "trace_id": "0" * 31 + "1",
+                "span_id": "s_1",
+                "seq": 1,
+                "trigger": "user_message",
+            },
+            "",
+        )
+        for n in (1, 2, 3):
+            view.begin(f"o_{n}", "r_1", "s_1", "tool.call", f"call_{n}")
+        caplog.set_level(logging.WARNING, logger="errand.trace.sinks.langfuse")
+        view.close()
+    finally:
+        sink.shutdown()
+
+    (root,) = client.roots
+    assert [c.name for c in root.children] == ["call_1", "call_2", "call_3"]
+    assert all(c.ended for c in root.children)
+    assert root.ended
+    failures = [r for r in caplog.records if "Langfuse sink failed" in r.getMessage()]
+    assert len(failures) == 1
+    assert sink.sink_errors == 1

@@ -228,8 +228,14 @@ class LangfuseSink:
             shutdown_on_exit=False,
         )
         factory: ClientFactory = client_factory or Langfuse
-        # Every setting is passed explicitly so the SDK falls back to no LANGFUSE_*
-        # variable of its own.
+        # Every setting the SDK takes is passed explicitly, so keys, host, timeout,
+        # sample rate, environment and release never come from its LANGFUSE_* fallbacks.
+        # Langfuse 5.2.0 still reads four variables with no argument that overrides
+        # them, all harmless here: LANGFUSE_DEBUG (debug=False falls through to it; it
+        # only raises the SDK's log level, and what it could log is spans the Tracer has
+        # already sanitized), LANGFUSE_MEDIA_UPLOAD_ENABLED (we send no media), and
+        # LANGFUSE_TRACING_ENABLED=false and OTEL_SDK_DISABLED=true, which can only turn
+        # export off (the JSONL is unaffected; /api/health would still say "on").
         self.client = factory(
             public_key=public_key,
             secret_key=secret_key,
@@ -340,14 +346,18 @@ class _RunView:
         """End whatever this run left open (a run cut short) and forget the run. The
         client is the process's, so it is not touched here."""
         with self._lock:
-            with self._guard("closing"):
-                leftovers = [*self._begun.values(), *self._bound.values()]
-                leftovers += [obs for obs in self._open.values() if obs is not self._root]
-                if self._root is not None:
-                    leftovers.append(self._root)
-                for obs in leftovers:
-                    obs.update(level="WARNING", status_message="still open when the run closed")
-                    obs.end()
+            leftovers = [*self._begun.values(), *self._bound.values()]
+            leftovers += [obs for obs in self._open.values() if obs is not self._root]
+            if self._root is not None:
+                leftovers.append(self._root)
+            # One guard per observation, so one that fails does not leave the rest open;
+            # the guard still logs once per run.
+            for obs in leftovers:
+                with self._guard("closing"):
+                    try:
+                        obs.update(level="WARNING", status_message="still open when the run closed")
+                    finally:
+                        obs.end()
             self._begun.clear()
             self._bound.clear()
             self._open.clear()
