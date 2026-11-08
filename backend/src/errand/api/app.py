@@ -6,9 +6,12 @@ Routes in M3:
   read with `aget_state` (never the sync API, spike L6);
 - `POST /api/conversations/{id}/messages` admits a message and returns
   `{run_id, routed_as}`, or 409 `run_in_progress`;
-- `GET /api/runs/{id}/events` is the run's SSE stream with replay from `Last-Event-ID`.
+- `GET /api/runs/{id}/events` is the run's SSE stream with replay from `Last-Event-ID`;
+- `GET /api/health` also reports the Langfuse sink (on with its export failures, or off
+  and why), from counters only, so it never waits on Langfuse.
 
-The lifespan opens agent.sqlite, the checkpointer and the world, builds the graph and
+The lifespan builds the optional Langfuse sink once (shut down last, after every run
+has finished), opens agent.sqlite, the checkpointer and the world, builds the graph and
 the RunManager, and on exit lets running runs finish (or cancels them after a grace
 period, each still writing its message and `run.end`) before closing anything.
 
@@ -19,9 +22,10 @@ policy, so `make dev` works end to end with curl and no API key.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import tzinfo
@@ -49,12 +53,13 @@ from errand.api.runs import (
 )
 from errand.api.sse import stream_events
 from errand.clock import IST, to_ms
-from errand.config import LimitSettings, ModelSettings, PathSettings
+from errand.config import LangfuseKeys, LimitSettings, ModelSettings, PathSettings, TraceSettings
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
 from errand.store.agent_db import AgentDB
 from errand.store.repos.users import User
 from errand.tools.runtime import WorldAccess, open_in_process, over_http
+from errand.trace.sinks import ProcessSink, make_sink, off_reason
 
 SERVICE = "errand-api"
 log = logging.getLogger(__name__)
@@ -91,6 +96,8 @@ class AppConfig:
     limits: LimitSettings | None = None
     tz: tzinfo = IST
     user_id: str | None = None
+    # Builds the process's dashboard sink once, in the lifespan (tests inject exporters).
+    sink_factory: Callable[[], ProcessSink] = make_sink
 
 
 class NewMessage(BaseModel):
@@ -145,6 +152,10 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         data_dir = config.data_dir or PathSettings().data_dir
         user_id = config.user_id or settings.user_id
         async with AsyncExitStack() as stack:
+            # First in, so last out: runs are finished before the dashboard is flushed.
+            trace_sink = config.sink_factory()
+            stack.push_async_callback(asyncio.to_thread, trace_sink.shutdown)
+            app.state.trace_sink = trace_sink
             db = await AgentDB.open(data_dir / "agent.sqlite")
             stack.push_async_callback(db.close)
             async with db.session() as repos:
@@ -190,6 +201,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 model_settings=model_settings,
                 limits=limits,
                 model_factory=factory,
+                trace_sink=trace_sink,
             )
             app.state.manager = manager
             app.state.user_id = user_id
@@ -205,8 +217,17 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         return manager
 
     @app.get("/api/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "service": SERVICE}
+    async def health(request: Request) -> dict[str, Any]:
+        # status() reads counters only: no auth_check, nothing that can block on Langfuse.
+        sink: ProcessSink | None = getattr(request.app.state, "trace_sink", None)
+        if sink is not None:
+            langfuse = sink.status()
+        else:
+            langfuse = {
+                "state": "off",
+                "reason": off_reason(TraceSettings(), LangfuseKeys()) or "not_started",
+            }
+        return {"status": "ok", "service": SERVICE, "langfuse": langfuse}
 
     @app.post("/api/conversations", status_code=201)
     async def create_conversation(request: Request) -> dict[str, str]:

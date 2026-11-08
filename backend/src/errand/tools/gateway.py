@@ -140,7 +140,8 @@ class ToolGateway:
                 await self._clock.sleep(self.limits.retry_backoff_s)
             time_left = self._check_budget(tool)
             try:
-                return await self._attempt(caller, tool, request, attempt, time_left)
+                with self._tracer.opening("tool.call", tool):
+                    return await self._attempt(caller, tool, request, attempt, time_left)
             except (ToolTimeout, ToolTransient) as exc:
                 last = exc
                 if tool not in READ_TOOLS:

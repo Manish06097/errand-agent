@@ -1410,7 +1410,11 @@ The design note's annotated excerpt is cut from that file and shows one planner 
 - Kind mapping: run to agent, node to chain, model and reader to generation, tool to tool, approval guard to guardrail, everything else to event.
 - No LangChain `CallbackHandler` in the product path: it would duplicate model calls and send raw graph state past our sanitizer.
 - `flush()` blocks the caller for up to `LANGFUSE_TIMEOUT` when the server is down, so it is never called per request; `shutdown()` runs once in the lifespan exit, `LANGFUSE_TIMEOUT=2`, every sink call is in try/except, and JSONL is always written first.
-- Self-hosting: pinned compose plus an override (web on 3100, redis host port removed, AI gateway behind a profile, `TELEMETRY_ENABLED=false`, headless init keys). Docker needs more memory than this machine currently gives it; see section 21.
+- Self-hosting: pinned compose plus an override (web on `127.0.0.1:3100` only, every other host port removed, AI gateway behind a profile, `TELEMETRY_ENABLED=false`, headless init keys). Docker needs more memory than this machine currently gives it; see section 21.
+- Health: `{"state": "on", "host", "export_failures"}`, or `{"state": "off", "reason"}` with reason `disabled`, `no_keys`, or `init_failed` (the client could not be built; the run goes on with JSONL only).
+- Off means no `langfuse` and no OTel export machinery (`opentelemetry.exporter.*`, `opentelemetry.sdk.trace.export`) in `sys.modules`. `opentelemetry` as a whole cannot be kept out: FastAPI imports the API package and langsmith imports `opentelemetry.sdk.trace` whenever the SDK is installed (M15).
+- Langfuse 5.2.0 keeps one resource manager per public key for the life of the process; `shutdown()` unregisters it (private API, guarded) so a second client with the same key in one process still exports.
+- The live check (`scripts/langfuse_check.py`) reads `/api/public/v2/observations`, because Langfuse 4 answers 404 on `/api/public/traces` in its events-only mode.
 
 ### 16.5 Tooling
 

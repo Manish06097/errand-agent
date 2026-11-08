@@ -16,6 +16,10 @@ dependencies = [
   "pydantic-settings==2.16.2",
   "httpx==0.28.1",
   "pyyaml==6.0.3",
+  # Optional Langfuse dashboard (ADR 0008), same pins as spikes/langfuse. Imported
+  # only by errand.trace.sinks.langfuse, and only when keys are set.
+  "langfuse==5.2.0",
+  "opentelemetry-sdk==1.45.2",
 ]
 
 [project.scripts]
@@ -108,6 +112,18 @@ markers = [
 
 [tool.importlinter]
 root_package = "errand"
+# Lets contracts name third-party packages; the Langfuse contract below needs it.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Only the Langfuse sink imports langfuse or opentelemetry, so with Langfuse off neither is loaded by us"
+type = "forbidden"
+source_modules = ["errand"]
+forbidden_modules = ["langfuse", "opentelemetry"]
+ignore_imports = [
+  "errand.trace.sinks.langfuse -> langfuse",
+  "errand.trace.sinks.langfuse -> opentelemetry",
+]
 
 [[tool.importlinter.contracts]]
 name = "Only the executor makes consequential calls: planner, model, context and reader code never import it"
