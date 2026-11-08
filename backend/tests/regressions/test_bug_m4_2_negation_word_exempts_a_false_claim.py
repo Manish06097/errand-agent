@@ -122,3 +122,37 @@ def test_round3_the_guard_keeps_no_leaked_claim_and_still_exempts_real_negation(
     for text in ROUND3_STILL_EXEMPT:
         assert guard(text, [], IST).text == text, text
     assert guard("If you're wondering, it is confirmed.", [], IST).text == ""
+
+
+# Fourth fix (round 4): under a condition, a modal anywhere in the claim's clause exempted
+# the claim even when the modal belonged to another verb ("you'll see", "you would like").
+# A modal exempts a claim only when it reaches the claim verb: modal, optional "also", then
+# be/have/get and object words, then the claim verb.
+ROUND4_LEAKS = [
+    "Once you refresh the page you'll see it's booked.",
+    "Once you refresh, you'll see it's booked.",
+    "When you check your bookings you will see it is confirmed.",
+    "When you said you would like Saturday I booked Sharma.",
+    "If you would like the details I have booked Sharma for Saturday.",
+    "If you can I booked it.",
+    "When I checked, I could see it's booked.",
+    "When you open the app, you can see Sharma is booked for Saturday.",
+    "Once you approve, I can tell you I booked it.",
+    "When you get a moment, you should know I booked Sharma.",
+    "Once you get the SMS you'll know Sharma is booked for Saturday.",
+    "After you approve I can see it is confirmed.",
+]
+ROUND4_STILL_EXEMPT = [
+    "Once you approve it will be booked.",
+    "Once you approve, I can book Sharma for Saturday.",
+    "If you like I can have it booked.",
+    "If you want, I can get Sharma booked for Saturday.",
+    "Once you tap approve, Sharma will come at 10.",
+]
+
+
+def test_round4_a_modal_exempts_a_claim_only_when_it_reaches_the_claim_verb() -> None:
+    for text in ROUND4_LEAKS:
+        assert guard(text, [], IST).text == "", text
+    for text in ROUND4_STILL_EXEMPT:
+        assert guard(text, [], IST).text == text, text
