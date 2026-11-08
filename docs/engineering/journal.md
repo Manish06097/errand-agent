@@ -141,6 +141,8 @@ Second review found two more, each reproduced through a real Tracer with JSONL a
 
 **What broke.** BUG-M4-1: filling Approval turned make check red because the over-budget commit-hook test assumed an empty section (BUG-M2-1 again; repro f5813d0, row in docs/BUGS.md). The merge breakage was and was fixed in the scenarios and doubles above, not in product code.
 
+**Lead rulings, review round 1.** One checkpoint commit (2a7d7c3) instead of per-area commits: accepted. The split partial commits failed the mypy hook, and splitting it now would mean rewriting history under a merge commit; every commit after it is themed. Quote drift on every provider (P1 to P20) in S18, S27 and S55: accepted, and it is the rule in 8.7, because a drift scenario must not depend on who ranks first. The offline suite at 130 to 139 s is mostly inherited subprocess tests (dev targets, the M1, M3 and M15 regressions, Langfuse); M4 adds little. The 2-minute target is still the target, and the fix is a separate change cleared with the lead first, because it touches the Makefile or the lockfile.
+
 ## M10: untrusted output and the quarantined reader
 
 **Goal.** The other half of the injection defence: raw review text goes only to a tool-less Haiku 5.5 reader that answers in enums and booleans, code checks and folds its labels into a `ReviewDigest`, and a flagged review can lower its provider's rank but never raise it. This is also the one multi-agent claim.
