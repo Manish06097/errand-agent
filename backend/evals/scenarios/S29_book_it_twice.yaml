@@ -16,8 +16,11 @@ steps:
   - expect_world: {book: 1, get_booking_status: 1, list_bookings: 4, hold_slot: 1, search_providers: 1}
   - type_confirm: {text: "book it", composed_during_run: true, visible: at_send}
   - expect_outcome: REPLIED
+  # BUG-M4-3: the reply cites the verified booking, so the status line must agree with it
+  - expect_transcript: {last_includes: ["already booked"], status_line_excludes: ["Nothing booked"]}
   - type_confirm: {text: "book it"}
   - expect_outcome: REPLIED
+  - expect_transcript: {last_includes: ["already booked"], status_line_excludes: ["Nothing booked"]}
   - expect_trace: {tool.call: 0, approval.granted: 0}
   - expect_world: {book: 1, get_booking_status: 1, list_bookings: 4, hold_slot: 1, search_providers: 1}
   - expect_booking: {count: 1}
