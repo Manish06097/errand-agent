@@ -1,7 +1,9 @@
 """`make langfuse-up` / `make langfuse-down`: the self-hosted Langfuse in infra/langfuse.
 
 up:
-1. Docker must be installed and its daemon running; otherwise exit 2 with what to do.
+1. Docker must be installed and its daemon answering; otherwise exit 2 with what to do.
+   Every quick docker query (`info`, `stats`) has a timeout, so a hung daemon fails
+   the target instead of hanging it.
 2. Warn when Docker has little memory left: the stack (web, worker, clickhouse, postgres,
    redis, minio) wants about 4 GiB on top of whatever else is running.
 3. Generate infra/langfuse/.env from openssl rand values if it is missing, and refuse to
@@ -15,7 +17,8 @@ down: `docker compose down`, keeping the volumes (add `-v` by hand to wipe them)
 `env` writes the .env alone (`--path` for another file); tests use it.
 
 DOCKER names the docker binary (default `docker`), so a test can simulate a machine
-without it.
+without it, or with a daemon that hangs. ERRAND_DOCKER_TIMEOUT_S (default 15) bounds
+each quick docker query.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ import time
 import urllib.request
 import uuid
 from pathlib import Path
+from typing import NoReturn
 
 REPO = Path(__file__).resolve().parent.parent
 INFRA = REPO / "infra" / "langfuse"
@@ -46,13 +50,30 @@ def docker() -> str:
     return os.environ.get("DOCKER", "docker")
 
 
-def fail(message: str, code: int = 2) -> None:
+def fail(message: str, code: int = 2) -> NoReturn:
     print(f"[langfuse] {message}", file=sys.stderr)
     sys.exit(code)
 
 
 def say(message: str) -> None:
     print(f"[langfuse] {message}", flush=True)
+
+
+def docker_timeout() -> float:
+    return float(os.environ.get("ERRAND_DOCKER_TIMEOUT_S", "15"))
+
+
+def docker_query(*args: str) -> subprocess.CompletedProcess[str]:
+    """A quick docker CLI call. One the daemon does not answer in time exits 2."""
+    timeout = docker_timeout()
+    try:
+        return subprocess.run([docker(), *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        fail(
+            f"the docker daemon is not answering (`docker {args[0]}` took over "
+            f"{timeout:.0f}s). Restart Docker Desktop, or run without Langfuse: the app and "
+            "the evals do not need it."
+        )
 
 
 def compose(env_file: Path, *args: str) -> list[str]:
@@ -79,7 +100,7 @@ def require_docker() -> None:
             f"docker not found (looked for {docker()!r} on PATH). Install Docker Desktop, "
             "or run without Langfuse: the app and the evals do not need it."
         )
-    info = subprocess.run([docker(), "info", "--format", "{{.MemTotal}}"], capture_output=True)
+    info = docker_query("info", "--format", "{{.MemTotal}}")
     if info.returncode != 0:
         fail("docker is installed but its daemon is not answering; start Docker Desktop first.")
 
@@ -163,18 +184,11 @@ def _bytes(text: str) -> float:
 
 
 def warn_if_low_memory() -> None:
-    total_out = subprocess.run(
-        [docker(), "info", "--format", "{{.MemTotal}}"], capture_output=True, text=True
-    ).stdout.strip()
+    total_out = docker_query("info", "--format", "{{.MemTotal}}").stdout.strip()
     if not total_out.isdigit():
         return
     total = int(total_out)
-    stats = subprocess.run(
-        [docker(), "stats", "--no-stream", "--format", "{{.Name}}\t{{.MemUsage}}"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    ).stdout
+    stats = docker_query("stats", "--no-stream", "--format", "{{.Name}}\t{{.MemUsage}}").stdout
     used = 0.0
     for line in stats.splitlines():
         name, _, usage = line.partition("\t")
