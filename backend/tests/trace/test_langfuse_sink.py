@@ -8,6 +8,7 @@ the run's own JSONL trace (architecture 16.4, ADR 0008).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -17,7 +18,8 @@ import pytest
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from errand.config import TraceSettings
+from errand.config import LimitSettings, TraceSettings
+from errand.trace.sanitize import PHONE_MASK
 from errand.trace.sinks import make_sink
 from errand.trace.sinks.langfuse import TRACE_NAME, LangfuseSink
 from tests.trace.langfuse_support import (
@@ -27,6 +29,7 @@ from tests.trace.langfuse_support import (
     expected_outcomes,
     fresh_keys,
     jsonl_runs,
+    review_digests,
     s03,
     stable,
     string_leaves,
@@ -41,6 +44,8 @@ TYPE_OF = {
     "reader.call": "generation",
     "tool.call": "tool",
 }
+# Below the first call's request, above nothing: every planner call is refused.
+REFUSING_BUDGET = 200
 # Attributes Langfuse adds itself (SDK bookkeeping and our fixed trace name), not
 # record content.
 SDK_ATTRS = ("langfuse.internal.", "langfuse.environment", "langfuse.release", "langfuse.version")
@@ -105,7 +110,23 @@ async def test_langfuse_mirrors_the_jsonl(exported: Any, tmp_path: Path) -> None
     runs, spans, thread, outcomes = await exported()
     assert outcomes == expected_outcomes()
     assert len(runs) == 4
+    assert_mirrors(runs, spans, thread)
+    for records in runs.values():
+        assert any(r["type"] == "model.call" for r in records)
 
+    # A generation of the S03 shape lasts at least the slow model's 20 ms.
+    shortlist = runs[sorted(runs)[2]]
+    assert any(r["type"] == "tool.call" and r["tool"] == "get_provider" for r in shortlist)
+    longest = max(
+        duration_ms(s) for s in spans if attrs(s)["langfuse.observation.type"] == "generation"
+    )
+    assert longest >= 20
+
+
+def assert_mirrors(
+    runs: dict[str, list[dict[str, Any]]], spans: list[ReadableSpan], thread: str
+) -> None:
+    """Langfuse holds exactly the JSONL's runs: same ids, parents, types, costs, order."""
     # One trace per run, under the record's own trace id.
     by_trace: dict[str, list[ReadableSpan]] = defaultdict(list)
     for span in spans:
@@ -183,15 +204,80 @@ async def test_langfuse_mirrors_the_jsonl(exported: Any, tmp_path: Path) -> None
                 f"{record['type']} {span_id}: span {took:.3f} ms, record "
                 f"{record['latency_ms']:.3f} ms"
             )
-        assert any(record_of[s]["type"] == "model.call" for s in span_of)
 
-    # A generation of the S03 shape lasts at least the slow model's 20 ms.
-    shortlist = runs[sorted(runs)[2]]
-    assert any(r["type"] == "tool.call" and r["tool"] == "get_provider" for r in shortlist)
-    longest = max(
-        duration_ms(s) for s in spans if attrs(s)["langfuse.observation.type"] == "generation"
-    )
-    assert longest >= 20
+        # Each generation starts after the context.built it was sent with, under the
+        # same parent: the call opens only once the budget checks have passed.
+        for record in records:
+            if record["type"] != "model.call":
+                continue
+            built = [
+                r
+                for r in records
+                if r["type"] == "context.built"
+                and r["parent_span_id"] == record["parent_span_id"]
+                and r["seq"] < record["seq"]
+            ]
+            assert built, f"model.call {record['span_id']} has no context.built before it"
+            assert built[-1]["manifest"]["sent"] is True
+            context = span_of[built[-1]["span_id"]]
+            generation = span_of[record["span_id"]]
+            assert context.start_time is not None and generation.start_time is not None
+            assert generation.start_time >= context.start_time, (
+                f"generation {record['span_id']} starts before context.built {built[-1]['span_id']}"
+            )
+
+
+# Limits that refuse a model call inside LLMGateway.send(), before the model is called:
+# the call cap (refused before context.built) and the context budget (refused after a
+# context.built that says sent: false).
+REFUSALS = {
+    "model_call_cap": LimitSettings(model_calls_per_run=1),
+    "context_budget": LimitSettings(context_budget_tokens=REFUSING_BUDGET),
+}
+
+
+@pytest.mark.parametrize("refusal", sorted(REFUSALS))
+async def test_a_refused_model_call_exports_no_generation(
+    refusal: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limits = REFUSALS[refusal]
+    exporter = InMemorySpanExporter()
+    keys = fresh_keys()
+    async with api(
+        tmp_path, monkeypatch, lambda: make_sink(ON, keys, span_exporter=exporter), limits=limits
+    ) as h:
+        await s03(h)
+        thread = h.conversation_id
+    runs = jsonl_runs(tmp_path)
+    spans = list(exporter.get_finished_spans())
+
+    # The JSONL shows the refusal, in every run. The cap: one model call, then the
+    # second is refused before its context.built. The budget: send() writes a
+    # context.built that says it was not sent, and no run calls the model at all.
+    want = "LIMIT_REACHED" if refusal == "model_call_cap" else "CONTEXT_TOO_LARGE"
+    for run_id, records in runs.items():
+        end = records[-1]
+        assert end["type"] == "run.end"
+        assert end["outcome"] == want, run_id
+        built = [r for r in records if r["type"] == "context.built"]
+        calls = [r for r in records if r["type"] == "model.call"]
+        assert len([r for r in built if r["manifest"]["sent"]]) == len(calls)
+        if refusal == "model_call_cap":
+            assert len(calls) == end["totals"]["model_calls"] == 1, run_id
+        else:
+            assert not calls, run_id
+            (unsent,) = built
+            manifest = unsent["manifest"]
+            assert manifest["sent"] is False and "over_cap" not in manifest
+            assert manifest["budget_tokens"] == REFUSING_BUDGET < manifest["est_request_tokens"]
+
+    # No generation and no ERROR observation for the refused call: Langfuse still holds
+    # exactly what the JSONL says.
+    generations = [s for s in spans if attrs(s)["langfuse.observation.type"] == "generation"]
+    model_calls = [r for rs in runs.values() for r in rs if r["type"] == "model.call"]
+    assert len(generations) == len(model_calls)
+    assert not [s for s in spans if attrs(s).get("langfuse.observation.level") == "ERROR"]
+    assert_mirrors(runs, spans, thread)
 
 
 async def test_nothing_reaches_langfuse_that_the_jsonl_does_not_hold(
@@ -212,10 +298,17 @@ async def test_nothing_reaches_langfuse_that_the_jsonl_does_not_hold(
             assert not missing, f"{span.name}.{key}: {missing[:3]}"
 
     # The proof: the seeded phone and the raw review text are in the world, were read
-    # by the planner's tools, and still never reached Langfuse.
+    # by the planner's tools, and still never reached Langfuse. First, that they were
+    # read: the masked phone and the review digests are in the JSONL. Without that the
+    # absence checks below would pass vacuously.
     dump = repr([(s.name, attrs(s)) for s in spans])
     reviews = [t for t in world_review_texts(tmp_path) if len(t) >= 20]
     assert reviews
+    assert any(f"WhatsApp {PHONE_MASK}" in s for s in jsonl_strings)
+    digests = [d for records in runs.values() for d in review_digests(records)]
+    assert digests
+    world_hashes = {hashlib.sha256(t.encode("utf-8")).hexdigest() for t in reviews}
+    assert world_hashes & {d["sha256"] for d in digests}
     for secret in (*PHONES, *reviews):
         assert secret not in dump, secret
         assert all(secret not in s for s in jsonl_strings), secret

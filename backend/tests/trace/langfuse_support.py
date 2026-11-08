@@ -25,7 +25,7 @@ from langchain_core.outputs import ChatGenerationChunk
 from pydantic import SecretStr
 
 from errand.api.app import AppConfig
-from errand.config import LangfuseKeys
+from errand.config import LangfuseKeys, LimitSettings
 from errand.llm.scripted import ScriptedChatModel
 from errand.trace.reader import read_trace
 from errand.trace.sinks.base import ProcessSink, Sink
@@ -92,13 +92,14 @@ async def api(
     sink_factory: Callable[[], ProcessSink] | None = None,
     *,
     slow: bool = False,
+    limits: LimitSettings | None = None,
 ) -> AsyncIterator[Harness]:
     """The eval harness (real app, lifespan included) with `sink_factory` swapped in.
 
     Without one, the app builds its sink from the environment, which the suite's
-    conftest forces off.
+    conftest forces off. `limits` replaces the harness's default run limits.
     """
-    with patched_sink(monkeypatch, sink_factory):
+    with patched_sink(monkeypatch, sink_factory, limits):
         h = Harness(root, s03_world(), reference.policy, slow_factory if slow else None)
         async with h:
             seed_phone(root)
@@ -107,18 +108,25 @@ async def api(
 
 @contextmanager
 def patched_sink(
-    monkeypatch: pytest.MonkeyPatch, sink_factory: Callable[[], ProcessSink] | None
+    monkeypatch: pytest.MonkeyPatch,
+    sink_factory: Callable[[], ProcessSink] | None,
+    limits: LimitSettings | None = None,
 ) -> Iterator[None]:
-    """Swap `sink_factory` into the AppConfig the eval runner builds, for this block only."""
-    if sink_factory is None:
+    """Swap `sink_factory` (and `limits`, if given) into the AppConfig the eval runner
+    builds, for this block only."""
+    changes: dict[str, Any] = {}
+    if sink_factory is not None:
+        changes["sink_factory"] = sink_factory
+    if limits is not None:
+        changes["limits"] = limits
+    if not changes:
         yield
         return
     real = runner.create_app
-    factory = sink_factory
 
     def create_app(config: AppConfig | None = None) -> Any:
         assert config is not None
-        return real(replace(config, sink_factory=factory))
+        return real(replace(config, **changes))
 
     with monkeypatch.context() as patch:
         patch.setattr(runner, "create_app", create_app)
@@ -175,6 +183,24 @@ def string_leaves(value: Any) -> Iterator[str]:
     elif isinstance(value, list | tuple):
         for v in value:
             yield from string_leaves(v)
+
+
+def review_digests(value: Any) -> Iterator[Mapping[str, Any]]:
+    """Every `{review_id, sha256, len}` the sanitizer left in place of a review's text,
+    including inside tool results, which the trace keeps as JSON text."""
+    if isinstance(value, str) and value[:1] in ("{", "["):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return
+    if isinstance(value, Mapping):
+        if set(value) == {"review_id", "sha256", "len"}:
+            yield value
+        for v in value.values():
+            yield from review_digests(v)
+    elif isinstance(value, list | tuple):
+        for v in value:
+            yield from review_digests(v)
 
 
 def world_review_texts(root: Path) -> list[str]:
