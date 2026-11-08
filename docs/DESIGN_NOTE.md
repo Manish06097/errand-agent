@@ -13,7 +13,7 @@ One LangGraph thread per conversation holds one errand: a typed brief where ever
 
 ## Approval
 <!-- budget: 90 words -->
-The model can only propose. Code holds the slot, prices it, and shows a card whose fingerprint hashes the material facts (provider, slot, price, service, area). A grant is a button press carrying that fingerprint, or a typed "book it" bound to the latest rendered card and message. Consumption is one conditional UPDATE, then `book` runs once under a write-ahead key and `verify` re-reads the world before anything is reported. Stale, expired, repeated or ambiguous input never grants; a claim guard strips unbacked "booked" text.
+The model only proposes. Code holds the slot, prices it, and shows a card whose fingerprint hashes the material facts (user, provider, service, slot, held quote, nearby same-service bookings). A grant is a button press carrying that fingerprint, or a typed "book it" bound to the latest rendered card and message. Consumption is one conditional UPDATE, then `book` runs once under a write-ahead key and `verify` re-reads the world before anything is reported. Stale, expired, repeated or ambiguous input never grants; a claim guard strips unbacked "booked" text.
 
 ## Idempotency and recovery
 <!-- budget: 100 words -->
