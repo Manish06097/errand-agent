@@ -211,6 +211,7 @@ def paraphrase_claim_policy(request: ScriptedRequest) -> AIMessage:
             "After you approve I can see it is confirmed. "
             "If anything it's booked. "
             "If anything I have booked Sharma for Saturday. "
+            "Never have I booked a plumber this fast! "
             "However, if you approve it will be booked. "
             "Once you approve it will be booked. "
             "Once you approve, I can book Sharma for Saturday. "
