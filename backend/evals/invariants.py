@@ -553,17 +553,33 @@ _CLAIM = re.compile(
     r"\b(booked|confirmed|all set|locked in|reserved|scheduled|ho gaya|kar diya|pakka|sorted)\b",
     re.I,
 )
-# INV-04 reads negation by position, with its own word list and no code shared with the
-# claim guard: a claim word is exempt only if one of the (at most) four words right
-# before it is a negator, a future or conditional word, with idioms ("no worries")
-# removed first; a negator anywhere else in the sentence exempts nothing.
-_NEGATING = {
-    "not", "no", "nothing", "never", "yet", "unless", "once", "if", "until", "after", "when",
-    "cannot", "can't", "won't", "didn't", "isn't", "hasn't", "haven't", "wasn't", "aren't",
-    "hadn't", "don't", "nahi", "nahin",
-}  # fmt: skip
+# INV-04 reads negation by shape, with its own patterns and no code shared with the claim
+# guard. A claim word is exempt only when (1) the clause before it ENDS in a negator
+# followed by nothing but filler (auxiliaries, "yet", pronouns, booking nouns), so
+# "haven't booked", "nothing has been booked", "not yet confirmed" are exempt while
+# "don't worry I booked" and "no stress it's booked" are claims; (2) a future frame
+# ends the clause ("will be booked"); (3) the claim sits under a condition that is the
+# user's own approval ("once you tap approve it is booked"); or (4) a modal sits
+# between a conditional opener and the claim ("if you like I can have it booked").
+# A past-tense claim after "when you asked", "once again" or "after checking" is a claim.
+_NEG_WORD = r"(?:not|no|nothing|never|cannot|nahi|nahin|\w+n't|yet to)"
+_FILLER = (
+    r"(?:is|are|was|were|be|been|being|am|has|have|had|do|does|did|get|got|yet|still|ever|"
+    r"actually|currently|really|fully|also|i|you|we|they|he|she|it|it's|i've|that|this|there|"
+    r"that's|a|an|the|any|your|my|their|booking|bookings|appointment|slot|plumber|electrician|"
+    r"job|visit|errand|request|anything|everything|something|one|to)"
+)
+_NEGATED_TAIL = re.compile(rf"\b{_NEG_WORD}(?:\s+{_FILLER})*\s*$")
 _FUTURE_BE = re.compile(
     r"\b(?:will|would|shall|should|can|could)\s+(?:also\s+)?be\s*$|'ll\s+be\s*$"
+)
+_APPROVAL_OPENER = re.compile(
+    r"\b(?:once|after|when|if)\s+(?:you|the user)\s+(?:tap|approve|confirm|accept|grant|press|"
+    r"click|say\s+yes|okay|give)\w*\b[^,;:.]*$"
+)
+_MODAL_OPENER = re.compile(
+    r"\b(?:once|after|when|if|unless|until)\b[^,;:.]*\b(?:will|would|can|could|should|shall|may|"
+    r"might)\b[^,;:.]*$|\b(?:once|after|when|if|unless|until)\b[^,;:.]*'ll\b[^,;:.]*$"
 )
 _NOT_IDIOMS = re.compile(
     r"\b(?:no worries|no problem|no doubt|no need|no hurry|nothing else|not to worry|"
@@ -571,7 +587,6 @@ _NOT_IDIOMS = re.compile(
     re.I,
 )
 _BREAKS = re.compile(r"[,;:()\u2013\u2014]|\s-\s|\b(?:but|and|so|then)\b", re.I)
-_NOT_REACH = 4
 
 
 def _exempt(sentence: str, claim: re.Match[str]) -> bool:
@@ -580,11 +595,11 @@ def _exempt(sentence: str, claim: re.Match[str]) -> bool:
         r"\s+(?:by|in|from|on|using)\b", sentence[claim.end() :], re.I
     ):
         return True
-    clause = _BREAKS.split(sentence[: claim.start()])[-1]
-    if _FUTURE_BE.search(clause.lower()):
+    before = sentence[: claim.start()].lower()
+    clause = _NOT_IDIOMS.sub(" ", _BREAKS.split(before)[-1])
+    if _NEGATED_TAIL.search(clause.strip()) or _FUTURE_BE.search(clause):
         return True
-    words = re.findall(r"[a-z']+", _NOT_IDIOMS.sub(" ", clause.lower()))[-_NOT_REACH:]
-    if any(w in _NEGATING or w.endswith("n't") for w in words):
+    if _APPROVAL_OPENER.search(before) or _MODAL_OPENER.search(before):
         return True
     return bool(re.match(r"\s+(?:hai\s+|hua\s+)?(?:nahi|nahin)\b", sentence[claim.end() :], re.I))
 
