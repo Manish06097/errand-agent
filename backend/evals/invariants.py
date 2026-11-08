@@ -675,7 +675,9 @@ def _exempt(sentence: str, claim: re.Match[str]) -> bool:
     before = sentence[: claim.start()].lower()
     clause = _NOT_IDIOMS.sub(" ", _BREAKS.split(before)[-1])
     clause = re.sub(r"\bable to\b", "able", clause)
-    if _NEGATED_TAIL.search(clause.strip()) or _FUTURE_BE.search(clause):
+    if (
+        _NEGATED_TAIL.search(clause.strip()) and not _INVERSION.search(clause)
+    ) or _FUTURE_BE.search(clause):
         return True
     if _condition_exempt(before, claim.group(0).lower(), sentence[: claim.start()]):
         return True
