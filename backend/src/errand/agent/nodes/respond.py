@@ -29,7 +29,7 @@ from typing import Any
 from langgraph.runtime import Runtime
 
 from errand.agent import cards
-from errand.agent.claim_guard import guard
+from errand.agent.claim_guard import BOOKING_ID, guard
 from errand.agent.deps import RunDeps
 from errand.agent.records import live_approval, verified_records
 from errand.agent.state import ThreadState
@@ -112,6 +112,8 @@ class _Respond:
         self.park: str | None = None
         self.model_text: list[str] = []
         self.asked = False
+        # A verified booking this run's reply cites by id (guard-approved), for the status line.
+        self.cited_booking: str | None = None
 
     # ------------------------------------------------------------------ main
 
@@ -134,11 +136,19 @@ class _Respond:
         if bodies and self.errand is not None and self.errand.phase is not Phase.COMPLETED:
             last = bodies[-1]
             if getattr(last, "status_line", None) is None:
-                bodies[-1] = last.model_copy(
-                    update={"status_line": cards.status_line(self.errand.phase)}
-                )
+                bodies[-1] = last.model_copy(update={"status_line": self._status_line()})
         await self._write(bodies, typed_ok)
         return outcome
+
+    def _status_line(self) -> str | None:
+        """The code status line. A fresh errand that has taken no action, whose reply cites
+        a verified booking ("That's already booked: B-5715 ..."), says so instead of
+        "Nothing booked for this request yet" under it (8.7)."""
+        assert self.errand is not None
+        phase = self.errand.phase
+        if self.cited_booking and phase in (Phase.GATHERING, Phase.COMPARING):
+            return f"Booked: {self.cited_booking}, confirmed with the provider."
+        return cards.status_line(phase)
 
     # ------------------------------------------------------------------ rendering
 
@@ -155,7 +165,7 @@ class _Respond:
     async def _guarded(self, plan: PlanResult | None) -> PlanResult | None:
         """The claim guard over every piece of model text this result carries."""
         if isinstance(plan, Reply):
-            text = await self._guard_text(plan.text) or GUARDED_EMPTY
+            text = await self._guard_text(plan.text, cites=True) or GUARDED_EMPTY
             self.model_text.append(text)
             return plan.model_copy(update={"text": text})
         if isinstance(plan, Options) and plan.recommendation:
@@ -168,7 +178,7 @@ class _Respond:
             return plan.model_copy(update={"question": text})
         return plan
 
-    async def _guard_text(self, text: str) -> str:
+    async def _guard_text(self, text: str, *, cites: bool = False) -> str:
         deps = self.deps
         records = await verified_records(deps, self._verified_this_run())
         names: dict[str, str] = {}
@@ -181,6 +191,11 @@ class _Respond:
                 "guard.claim_rewritten",
                 detail={"removed": guarded.removed, "kept": guarded.text},
             )
+        if cites:
+            known = {r.booking_id for r in records}
+            ids = [i for i in dict.fromkeys(BOOKING_ID.findall(guarded.text)) if i in known]
+            if len(ids) == 1:
+                self.cited_booking = ids[0]
         return guarded.text
 
     def _verified_this_run(self) -> set[str]:

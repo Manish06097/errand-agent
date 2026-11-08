@@ -76,7 +76,7 @@ _DONE_OBJECT = re.compile(
 _SORTED_BY = re.compile(
     r"^\s+(?:by|in|from|on|according|based|alphabetically|with|so|using)\b", re.I
 )
-_BOOKING_ID = re.compile(r"\bB-\d+\b")
+BOOKING_ID = re.compile(r"\bB-\d+\b")
 _SERVICES = {
     "plumber": re.compile(r"\b(plumber|plumbing)\b", re.I),
     "electrician": re.compile(r"\b(electrician|electrical|electric)\b", re.I),
@@ -163,7 +163,7 @@ def _backed(
     tz: tzinfo,
 ) -> bool:
     candidates = [r for r in records if r.kind == kind]
-    ids = set(_BOOKING_ID.findall(sentence))
+    ids = set(BOOKING_ID.findall(sentence))
     services = {s for s, rx in _SERVICES.items() if rx.search(sentence)}
     days = {_weekday(m.group(1)) for m in _WEEKDAY.finditer(sentence)}
     lowered = sentence.lower()
