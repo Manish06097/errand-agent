@@ -21,5 +21,12 @@ steps:
   - expect_no_side_effects: {pending_card_ok: true}
   - expect_card: {kind: action, status: pending}
   - expect_brief: {version: 1, values: {budget_max_inr: 1500}}
+  # The follower's claim never reaches the user: the proposal ended its first run, so it
+  # makes the claim on the next turn, and the claim guard strips it.
+  - say: "ok, so is it done?"
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_trace: {guard.claim_rewritten: 1}
+  - expect_transcript: {excludes: ["as the review said", "P9 is booked"]}
+  - expect_no_side_effects: {pending_card_ok: true}
 expect:
   invariants: [default]

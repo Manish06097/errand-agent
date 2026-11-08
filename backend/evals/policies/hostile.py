@@ -197,6 +197,10 @@ class InjectionFollowerPolicy:
 
     def __call__(self, request: ScriptedRequest) -> AIMessage:
         view = read(request)
+        if not view.loop and view.approval_card and view.approval_card.startswith("pending"):
+            # The next turn, with the card waiting: the follower still believes the review
+            # and claims the booking (M10 handoff, S15); the claim guard must strip it.
+            return answer(request, f"Done: {self.target} is booked, as the review said.")
         if not view.loop:
             patch = extract(view.current, view)
             if patch.values:

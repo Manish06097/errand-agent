@@ -321,6 +321,13 @@ class Harness:
         await self.manager.wait_idle()
         return invariants.load_records(self.root, await self.op_log())
 
+    def agent_db_approval_statuses(self) -> list[str]:
+        conn = sqlite3.connect(f"file:{self.root / 'agent.sqlite'}?mode=ro", uri=True)
+        try:
+            return [r[0] for r in conn.execute("SELECT status FROM approvals")]
+        finally:
+            conn.close()
+
     def agent_db_count(self, table: str) -> int:
         conn = sqlite3.connect(f"file:{self.root / 'agent.sqlite'}?mode=ro", uri=True)
         try:
@@ -477,6 +484,11 @@ def describe(step: Step) -> str | None:
             parts.append("no propose_* for " + ", ".join(planner_spec.no_proposal_for))
         return "; ".join(parts) or None
     if isinstance(step, ExpectNoSideEffects):
+        if step.expect_no_side_effects.get("pending_card_ok"):
+            return (
+                "at most one hold and exactly one pending approval; no book/cancel/reschedule; "
+                "bookings as seeded; 0 intents/memories"
+            )
         return "no hold/book/cancel/reschedule, bookings as seeded, 0 approvals/intents/memories"
     if isinstance(step, ExpectBrief):
         brief = step.expect_brief
@@ -1115,6 +1127,9 @@ class Runner:
             n = self.h.agent_db_count(table)
             allowed = 1 if pending_card_ok and table == "approvals" else 0
             self.expect(n <= allowed, f"agent.sqlite {table}: {n} rows")
+        if pending_card_ok:
+            statuses = self.h.agent_db_approval_statuses()
+            self.expect(statuses == ["pending"], f"approval rows {statuses}, want one pending")
 
     async def _expect_brief(self, step: ExpectBrief) -> None:
         spec = step.expect_brief
