@@ -139,7 +139,7 @@ Second review found two more, each reproduced through a real Tracer with JSONL a
 
 **Verified.** `make check`: 815 passed, 4 skipped, in 129 s (the brief asks for under 2 minutes; over by 9 s, see open doubts). `make evals`: 32/32; two runs differ only in the Generated timestamp. Manual run on `make dev` with curl on 9140/9141/9142: S01 message returns a card; a stale fingerprint gets 409 `details_changed`; the right one gets 202 and `BOOKED_VERIFIED` (card.update granted, consumed, then the outcome card); a replay gets 200 `already_approved`; a typed "book it" with `visible_card`, a render ack and `client_composed_at` routes as `grant` and books. A mutation check (consume without `status = 'granted'`) turns the lock-bypassed backstop test and the service test red.
 
-**What broke.** No new bug was found while finishing the milestone, so there is no BUG-M4 row. The only breakage was merge-induced and was fixed in the scenarios and doubles above, not in product code.
+**What broke.** BUG-M4-1: filling Approval turned make check red because the over-budget commit-hook test assumed an empty section (BUG-M2-1 again; repro f5813d0, row in docs/BUGS.md). The merge breakage was and was fixed in the scenarios and doubles above, not in product code.
 
 ## M10: untrusted output and the quarantined reader
 
