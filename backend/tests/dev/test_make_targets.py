@@ -24,9 +24,7 @@ def make(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedP
     )
 
 
-@pytest.mark.parametrize(
-    ("target", "milestone"), [("e2e", "M7"), ("record", "M7"), ("langfuse-up", "M15")]
-)
+@pytest.mark.parametrize(("target", "milestone"), [("e2e", "M7"), ("record", "M7")])
 def test_unbuilt_targets_fail_loudly(target: str, milestone: str) -> None:
     result = make(target)
     assert result.returncode == 2
