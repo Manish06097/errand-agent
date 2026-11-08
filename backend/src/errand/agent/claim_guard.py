@@ -44,13 +44,16 @@ _BOOK = re.compile(
 _CANCEL = re.compile(r"\b(cancelled|canceled|called off|cancel ho gaya|cancel kar diya)\b", re.I)
 _RESCHEDULE = re.compile(r"\b(rescheduled|moved|shifted|reschedule ho gaya)\b", re.I)
 # Negation exempts a claim only when it scopes over the claim verb (10.8): the nearest
-# negator before the verb in the same clause, reaching it through bridge words only
-# (auxiliaries, "yet", pronouns, booking nouns: "haven't booked", "nothing has been
-# booked", "not yet confirmed"), a negator right after it (Hinglish "ho gaya nahi"), or a
-# future or modal frame ("will be booked"). A conditional opener exempts only a future or
-# modal claim, or one conditioned on the user's own approval ("once you tap approve it is
-# booked"). "Don't worry I booked", "no stress it's booked" and "when you asked I booked
-# it" are claims; so is "booked, no worries".
+# negator before the verb in the same clause, reaching it through a closed list of words
+# that depends on the negator. "not", "n't" and "yet to" reach it through auxiliaries,
+# pronouns and booking nouns ("haven't booked", "not yet confirmed"); "no" only when it
+# determines the noun the claim is about ("no plumber is booked", never "No I booked it");
+# "nothing" and "none" only as the subject of the claim verb, auxiliaries between
+# ("nothing has been booked", never "Nothing to do it's booked"). A negator right after
+# the verb (Hinglish "ho gaya nahi") or a future or modal frame ("will be booked") also
+# exempts it. A condition reaches only the claim in its own clause (_condition_exempts).
+# "Don't worry I booked", "no stress it's booked" and "when you asked I booked it" are
+# claims; so is "booked, no worries".
 _NEGATOR = re.compile(
     r"\b(not|no|never|nothing|none|yet to|haven'?t|hasn'?t|hadn'?t|isn'?t|aren'?t|wasn'?t|"
     r"weren'?t|can'?t|cannot|won'?t|don'?t|didn'?t|nahi|nahin)\b|n't\b",
@@ -64,12 +67,21 @@ _IDIOMS = re.compile(
 )
 _CLAUSE_BREAK = re.compile(r"[,;:()\u2013\u2014]|\s-\s|\b(?:but|and|so|then|though)\b", re.I)
 _CONDITIONAL = re.compile(r"\b(?:once|after|when|if|unless|until) (?:you|i|it|the|they|we)\b", re.I)
-# A condition that is the user's own approval ("once you tap approve it is booked").
+# A condition that is the user's own approval in the present tense ("once you tap approve it
+# is booked"). The \b after the verb keeps "approved", "tapped" and "confirmed" out: a
+# grant that already happened says nothing about whether the booking did.
 _APPROVAL_CONDITION = re.compile(
-    r"^(?:once|after|when|if) (?:you|the user) (?:tap|approve|confirm|accept|grant|press|click|"
-    r"say yes|say ok|okay|give (?:the )?(?:go ?ahead|approval))",
+    r"^(?:once|after|when|if) (?:you|the user) "
+    r"(?:taps?|approves?|confirms?|accepts?|grants?|presses|press|clicks?|"
+    r"says? (?:yes|ok|okay)|okay|gives? (?:the )?(?:go ?ahead|approval))\b",
     re.I,
 )
+_HYPOTHETICAL = re.compile(r"^(?:if|unless)\b", re.I)
+# A claim in the present tense ("it is booked", "it gets booked"), not "I booked it",
+# "I've booked it" or "it has been booked".
+_PRESENT_LEAD = frozenset({"is", "are", "am", "be", "being", "gets", "get", "it's", "that's",
+                           "there's", "here's", "you're", "we're", "they're"})  # fmt: skip
+_PRESENT_CLAIM = re.compile(r"^(?:is|are|you'?re|you are|all set|good to go|see you)\b", re.I)
 _MODAL = re.compile(r"\b(?:will|would|can|could|should|shall|may|might|must)\b|'ll\b", re.I)
 _FUTURE = re.compile(
     r"(?:\b(?:will|would|can|could|should|shall|to|going to)\s+(?:also\s+)?be\s+|'ll\s+be\s+|"
@@ -81,14 +93,26 @@ _FUTURE = re.compile(
 # "don't worry I booked" and "no stress it's booked" fail this and stay claims.
 _BRIDGE = frozenset({
     "is", "are", "was", "were", "be", "been", "being", "am", "has",
-    "have", "had", "having", "do", "does", "did", "get", "gets", "got",
+    "have", "had", "having", "get", "gets", "got",
     "yet", "still", "ever", "even", "actually", "currently", "really", "fully", "properly",
     "also", "i", "you", "we", "they", "he", "she", "it", "that",
     "this", "there", "it's", "i've", "we've", "you've", "they've", "that's", "there's",
     "a", "an", "the", "any", "your", "my", "their", "its", "one",
     "anything", "everything", "something", "booking", "bookings", "appointment",
     "appointments", "slot", "plumber",
-    "electrician", "job", "visit", "errand", "request", "order", "service", "to",
+    "electrician", "job", "visit", "errand", "request", "order", "service",
+})  # fmt: skip
+# "nothing"/"none" reach the claim verb through auxiliaries and adverbs only.
+_AUXILIARY = frozenset({
+    "is", "are", "was", "were", "be", "been", "being", "am", "has", "have", "had", "having",
+    "get", "gets", "got", "yet", "still", "ever", "even", "actually", "currently", "really",
+    "fully", "properly", "also",
+})  # fmt: skip
+# "no" scopes over the claim only when it determines one of these nouns.
+_NO_NOUNS = frozenset({
+    "booking", "bookings", "appointment", "appointments", "slot", "slots", "plumber",
+    "plumbers", "electrician", "electricians", "provider", "providers", "job", "visit",
+    "errand", "request", "order", "service", "confirmation", "one",
 })  # fmt: skip
 _TRAILING_NO = re.compile(r"^\s+(?:hai\s+|hua\s+|hui\s+)?(?:nahi|nahin)\b", re.I)
 # Words that make "done" or "sorted" something other than "the errand is finished".
@@ -131,14 +155,62 @@ class Guarded:
 
 
 def _negated_before(clause: str) -> bool:
-    """True when the nearest negator before the claim reaches it through bridge words only."""
+    """True when the nearest negator before the claim reaches it by its own rule."""
     text = re.sub(r"\byet to\b", "not", _IDIOMS.sub(" ", clause), flags=re.I)
-    for word in reversed(re.findall(r"[\w']+", text.lower())):
-        if _NEGATOR.search(word):
-            return True
-        if word not in _BRIDGE:
-            return False
+    text = re.sub(r"\bable to\b", "able", text, flags=re.I)  # "wasn't able to get it booked"
+    words = re.findall(r"[\w']+", text.lower())
+    for i in range(len(words) - 1, -1, -1):
+        word = words[i]
+        if not _NEGATOR.search(word):
+            continue
+        between = words[i + 1 :]
+        base = word.removesuffix("'s")
+        if base in ("nothing", "none"):
+            return all(w in _AUXILIARY for w in between)
+        if base == "no":
+            return (
+                bool(between)
+                and between[0] in _NO_NOUNS
+                and all(w in _AUXILIARY for w in between[1:])
+            )
+        return all(w in _BRIDGE or w == "able" for w in between)
     return False
+
+
+def _present_claim(clause_before: str, claim: str) -> bool:
+    """True when the claim reads as present or future ("it is booked"), not past."""
+    words = re.findall(r"[\w']+", clause_before.lower())
+    while words and words[-1] in ("already", "now", "also", "fully", "all"):
+        words.pop()
+    return bool(words and words[-1] in _PRESENT_LEAD) or bool(_PRESENT_CLAIM.match(claim))
+
+
+def _condition_exempts(sentence: str, match: re.Match[str]) -> bool:
+    """True when a condition in the claim's own clause exempts it (10.8).
+
+    The condition clause may end in one comma ("Once you approve, it will be booked");
+    any other break (but, and, so, a second comma, a semicolon) ends its reach. Inside
+    that reach a claim is exempt when its clause is future or modal, or when the
+    condition is the user's present-tense approval and the claim is present. An "if" or
+    "unless" whose subject leads straight to the claim verb ("if it's booked") is a
+    hypothetical; "unless you object I have reserved it" is not.
+    """
+    before = sentence[: match.start()]
+    cond = list(_CONDITIONAL.finditer(before))
+    if not cond:
+        return False
+    span = before[cond[-1].start() :]
+    _, comma, tail = span.partition(",")
+    claim_clause = tail if comma else span
+    if _CLAUSE_BREAK.search(claim_clause):
+        return False
+    if not comma and _HYPOTHETICAL.match(span):
+        between = re.findall(r"[\w']+", span.lower())[1:]
+        if all(w in _BRIDGE for w in between):
+            return True
+    if _MODAL.search(claim_clause) or re.match(r"(?:will|'ll)\b", match.group(0), re.I):
+        return True
+    return bool(_APPROVAL_CONDITION.match(span)) and _present_claim(claim_clause, match.group(0))
 
 
 def _scoped_negation(sentence: str, match: re.Match[str]) -> bool:
@@ -150,15 +222,7 @@ def _scoped_negation(sentence: str, match: re.Match[str]) -> bool:
         return True
     if _FUTURE.search(before):
         return True
-    cond = [c for c in _CONDITIONAL.finditer(before)]
-    if cond:
-        # A condition exempts only a future or modal claim, or one conditioned on the
-        # user's own approval; "when you asked I booked it" is a past-tense claim.
-        after_opener = before[cond[-1].start() :]
-        if _APPROVAL_CONDITION.match(after_opener) or _MODAL.search(after_opener):
-            return True
-        return bool(re.match(r"(?:will|'ll)\b", match.group(0), re.I))
-    return False
+    return _condition_exempts(sentence, match)
 
 
 def _real_claim(sentence: str, match: re.Match[str]) -> bool:
