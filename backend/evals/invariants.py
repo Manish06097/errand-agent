@@ -589,7 +589,8 @@ _NEGATED_TAIL = re.compile(
 _FUTURE_BE = re.compile(
     r"\b(?:will|would|shall|should|can|could)\s+(?:also\s+)?be\s*$|'ll\s+be\s*$"
 )
-_OPENER = re.compile(r"\b(?:once|after|when|if|unless|until)\b")
+# An opener counts only with a subject right after it ("if anything it's booked" has none).
+_OPENER = re.compile(r"\b(?:once|after|when|if|unless|until)\s+(?:you|i|it|the|they|we)\b")
 # The user's own approval, present tense: "approved" and "tapped" do not match.
 _APPROVAL_NOW = re.compile(
     r"\b(?:once|after|when|if)\s+(?:you|the user)\s+(?:taps?|approves?|confirms?|accepts?|"
