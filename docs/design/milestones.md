@@ -129,7 +129,7 @@ Acceptance:
 
 ## M8. Conversation quality
 
-Scope: `TimeWindowExpr` and `timewin.resolve`, `INVALIDATES` table and `invalidate` records, card invalidation on corrections, brief chips with provenance, value-bound evidence (section 10.7), out-of-coverage template, ranking with score parts and exclusions, reprompt for missing proposals, `NoEvidencePolicy`, `MatchingQuotePolicy` and `ReaskPolicy`.
+Scope: `TimeWindowExpr` and `timewin.resolve`, `INVALIDATES` table and `invalidate` records, card invalidation on corrections, brief chips with provenance, value-bound evidence (section 10.7), out-of-coverage template, the "Why this order" rendering of the score parts and the exclusion UX (the ranking function itself landed in M10), reprompt for missing proposals, `NoEvidencePolicy`, `MatchingQuotePolicy` and `ReaskPolicy`.
 
 Acceptance:
 - S04, S05, S51, S60 pass; S03 also passes with `ReaskPolicy` (the guard catches it).

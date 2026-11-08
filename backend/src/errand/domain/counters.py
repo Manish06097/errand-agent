@@ -1,8 +1,8 @@
 """RunCounters: the one counter type for a run.
 
-The model gateway and the tool gateway update the same instance while a run is live,
-which makes them authoritative; `plan` copies it into `ThreadState.counters` when it
-ends. There is no second copy that could drift.
+The model gateway, the tool gateway and the review reader update the same instance
+while a run is live, which makes them authoritative; `plan` copies it into
+`ThreadState.counters` when it ends. There is no second copy that could drift.
 """
 
 from __future__ import annotations
@@ -18,6 +18,9 @@ class RunCounters(BaseModel):
 
     model_calls: int = 0
     tool_calls: int = 0
+    # Quarantined reader calls that reached the model (cache hits and skips do not
+    # count). Capped separately; they never use up the planner's model calls.
+    reader_calls: int = 0
     reprompts: int = 0
     replans: int = 0
     tokens_in: int = 0

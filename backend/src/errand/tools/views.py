@@ -4,13 +4,14 @@ Each view is built once from a typed world answer, sanitized and compacted to it
 per-tool cap, and that rendering is what gets appended to the loop. Nothing is ever
 re-rendered later, so the loop prefix stays byte-identical.
 
-- search: at most 5 candidates with at most 3 window-matching slots each. Slot handles
-  (`S1`, `S2`, ...) are assigned here, in candidate order then slot order, and stored
-  in the `Shortlist`; the model only ever names a slot by its handle.
-- get_provider: a `ProviderView`, the contract fields minus `reviews` and `about`.
-  The key is absent, not an empty list: raw review text never reaches the planner,
-  not even as a hint of how many there were. The digest from the quarantined reader
-  joins it in M10.
+- search: at most 5 candidates with at most 3 window-matching slots each, in the
+  code's ranked order, with their score and badges. Slot handles (`S1`, `S2`, ...) are
+  assigned in `assemble_shortlist`, after the final order is known, in candidate order
+  then slot order, and stored in the `Shortlist`; the model only ever names a slot by
+  its handle.
+- get_provider: a `ProviderView`, the contract fields minus `reviews` and `about`, plus
+  the quarantined reader's digest (enum counts, no review ids, no text). The reviews
+  key is absent, not an empty list: raw review text never reaches the planner.
 - list_bookings: id, provider, service, slot label and status.
 
 The rendering is `<tool_data>{json}</tool_data>`; the static rules say that anything
@@ -21,13 +22,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import tzinfo
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 from errand.domain.brief import TimeWindow
-from errand.domain.slots import Candidate, Exclusion, Shortlist, SlotHandle
+from errand.domain.slots import Badge, Candidate, Exclusion, ReviewDigest, Shortlist, SlotHandle
 from errand.domain.windows import slot_fits, slot_label
 from errand.tools.sanitize import clean_name, clean_text
 from errand.world.contracts import (
@@ -35,6 +37,7 @@ from errand.world.contracts import (
     ListBookingsOut,
     ProviderSummary,
     SearchProvidersOut,
+    Slot,
 )
 
 SEARCH_MAX_CANDIDATES = 5
@@ -54,18 +57,26 @@ def render_error(error: str, **detail: Any) -> str:
     return render({"error": error, **detail})
 
 
-def build_shortlist(
+@dataclass(frozen=True)
+class Eligible:
+    """A provider that passed the hard filters, with the slots that fit the window."""
+
+    summary: ProviderSummary
+    name: str
+    fitting: list[Slot]
+
+
+def hard_filter(
     result: SearchProvidersOut,
     *,
     window: TimeWindow,
     budget: int | Literal["none"] | None,
-    brief_version: int,
     tz: tzinfo,
-) -> Shortlist:
-    """Hard filters (window, budget), then handles for the first slots of each candidate."""
-    candidates: list[Candidate] = []
+) -> tuple[list[Eligible], list[Exclusion]]:
+    """Hard filters (budget, window), in search order. No handles yet: those are given
+    only once the final order is known."""
+    eligible: list[Eligible] = []
     excluded: list[Exclusion] = []
-    next_ref = 1
     for p in result.providers:
         name = clean_name(p.name)
         if isinstance(budget, int) and p.price_inr > budget:
@@ -77,11 +88,41 @@ def build_shortlist(
                 Exclusion(provider_id=p.provider_id, name=name, reason="no_slot_in_window")
             )
             continue
+        eligible.append(Eligible(p, name, fitting))
+    return eligible, excluded
+
+
+@dataclass(frozen=True)
+class Placed:
+    """An eligible provider in its final place, with its score and reader digest."""
+
+    eligible: Eligible
+    score: float
+    score_parts: dict[str, float]
+    digest: ReviewDigest | None
+
+
+def assemble_shortlist(
+    ordered: Sequence[Placed],
+    excluded: Sequence[Exclusion],
+    *,
+    brief_version: int,
+    window_label: str,
+) -> Shortlist:
+    """The shortlist in its final order. Slot handles (`S1`, `S2`, ...) are assigned
+    here and only here, in that order, so the handles the planner sees, the ones stored
+    and the ones on the card are the same."""
+    candidates: list[Candidate] = []
+    dropped = list(excluded)
+    next_ref = 1
+    for placed in ordered:
+        e = placed.eligible
+        p = e.summary
         if len(candidates) >= SHORTLIST_MAX:
-            excluded.append(Exclusion(provider_id=p.provider_id, name=name, reason="over_cap"))
+            dropped.append(Exclusion(provider_id=p.provider_id, name=e.name, reason="over_cap"))
             continue
         handles = []
-        for slot in fitting[:SEARCH_MAX_SLOTS]:
+        for slot in e.fitting[:SEARCH_MAX_SLOTS]:
             handles.append(
                 SlotHandle(
                     ref=f"S{next_ref}",
@@ -91,25 +132,37 @@ def build_shortlist(
                 )
             )
             next_ref += 1
-        candidates.append(_candidate(p, name, handles))
+        candidates.append(_candidate(placed, handles))
     return Shortlist(
         brief_version=brief_version,
-        window_label=window.label,
+        window_label=window_label,
         candidates=candidates,
-        excluded=excluded,
+        excluded=dropped,
     )
 
 
-def _candidate(p: ProviderSummary, name: str, handles: list[SlotHandle]) -> Candidate:
+def badges_for(verified: bool, digest: ReviewDigest | None) -> list[Badge]:
+    out: list[Badge] = ["verified"] if verified else []
+    if digest is not None and digest.injection_flags > 0:
+        out.append("unverified_reviews")
+    return out
+
+
+def _candidate(placed: Placed, handles: list[SlotHandle]) -> Candidate:
+    e = placed.eligible
+    p = e.summary
     return Candidate(
         provider_id=p.provider_id,
-        name=name,
+        name=e.name,
         rating=p.rating,
         price_inr=p.price_inr,
         review_count=p.review_count,
         verified=p.attributes.verified,
         slots=handles,
-        badges=["verified"] if p.attributes.verified else [],
+        digest=placed.digest,
+        badges=badges_for(p.attributes.verified, placed.digest),
+        score=placed.score,
+        score_parts=dict(placed.score_parts),
     )
 
 
@@ -127,6 +180,8 @@ def search_view(shortlist: Shortlist, result: SearchProvidersOut, tz: tzinfo) ->
                 "review_count": c.review_count,
                 "verified": c.verified,
                 "years_experience": extra[c.provider_id].attributes.years_experience,
+                "score": c.score,
+                "badges": list(c.badges),
                 "slots": [{"ref": h.ref, "when": slot_label(h.slot, tz)} for h in c.slots],
             }
             for c in shown
@@ -161,6 +216,9 @@ class ProviderView(BaseModel):
     languages: list[str]
     brands: list[str]
     available_slots: list[SlotView]
+    # Enum counts from the quarantined reader; None when it was not read or the read
+    # failed. No review ids and no text.
+    digest: ReviewDigest | None = None
 
 
 def provider_view(
@@ -169,6 +227,7 @@ def provider_view(
     window: TimeWindow | None,
     shortlist: Shortlist | None,
     tz: tzinfo,
+    digest: ReviewDigest | None = None,
 ) -> ProviderView:
     refs = {}
     if shortlist is not None:
@@ -192,6 +251,7 @@ def provider_view(
             SlotView(when=slot_label(s, tz), ref=refs.get((result.provider_id, s.start)))
             for s in slots[:PROVIDER_MAX_SLOTS]
         ],
+        digest=digest,
     )
 
 

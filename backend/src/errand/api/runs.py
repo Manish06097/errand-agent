@@ -14,7 +14,7 @@ A run is a task the manager owns, with a strong reference held until it finishes
 is never garbage-collected and never tied to the request that started it: a closed tab
 or a dropped SSE connection cannot cancel it (ADR 0011). Each run gets its own tracer
 (JSONL first, then the live stream) and its own model and tool gateways, which share
-one `RunCounters`.
+one `RunCounters` with the run's quarantined review reader.
 
 Every run ends with exactly one `run.end` and a user-visible message. `respond` writes
 the normal one; if anything raises (or the 90 s backstop fires), the outer handler
@@ -44,12 +44,13 @@ from errand.agent.templates import internal_error
 from errand.api.locks import LeaseKeeper, ThreadLocks, thread_key
 from errand.api.sse import Broadcaster, RunStream
 from errand.clock import Clock, to_ms
-from errand.config import LimitSettings, ModelSettings
+from errand.config import LimitSettings, ModelSettings, ReaderSettings
 from errand.domain.counters import RunCounters
 from errand.domain.inbound import UserMessage
 from errand.domain.outcomes import RunOutcome
 from errand.ids import IdFactory, message_id_for, message_id_for_user
 from errand.llm.gateway import LLMGateway
+from errand.quarantine.reader import ReviewReader
 from errand.store.agent_db import AgentDB
 from errand.store.repos.messages import Message
 from errand.store.repos.runs import RunTotals
@@ -66,6 +67,10 @@ log = logging.getLogger(__name__)
 # Makes a scripted planner for one run (None in live mode: the gateway builds ChatAnthropic).
 ModelFactory = Callable[[], BaseChatModel | None]
 TRIGGERS: dict[RoutedAs, str] = {"input": "user_message", "resume": "user_message_resume"}
+
+
+def _no_reader() -> None:
+    return None
 
 
 class RunInProgress(Exception):
@@ -120,6 +125,8 @@ class RunManager:
         limits: LimitSettings,
         model_factory: ModelFactory,
         broadcaster: Broadcaster | None = None,
+        reader_factory: ModelFactory | None = None,
+        reader_settings: ReaderSettings | None = None,
         trace_sink: ProcessSink | None = None,
     ) -> None:
         self.graph = graph
@@ -131,6 +138,9 @@ class RunManager:
         self.model_settings = model_settings
         self.limits = limits
         self.model_factory = model_factory
+        # The scripted review reader for one run (None in live mode, like the planner).
+        self.reader_factory = reader_factory or _no_reader
+        self.reader_settings = reader_settings or ReaderSettings()
         self.broadcaster = broadcaster or Broadcaster()
         # The optional dashboard sink (Langfuse or NullSink), owned by the lifespan.
         self.trace_sink: ProcessSink = trace_sink or NullSink()
@@ -340,6 +350,17 @@ class RunManager:
             counters=run.counters,
             limits=ToolLimits(max_tool_calls=self.limits.tool_calls_per_run),
         )
+        reader = ReviewReader(
+            tracer=tracer,
+            counters=run.counters,
+            clock=self.clock,
+            db=self.db,
+            mode=self.model_settings.model_mode,
+            settings=self.reader_settings,
+            limits=self.limits,
+            transport=self.reader_factory(),
+            cassette_path=self.model_settings.cassette_path,
+        )
         return RunDeps(
             run_id=run.run_id,
             conversation_id=run.conversation_id,
@@ -352,6 +373,7 @@ class RunManager:
             clock=self.clock,
             tz=self.tz,
             limits=self.limits,
+            reader=reader,
             on_token=run.stream.publish_token,
         )
 

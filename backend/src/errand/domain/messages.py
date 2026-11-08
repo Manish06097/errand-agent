@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from errand.domain.brief import BriefField
 from errand.domain.outcomes import RunOutcome
+from errand.domain.slots import Badge
 
 
 class _Body(BaseModel):
@@ -47,6 +48,12 @@ class CandidateOption(_Body):
     price_inr: int
     verified: bool
     slots: list[SlotOption]
+    # Server data for the injection badge (M10): code decides all three from the
+    # quarantined reader's flags, never from review text or model output.
+    badges: list[Badge] = Field(default_factory=list)
+    injection_flags: int = 0
+    # "1 review hidden: it contained instructions to the assistant"
+    notice: str | None = None
 
 
 class ShortlistCard(_Body):

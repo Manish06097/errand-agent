@@ -16,9 +16,10 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import BaseMessage
 from pydantic import SecretStr
 
-from errand.config import LimitSettings, ModelSettings
+from errand.config import LimitSettings, ModelSettings, ReaderSettings
 
 PLANNER_THINKING: Mapping[str, str] = {"type": "adaptive", "display": "summarized"}
+READER_THINKING: Mapping[str, str] = {"type": "adaptive"}
 STRICT_BINDING: Mapping[str, str] = {"prefix_mismatch_behavior": "error"}
 # Scripted and replay modes never send anything, but ChatAnthropic still needs a key
 # to exist so its request payload can be computed. This is not a credential.
@@ -71,6 +72,53 @@ def planner_bind_kwargs(wire: ChatAnthropic, tools: Sequence[Any]) -> dict[str, 
         for t in kwargs["tools"]
     ]
     return kwargs
+
+
+def build_reader(
+    settings: ReaderSettings, *, api_key: SecretStr = OFFLINE_API_KEY
+) -> ChatAnthropic:
+    """The quarantined review reader (architecture 10.1), built the same in every mode.
+
+    No tools, no tool_choice, no temperature, no prefill and no block binding: Haiku 5.5
+    rejects temperature and prefill, and a single-turn request has no thinking history
+    to bind. Thinking counts toward max_tokens, so a max_tokens stop is a real failure.
+    """
+    return ChatAnthropic(
+        model=settings.model,
+        max_tokens=settings.max_tokens,
+        thinking=dict(READER_THINKING),
+        # Effort goes through output_config only, never the `effort` alias.
+        output_config={"effort": settings.effort},
+        anthropic_api_key=api_key,
+        default_request_timeout=settings.timeout_s,
+        max_retries=settings.max_retries,
+    )
+
+
+# langchain-core pops this before the model sees the call; it is tracing metadata for
+# LangSmith, not part of the request, so it never enters the canonical form.
+STRUCTURED_METADATA_KEY = "ls_structured_output_format"
+
+
+def structured_bind_kwargs(wire: ChatAnthropic, schema: type[Any]) -> dict[str, Any]:
+    """The kwargs ChatAnthropic.with_structured_output(method="json_schema") binds.
+
+    Every transport is bound with exactly these, so a scripted or replayed reader sees
+    the output_config.format a live call would send, and all modes hash the same. The
+    parser half of with_structured_output is not used: the caller parses the raw text
+    itself, strictly.
+    """
+    structured = wire.with_structured_output(schema, method="json_schema")
+    first = getattr(structured, "first", None)
+    kwargs = getattr(first, "kwargs", None)
+    if not isinstance(kwargs, Mapping) or "output_config" not in kwargs:
+        raise RuntimeError("with_structured_output no longer binds output_config; re-check")
+    return dict(kwargs)
+
+
+def call_kwargs(bind_kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    """The kwargs that reach the model's generate call (and so the canonical request)."""
+    return {k: v for k, v in bind_kwargs.items() if k != STRUCTURED_METADATA_KEY}
 
 
 # (messages, request kwargs such as tools and tool_choice) -> canonical request

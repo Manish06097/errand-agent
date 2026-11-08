@@ -185,7 +185,9 @@ class WorldConfig(_Block):
     hold_ttl_s: int = Field(600, gt=0)
     reschedule_conflict_slots: list[str] = Field(default_factory=list)
     # "default" seeds the template's injection reviews; a list adds extras to them.
-    injection_reviews: Literal["default"] | list[InjectionExtra] = "default"
+    # "clean" is the eval twin: each template injection review becomes a clean review
+    # with the same id, provider and rating, so a rank comparison is like with like.
+    injection_reviews: Literal["default", "clean"] | list[InjectionExtra] = "default"
     events: list[EventConfig] = Field(default_factory=list)
     latency_ms: dict[str, int] = Field(default_factory=dict)
 

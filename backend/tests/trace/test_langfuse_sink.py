@@ -182,9 +182,15 @@ def assert_mirrors(
         assert all(set(c) == {"total"} for c in costs)
         assert sum(c["total"] for c in costs) == pytest.approx(end["totals"]["cost_usd"], abs=1e-9)
         model_calls = [r for r in records if r["type"] == "model.call"]
-        assert len(generations) == len(model_calls) == end["totals"]["model_calls"]
+        # Reader calls are generations too (M15 mapping; the reader runs inside its own
+        # opening since M10), but they are never model_calls.
+        reader_calls = [r for r in records if r["type"] == "reader.call"]
+        assert len(model_calls) == end["totals"]["model_calls"]
+        assert len(generations) == len(model_calls) + len(reader_calls)
         for g in generations:
             usage = record_of[meta(g, "span_id")]["usage"]
+            if usage is None:  # a reader read that never reached the model
+                continue
             details = decoded(attrs(g)["langfuse.observation.usage_details"])
             assert details["input"] == usage["input_uncached"]
             assert details["input_cache_read"] == usage["cache_read"]
@@ -275,7 +281,8 @@ async def test_a_refused_model_call_exports_no_generation(
     # exactly what the JSONL says.
     generations = [s for s in spans if attrs(s)["langfuse.observation.type"] == "generation"]
     model_calls = [r for rs in runs.values() for r in rs if r["type"] == "model.call"]
-    assert len(generations) == len(model_calls)
+    reader_calls = [r for rs in runs.values() for r in rs if r["type"] == "reader.call"]
+    assert len(generations) == len(model_calls) + len(reader_calls)
     assert not [s for s in spans if attrs(s).get("langfuse.observation.level") == "ERROR"]
     assert_mirrors(runs, spans, thread)
 

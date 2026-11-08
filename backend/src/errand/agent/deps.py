@@ -1,7 +1,7 @@
 """RunDeps: everything a node needs for one run, passed as LangGraph's run context.
 
 The context is never checkpointed (unlike state), so live objects (the tracer, both
-gateways, the database) belong here. The RunManager builds one per run.
+gateways, the review reader, the database) belong here. The RunManager builds one per run.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from errand.clock import Clock
 from errand.config import LimitSettings
 from errand.domain.counters import RunCounters
 from errand.llm.gateway import LLMGateway
+from errand.quarantine.reader import ReviewReader
 from errand.store.agent_db import AgentDB
 from errand.tools.gateway import ToolGateway
 from errand.trace.tracer import Tracer
@@ -34,4 +35,7 @@ class RunDeps:
     clock: Clock
     tz: tzinfo
     limits: LimitSettings
+    # The quarantined review reader; it never gets `on_token`, so nothing it returns can
+    # reach the SSE stream as a token.
+    reader: ReviewReader
     on_token: TokenSink | None = None
