@@ -45,6 +45,9 @@ class RunTotals(BaseModel):
     tokens_out: NonNegativeInt
     cost_usd: NonNegativeFloat
     latency_ms: NonNegativeFloat
+    # Quarantined reader calls that reached the model; their cost and tokens are in the
+    # totals above, but they are not model_calls (M10, additive).
+    reader_calls: NonNegativeInt = 0
 
 
 class RunStart(Envelope):
@@ -126,6 +129,9 @@ class ModelCall(Envelope):
 
 
 class ReaderCall(Envelope):
+    """One quarantined reader read. Never a request body and never review text: ids,
+    hashes, enum labels, usage and how it ended."""
+
     type: Literal["reader.call"]
     provider_id: str
     reviews_sha256: str
@@ -134,6 +140,17 @@ class ReaderCall(Envelope):
     labels: dict[str, Json] | list[Json] | None = None
     usage: Usage | None = None
     cost_usd: NonNegativeFloat | None = None
+    # Added in M10 (schema v1, additive); M15 maps these to a Langfuse generation.
+    reader_model: str | None = None
+    latency_ms: NonNegativeFloat | None = None
+    stop_reason: str | None = None
+    # Why there is no digest: timeout, refusal, max_tokens, schema_violation,
+    # transport_error, cap_reached, deadline, cost_cap. None when labels were produced.
+    error: str | None = None
+    request_sha256: str | None = None
+    # Counts of what code dropped from an otherwise valid answer (unknown ids,
+    # duplicates, themes past 3). Counts only, so no model-chosen string lands here.
+    dropped: dict[str, NonNegativeInt] | None = None
 
 
 class ToolCall(Envelope):

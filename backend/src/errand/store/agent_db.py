@@ -22,6 +22,7 @@ from errand.store.db import open_agent_db, transaction_immediate
 from errand.store.repos.conversations import ConversationsRepo
 from errand.store.repos.leases import LeasesRepo
 from errand.store.repos.messages import MessagesRepo
+from errand.store.repos.reader_cache import ReaderCacheRepo
 from errand.store.repos.runs import RunsRepo
 from errand.store.repos.users import UsersRepo
 
@@ -34,6 +35,7 @@ class Repos:
     messages: MessagesRepo
     runs: RunsRepo
     leases: LeasesRepo
+    reader_cache: ReaderCacheRepo
 
 
 class AgentDB:
@@ -47,6 +49,7 @@ class AgentDB:
             messages=MessagesRepo(conn),
             runs=RunsRepo(conn),
             leases=LeasesRepo(conn),
+            reader_cache=ReaderCacheRepo(conn),
         )
 
     @classmethod

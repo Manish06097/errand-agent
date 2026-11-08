@@ -53,6 +53,28 @@ class LimitSettings(BaseSettings):
     tool_calls_per_run: int = 16
     run_deadline_s: float = 60.0
     run_backstop_s: float = 90.0
+    # Per-run cost cap (15.1). M10 applies it to the quarantined reader only: a reader
+    # call is skipped once the run has spent this much. M13 applies it to the planner.
+    run_cost_cap_usd: float = 0.40
+
+
+class ReaderSettings(BaseSettings):
+    """The quarantined review reader (architecture 10.1, 11, 15.1)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_READER_", extra="ignore")
+
+    model: str = "claude-haiku-5-5"
+    effort: Effort = "low"
+    # Adaptive thinking counts toward max_tokens, so a max_tokens stop is real and fails
+    # closed like any other bad answer.
+    max_tokens: int = 1_500
+    timeout_s: float = Field(default=20.0, gt=0)
+    # Explicit, like the planner's. 0: a reader failure only costs the digest, and every
+    # retry would stretch the worst case past the 20 s the deadline rule plans for.
+    max_retries: int = Field(default=0, ge=0)
+    calls_per_run: int = Field(default=4, ge=0)
+    # Newest reviews per provider the reader is given.
+    max_reviews: int = Field(default=10, gt=0)
 
 
 class PathSettings(BaseSettings):

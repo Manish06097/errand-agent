@@ -111,6 +111,7 @@ class Tracer:
         self._run_span: str | None = None
         self._run_started: float | None = None
         self._model_calls = 0
+        self._reader_calls = 0
         self._tool_calls = 0
         self._tokens_in = 0
         self._tokens_out = 0
@@ -279,6 +280,7 @@ class Tracer:
             tokens_out=self._tokens_out,
             cost_usd=float(self._cost),
             latency_ms=(self._perf() - started) * 1000,
+            reader_calls=self._reader_calls,
         )
         return self.emit(
             "run.end",
@@ -322,6 +324,27 @@ class Tracer:
         self._tokens_in += usage.input_total
         self._tokens_out += usage.output
         self._cost += Decimal(str(record["cost_usd"]))
+        return record
+
+    def reader_call(
+        self, *, called: bool, usage: Usage | None, cost: Decimal | None, **fields: Any
+    ) -> dict[str, Any]:
+        """reader.call. A read that went to the model (`called`, whether or not it then
+        failed) counts as a reader call, never as a model call; whatever usage and cost
+        it reported go into the run totals."""
+        record = self.emit(
+            "reader.call",
+            usage=None if usage is None else usage.model_dump(),
+            cost_usd=None if cost is None else float(cost),
+            **fields,
+        )
+        if called:
+            self._reader_calls += 1
+        if usage is not None:
+            self._tokens_in += usage.input_total
+            self._tokens_out += usage.output
+        if record["cost_usd"] is not None:
+            self._cost += Decimal(str(record["cost_usd"]))
         return record
 
     def tool_call(self, **fields: Any) -> dict[str, Any]:

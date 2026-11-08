@@ -78,6 +78,7 @@ module = [
   "errand.trace", "errand.trace.*",
   "errand.llm", "errand.llm.*",
   "errand.usage",
+  "errand.quarantine", "errand.quarantine.*",
 ]
 disallow_any_generics = true
 disallow_subclassing_any = true
@@ -158,7 +159,7 @@ layers = ["errand.llm", "errand.trace", "errand.usage"]
 [[tool.importlinter.contracts]]
 name = "Agent, API, context and model code reach the world only through errand.tools (world.contracts types are fine)"
 type = "forbidden"
-source_modules = ["errand.agent", "errand.api", "errand.context", "errand.llm"]
+source_modules = ["errand.agent", "errand.api", "errand.context", "errand.llm", "errand.quarantine"]
 forbidden_modules = [
   "errand.world.engine",
   "errand.world.store",
