@@ -165,6 +165,9 @@ class Guarded:
     removed: list[str] = field(default_factory=list)
 
 
+_SUBJECTS = frozenset({"i", "we", "you", "they", "he", "she"})
+
+
 def _negated_before(clause: str) -> bool:
     """True when the nearest negator before the claim reaches it by its own rule."""
     text = re.sub(r"\byet to\b", "not", _IDIOMS.sub(" ", clause), flags=re.I)
@@ -176,6 +179,8 @@ def _negated_before(clause: str) -> bool:
             continue
         between = words[i + 1 :]
         base = word.removesuffix("'s")
+        if base == "never" and len(between) >= 2 and between[1] in _SUBJECTS:
+            return False  # inversion: "never have I booked" is a claim, not a negation
         if base in ("nothing", "none"):
             return all(w in _AUXILIARY for w in between)
         if base == "no":
