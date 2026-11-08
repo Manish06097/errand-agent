@@ -34,7 +34,7 @@ import httpx
 
 from errand.api.app import AppConfig, create_app, scripted_factory
 from errand.api.runs import ModelFactory
-from errand.clock import IST, from_ms, to_ms
+from errand.clock import AGENT_CLOCK_HEADER, IST, ClockMode, from_ms, parse_clock_header
 from errand.config import ApprovalSettings, LimitSettings, ModelSettings
 from errand.domain.brief import BriefField
 from errand.domain.messages import ClarifyCard
@@ -165,7 +165,9 @@ class Harness:
         reader_factory: ModelFactory | None = None,
         limits: LimitSettings | None = None,
         consequential: Any = None,
+        clock_mode: ClockMode = "sim",
     ) -> None:
+        self.clock_mode = clock_mode
         self.root = root
         self.limits = limits or LimitSettings()
         self.world_config = world
@@ -184,7 +186,7 @@ class Harness:
         self._action_seq = 0
 
     async def __aenter__(self) -> Harness:
-        self.host.load(self.world_config, "sim")
+        self.host.load(self.world_config, self.clock_mode)
         self._stack.callback(self.host.close)
         self.app = create_app(
             AppConfig(
@@ -273,7 +275,13 @@ class Harness:
         )
 
     async def now_ms(self) -> int:
-        return to_ms(await self.inspector.now())
+        """The client's clock: synced from the API's `X-Agent-Clock` (17.3), never read
+        from the SimClock or the world, so the evals exercise the surface a real client
+        has. A `sim` clock is its own `now_ms`."""
+        response = await self.client.get("/api/health")
+        reading = parse_clock_header(response.headers[AGENT_CLOCK_HEADER])
+        assert reading.mode == "sim" or reading.offset_ms is not None
+        return reading.now_ms
 
     async def tick(self, seconds: float = 1.0) -> int:
         """The client's clock: the simulated clock, nudged forward first."""
@@ -332,9 +340,18 @@ async def harness(
     reader_factory: ModelFactory | None = None,
     limits: LimitSettings | None = None,
     consequential: Any = None,
+    clock_mode: ClockMode = "sim",
 ) -> AsyncIterator[Harness]:
     async with Harness(
-        root, world, policy, model_factory, reader, reader_factory, limits, consequential
+        root,
+        world,
+        policy,
+        model_factory,
+        reader,
+        reader_factory,
+        limits,
+        consequential,
+        clock_mode,
     ) as h:
         yield h
 

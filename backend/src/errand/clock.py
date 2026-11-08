@@ -24,6 +24,7 @@ IST = timezone(timedelta(hours=5, minutes=30), "IST")
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
 CLOCK_HEADER = "X-World-Clock"
+AGENT_CLOCK_HEADER = "X-Agent-Clock"
 ClockMode = Literal["sim", "system_offset"]
 
 
@@ -54,6 +55,8 @@ class Clock(Protocol):
 
 class SimClock:
     """Simulated time. Only `sleep`, `advance` and `set` move it."""
+
+    mode: ClockMode = "sim"
 
     def __init__(
         self, start: datetime, on_change: Callable[[datetime], None] | None = None
@@ -89,6 +92,8 @@ class SimClock:
 
 class SystemClock:
     """Real time plus an offset in milliseconds."""
+
+    mode: ClockMode = "system_offset"
 
     def __init__(self, offset_ms: int = 0) -> None:
         self.offset_ms = offset_ms
@@ -187,3 +192,14 @@ class TrackingClock:
         if self._reading is None:
             raise RuntimeError("TrackingClock has not seen the world clock yet")
         return self._reading
+
+
+def reading_of(clock: Clock) -> ClockReading:
+    """The agent clock as a client must sync to it (17.3): the mode, the agent's `now` in
+    epoch ms, and, in `system_offset` mode, how far `now` is from real time. A client
+    stamps `client_composed_at` as its own real clock plus that offset (or, in `sim`
+    mode, as `now_ms` itself, since simulated time only moves when told to)."""
+    now_ms = to_ms(clock.now())
+    mode: ClockMode = "system_offset" if getattr(clock, "mode", "sim") == "system_offset" else "sim"
+    offset_ms = now_ms - to_ms(datetime.now(UTC)) if mode == "system_offset" else 0
+    return ClockReading(mode=mode, now_ms=now_ms, offset_ms=offset_ms)

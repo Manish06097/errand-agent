@@ -34,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
@@ -43,7 +43,7 @@ from typing import Any, Literal
 
 import uvicorn
 from fastapi import FastAPI, Header, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, ConfigDict, Field
@@ -65,7 +65,7 @@ from errand.api.runs import (
 from errand.api.sse import stream_events
 from errand.approvals import service
 from errand.approvals.typed_grant import VisibleCard as VisibleCardRef
-from errand.clock import IST, to_ms
+from errand.clock import AGENT_CLOCK_HEADER, IST, encode_clock_header, reading_of, to_ms
 from errand.config import (
     ApprovalSettings,
     LangfuseKeys,
@@ -74,6 +74,7 @@ from errand.config import (
     PathSettings,
     TraceSettings,
 )
+from errand.domain.messages import MessageBody
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
 from errand.store.agent_db import AgentDB
@@ -168,6 +169,53 @@ class ActionIn(BaseModel):
     client_action_id: str = Field(min_length=1, max_length=100)
     kind: Literal["select_slot", "refresh_hold"]
     payload: dict[str, str] = Field(default_factory=dict)
+
+
+class ApprovalStatusOut(BaseModel):
+    """The live status of the approval a card or reminder is about, beside its body."""
+
+    status: str
+    reason: str | None = None
+    fingerprint: str
+    expires_at: int
+
+
+class MessageOut(BaseModel):
+    message_id: str
+    role: Literal["user", "assistant"]
+    kind: str
+    body: MessageBody
+    run_id: str | None = None
+    turn_no: int | None = None
+    created_at: int
+    approval_id: str | None = None
+    typed_grant_ok: bool | None = None
+    rendered_at: int | None = None
+    approval: ApprovalStatusOut | None = None
+
+
+class RunOut(BaseModel):
+    run_id: str
+    status: str
+    outcome: str | None = None
+    trigger: str | None = None
+
+
+class ClockOut(BaseModel):
+    """The agent clock (5.7): what `client_composed_at` must be measured against."""
+
+    mode: Literal["sim", "system_offset"]
+    now_ms: int
+    offset_ms: int
+
+
+class ConversationOut(BaseModel):
+    conversation_id: str
+    messages: list[MessageOut]
+    runs: list[RunOut]
+    active_run_id: str | None = None
+    state: dict[str, Any] | None = None
+    clock: ClockOut
 
 
 def parse_client_ms(value: str | None) -> int | None:
@@ -295,6 +343,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     app = FastAPI(title=SERVICE, lifespan=lifespan)
 
+    @app.middleware("http")
+    async def agent_clock_header(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """`X-Agent-Clock: <mode>; now_ms=...; offset_ms=...` on every /api response, the
+        clock a client syncs to for `client_composed_at` (17.3), mirroring X-World-Clock."""
+        response = await call_next(request)
+        manager = getattr(request.app.state, "manager", None)
+        if manager is not None:
+            reading = reading_of(manager.clock)
+            response.headers[AGENT_CLOCK_HEADER] = encode_clock_header(
+                reading.mode, reading.now_ms, reading.offset_ms
+            )
+        return response
+
     def manager_of(request: Request) -> RunManager:
         manager: RunManager = request.app.state.manager
         return manager
@@ -323,7 +386,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             )
         return {"conversation_id": conversation_id}
 
-    @app.get("/api/conversations/{conversation_id}", response_model=None)
+    @app.get(
+        "/api/conversations/{conversation_id}",
+        response_model=ConversationOut,
+        responses={404: {"description": "unknown conversation"}},
+    )
     async def get_conversation(conversation_id: str, request: Request) -> Any:
         manager = manager_of(request)
         async with manager.db.session() as repos:
@@ -351,6 +418,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             ],
             "active_run_id": manager.active_run(conversation_id),
             "state": _state_view(snapshot.values, snapshot.next, bool(snapshot.interrupts)),
+            "clock": reading_of(manager.clock).__dict__,
         }
 
     @app.post("/api/conversations/{conversation_id}/messages", response_model=None)
