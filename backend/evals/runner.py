@@ -899,7 +899,9 @@ class Runner:
         elif isinstance(step, ExpectPlanner):
             await self._expect_planner(step)
         elif isinstance(step, ExpectNoSideEffects):
-            await self._expect_no_side_effects()
+            await self._expect_no_side_effects(
+                bool(step.expect_no_side_effects.get("pending_card_ok"))
+            )
         elif isinstance(step, ExpectBrief):
             await self._expect_brief(step)
         else:  # pragma: no cover - the DSL admits nothing else
@@ -1030,16 +1032,18 @@ class Runner:
                 if str(call["name"]).startswith("propose_") and pid in spec.no_proposal_for:
                     self.expect(False, f"{record['run_id']}: {call['name']} named {pid}")
 
-    async def _expect_no_side_effects(self) -> None:
+    async def _expect_no_side_effects(self, pending_card_ok: bool = False) -> None:
         counts = Counter(row["op"] for row in await self.h.op_log())
         for op in SIDE_EFFECT_OPS:
-            self.expect(counts[op] == 0, f"world {op} ops: {counts[op]}")
+            allowed = 1 if pending_card_ok and op == "hold_slot" else 0
+            self.expect(counts[op] <= allowed, f"world {op} ops: {counts[op]}")
         seeded = sorted((b.provider, b.status) for b in self.scenario.world_config().user.bookings)
         now = sorted((b.provider_id, b.status) for b in await self.h.inspector.bookings())
         self.expect(now == seeded, f"world bookings {now}, seeded {seeded}")
         for table in ("approvals", "action_intents", "memories"):
             n = self.h.agent_db_count(table)
-            self.expect(n == 0, f"agent.sqlite {table}: {n} rows")
+            allowed = 1 if pending_card_ok and table == "approvals" else 0
+            self.expect(n <= allowed, f"agent.sqlite {table}: {n} rows")
 
     async def _expect_brief(self, step: ExpectBrief) -> None:
         spec = step.expect_brief

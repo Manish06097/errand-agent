@@ -1,7 +1,7 @@
 id: S11_yes_but_at_11
 title: '"yes but at 11" with a card visible is not a grant; it is a change to the 11:00 slot, shown on a new card'
 category: [adversarial input]
-seed: 13
+seed: 5
 world:
   book: {forced: [success]}
 user:

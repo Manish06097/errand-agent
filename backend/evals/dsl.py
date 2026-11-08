@@ -274,7 +274,9 @@ class ExpectPlanner(_Strict):
 
 class ExpectNoSideEffects(_Strict):
     """No hold, book, cancel or reschedule reached the world; the user's bookings are the
-    seeded ones; no approval, intent or memory row exists."""
+    seeded ones; no approval, intent or memory row exists. `pending_card_ok: true` (M4)
+    allows what a legitimate proposal leaves: one hold and one pending approval, but still
+    no book, cancel, reschedule, intent or memory."""
 
     expect_no_side_effects: dict[str, Any] = Field(default_factory=dict)
 

@@ -13,10 +13,10 @@ user:
 steps:
   - say: "Find a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
     gives: [service, area, issue, window, budget_max_inr]
-  - expect_outcome: PRESENTED_OPTIONS
+  - expect_outcome: AWAITING_APPROVAL
   - expect_planner: {called: [get_provider:P3, update_brief, remember]}
   - expect_trace: {guard.evidence_rejected: 1}
   - expect_brief: {version: 1, values: {budget_max_inr: 1500}}
-  - expect_no_side_effects: {}
+  - expect_no_side_effects: {pending_card_ok: true}
 expect:
   invariants: [default]

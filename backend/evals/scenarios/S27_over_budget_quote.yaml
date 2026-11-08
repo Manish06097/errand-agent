@@ -3,7 +3,8 @@ title: Every held quote is over the budget; no approval row is created, the plan
 category: [approval]
 seed: 27
 world:
-  quote_drift: {mode: on_hold, providers: {P1: 1000, P2: 1000}}
+  # every provider, so the scenario does not depend on who ranks first
+  quote_drift: {mode: on_hold, providers: {P1: 2000, P2: 2000, P3: 2000, P4: 2000, P5: 2000, P6: 2000, P7: 2000, P8: 2000, P9: 2000, P10: 2000, P11: 2000, P12: 2000, P13: 2000, P14: 2000, P15: 2000, P16: 2000, P17: 2000, P18: 2000, P19: 2000, P20: 2000}}
 user:
   persona: cooperative
   goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
