@@ -65,3 +65,47 @@ def test_round2_the_guard_keeps_no_leaked_claim_and_still_exempts_real_negation(
         assert guard(text, [], IST).text == "", text
     for text in _STILL_EXEMPT:
         assert guard(text, [], IST).text == text, text
+
+
+# Third fix (round 3): a condition reached the claim across clause breaks and past-tense
+# approval verbs, and an interjection "No" or "Nothing to do" reached it through pronouns
+# and determiners. Both layers (the guard and INV-04) had the holes, with separate code.
+ROUND3_LEAKS = [
+    "Once you approved I booked Sharma Plumbing for Saturday.",
+    "No the plumber is booked.",
+    "Once you approve it will be booked, and I already booked Sharma for Saturday.",
+    "If you need anything I can help, but I've booked Sharma for Saturday.",
+    "When I checked, the slot could go fast, so I booked it.",
+    "After you tapped approve, I booked Sharma Plumbing for Saturday.",
+    "No I booked it already.",
+    "Nothing to do it's booked.",
+    "Nothing to do I have booked it.",
+    "Once you tap approve I've booked Sharma for Saturday.",
+    "Once you confirmed it is booked.",
+    "Once the plumber confirms it will be booked, but I booked Ramesh for Saturday.",
+    "If you approve it will be booked, so I already booked it.",
+    "I have yet to book anything, but I booked it.",
+    "Once you approve, nothing is booked, and I booked Sharma.",
+    "Never mind I booked it for Saturday.",
+]
+ROUND3_STILL_EXEMPT = [
+    "I haven't booked anything yet.",
+    "Nothing has been booked.",
+    "It is not yet confirmed.",
+    "No booking has been made yet.",
+    "The plumber has not been booked.",
+    "No plumber is booked.",
+    "Once you approve, it will be booked.",
+    "Once you approve it is booked.",
+    "Once you approve, it is booked.",
+    "If it's booked, you'll get a message.",
+    "I wasn't able to get it booked.",
+]
+
+
+def test_round3_the_guard_keeps_no_leaked_claim_and_still_exempts_real_negation() -> None:
+    for text in ROUND3_LEAKS:
+        assert guard(text, [], IST).text == "", text
+    for text in ROUND3_STILL_EXEMPT:
+        assert guard(text, [], IST).text == text, text
+    assert guard("If you're wondering, it is confirmed.", [], IST).text == ""

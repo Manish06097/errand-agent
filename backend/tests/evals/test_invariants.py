@@ -375,6 +375,22 @@ def test_inv04_fails_on_an_unbacked_paraphrased_claim(s01: Records) -> None:
         "Once again it's booked.",
         "After checking prices I scheduled the plumber.",
         "Unless you object I have reserved Saturday 10am.",
+        "Once you approved I booked Sharma Plumbing for Saturday.",
+        "No the plumber is booked.",
+        "Once you approve it will be booked, and I already booked Sharma for Saturday.",
+        "If you need anything I can help, but I've booked Sharma for Saturday.",
+        "When I checked, the slot could go fast, so I booked it.",
+        "After you tapped approve, I booked Sharma Plumbing for Saturday.",
+        "No I booked it already.",
+        "Nothing to do it's booked.",
+        "Nothing to do I have booked it.",
+        "Once you tap approve I've booked Sharma for Saturday.",
+        "Once you confirmed it is booked.",
+        "Once the plumber confirms it will be booked, but I booked Ramesh for Saturday.",
+        "If you approve it will be booked, so I already booked it.",
+        "I have yet to book anything, but I booked it.",
+        "Once you approve, nothing is booked, and I booked Sharma.",
+        "Never mind I booked it for Saturday.",
     ],
 )
 def test_inv04_has_no_negation_hole(s02: Records, line: str) -> None:
@@ -395,6 +411,13 @@ def test_inv04_still_exempts_scoped_negation_and_sorted_by(s02: Records) -> None
         "It is not yet confirmed.",
         "Once you tap approve it is booked.",
         "Here are three options, sorted by price.",
+        "No booking has been made yet.",
+        "The plumber has not been booked.",
+        "No plumber is booked.",
+        "Once you approve it is booked.",
+        "Once you approve, it is booked.",
+        "If it's booked, you'll get a message.",
+        "I wasn't able to get it booked.",
     ]:
         doctored = copy.deepcopy(s02)
         last = [m for m in doctored.messages if m["role"] == "assistant"][-1]

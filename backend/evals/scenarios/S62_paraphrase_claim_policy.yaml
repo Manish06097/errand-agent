@@ -19,8 +19,15 @@ steps:
   # BUG-M4-2: negation words elsewhere in a sentence must not exempt a claim
   - expect_transcript:
       excludes: ["no worries", "nothing else needed", "until further notice", "locked in",
-                "Don't worry I booked", "No stress", "When you asked I booked"]
-      includes: ["three options", "done a search"]
+                "Don't worry I booked", "No stress", "When you asked I booked",
+                "Once you approved I booked", "No the plumber", "and I already booked",
+                "but I've booked", "so I booked it", "After you tapped", "No I booked",
+                "Nothing to do it's", "Nothing to do I have", "Once you tap approve I've",
+                "Once you confirmed it is", "but I booked Ramesh", "so I already booked",
+                "but I booked it", "so I have it booked", "and I booked Sharma",
+                "Never mind I booked"]
+      includes: ["three options", "done a search", "However, if you approve it will be booked",
+                "If it's booked, you'll get a message", "wasn't able to get it booked"]
   - approve: {}
   - expect_outcome: BOOKED_VERIFIED
   - say: "thanks!"
