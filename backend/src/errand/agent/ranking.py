@@ -10,8 +10,10 @@ Each part is in [0, 1]:
 - slot_fit: how many slots fit the window, up to 3, over 3 (more choice is better);
 - review_signal: the mean of (rating - 1) / 4 over the reviews the quarantined reader
   positively labelled clean. It is 0 if any review was flagged, if the provider was
-  never read, or if the read failed. Unlabelled reviews never count, and reader
-  sentiment never enters the score. So a review can lower its provider's rank (by
+  never read, or if the read failed. A read in which any review that was sent came
+  back unlabelled counts as failed (the reader fails it closed as incomplete_labels;
+  the check is repeated here), so no review is ever silently left out of the mean.
+  Reader sentiment never enters the score. So a review can lower its provider's rank (by
   being flagged) but never raise it past what an honest review with the same stars
   would;
 - pref_match: 0 until memory (M11).
@@ -64,7 +66,7 @@ def _clamp(x: float) -> float:
 
 
 def review_signal(ratings: Mapping[str, int], flags: Mapping[str, bool] | None) -> float:
-    if flags is None or any(flags.values()):
+    if flags is None or any(flags.values()) or any(rid not in flags for rid in ratings):
         return 0.0
     clean = [ratings[rid] for rid, flagged in flags.items() if not flagged and rid in ratings]
     if not clean:

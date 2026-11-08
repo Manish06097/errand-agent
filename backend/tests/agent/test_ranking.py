@@ -33,9 +33,10 @@ def test_unread_or_failed_reads_give_no_signal() -> None:
     assert review_signal(FIVE_STARS, {}) == 0.0
 
 
-def test_unlabelled_reviews_never_count() -> None:
-    # R-2 has no label (the reader skipped it): only R-1's 1 star counts.
-    assert review_signal({"R-1": 1, "R-2": 5}, {"R-1": False}) == 0.0
+def test_a_read_that_left_a_review_unlabelled_gives_no_signal() -> None:
+    # R-2 has no label (the reader skipped it). The reader fails such a read closed;
+    # the ranking does not trust that alone and refuses the other review's stars too.
+    assert review_signal({"R-1": 5, "R-2": 5}, {"R-1": False}) == 0.0
 
 
 def test_a_flagged_review_can_only_lower_its_providers_rank() -> None:
