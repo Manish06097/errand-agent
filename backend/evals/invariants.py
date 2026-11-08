@@ -584,7 +584,7 @@ _NO_NOUN = (
 _NEGATED_TAIL = re.compile(
     rf"\b{_NEG_WORD}(?:\s+{_FILLER})*\s*$"
     rf"|\bno\s+{_NO_NOUN}(?:\s+{_AUX})*\s*$"
-    rf"|\b(?:nothing|none)(?:\s+{_AUX})*\s*$"
+    rf"|\b(?:nothing|none)(?:'s)?(?:\s+{_AUX})*\s*$"
 )
 _FUTURE_BE = re.compile(
     r"\b(?:will|would|shall|should|can|could)\s+(?:also\s+)?be\s*$|'ll\s+be\s*$"

@@ -391,6 +391,15 @@ def test_inv04_fails_on_an_unbacked_paraphrased_claim(s01: Records) -> None:
         "I have yet to book anything, but I booked it.",
         "Once you approve, nothing is booked, and I booked Sharma.",
         "Never mind I booked it for Saturday.",
+        "Once you tapped approve it is booked.",
+        "Once you approve I booked it.",
+        "Once you approve it has been booked.",
+        "No, I booked it already.",
+        "Nope I booked it.",
+        "Nothing to worry about I booked it.",
+        "Nothing happened and it's booked.",
+        "I don't think so I booked it.",
+        "If you want I have booked Sharma.",
     ],
 )
 def test_inv04_has_no_negation_hole(s02: Records, line: str) -> None:
@@ -418,6 +427,9 @@ def test_inv04_still_exempts_scoped_negation_and_sorted_by(s02: Records) -> None
         "Once you approve, it is booked.",
         "If it's booked, you'll get a message.",
         "I wasn't able to get it booked.",
+        "Nothing's been booked.",
+        "None are booked yet.",
+        "I couldn't get it booked.",
     ]:
         doctored = copy.deepcopy(s02)
         last = [m for m in doctored.messages if m["role"] == "assistant"][-1]

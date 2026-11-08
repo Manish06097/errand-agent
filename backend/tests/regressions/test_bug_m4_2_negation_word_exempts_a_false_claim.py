@@ -87,6 +87,16 @@ ROUND3_LEAKS = [
     "I have yet to book anything, but I booked it.",
     "Once you approve, nothing is booked, and I booked Sharma.",
     "Never mind I booked it for Saturday.",
+    # probes: past against present, interjection against determiner, next clause
+    "Once you tapped approve it is booked.",
+    "Once you approve I booked it.",
+    "Once you approve it has been booked.",
+    "No, I booked it already.",
+    "Nope I booked it.",
+    "Nothing to worry about I booked it.",
+    "Nothing happened and it's booked.",
+    "I don't think so I booked it.",
+    "If you want I have booked Sharma.",
 ]
 ROUND3_STILL_EXEMPT = [
     "I haven't booked anything yet.",
@@ -100,6 +110,9 @@ ROUND3_STILL_EXEMPT = [
     "Once you approve, it is booked.",
     "If it's booked, you'll get a message.",
     "I wasn't able to get it booked.",
+    "Nothing's been booked.",
+    "None are booked yet.",
+    "I couldn't get it booked.",
 ]
 
 
