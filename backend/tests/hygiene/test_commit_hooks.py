@@ -12,6 +12,7 @@ import string
 import pytest
 
 from tests.hygiene.repo import CLEAN_DESIGN_NOTE, HookedRepo
+from tests.hygiene.test_design_note import skeleton
 
 EM_DASH = chr(0x2014)
 ROBOT = chr(0x1F916)
@@ -176,7 +177,9 @@ def _over_budget(note: str, section: str, extra_words: int) -> str:
 
 
 def test_over_budget_design_note_is_rejected(hooked_repo: HookedRepo) -> None:
-    note = CLEAN_DESIGN_NOTE.read_text(encoding="utf-8")
+    # The structure of the real note, none of its prose: it fills up milestone by milestone
+    # (BUG-M2-1, BUG-M4-1), and this test adds words to Approval and counts them.
+    note = skeleton(CLEAN_DESIGN_NOTE.read_text(encoding="utf-8"))
     ok = hooked_repo.commit({"docs/DESIGN_NOTE.md": note}, "Add design note\n")
     assert ok.returncode == 0, ok.stdout + ok.stderr
     before = hooked_repo.head_count()
