@@ -14,7 +14,8 @@ period, each still writing its message and `run.end`) before closing anything.
 
 In scripted mode (the offline default) the planner is a `ScriptedChatModel` driven by
 the policy named in ERRAND_SCRIPTED_POLICY, by default the eval suite's reference
-policy, so `make dev` works end to end with curl and no API key.
+policy, and the review reader one driven by ERRAND_SCRIPTED_READER (the keyword test
+double), so `make dev` works end to end with curl and no API key.
 """
 
 from __future__ import annotations
@@ -74,6 +75,9 @@ class AgentSettings(BaseSettings):
     world_url: str | None = None
     # module:attribute of the scripted planner policy used in scripted mode.
     scripted_policy: str = "evals.policies.reference:policy"
+    # module:attribute of the scripted review reader used in scripted mode. The default
+    # keyword double is a test stand-in, not a defence.
+    scripted_reader: str = "evals.policies.reader:keyword"
     # sim: c_0001, r_0001 ...; live: uuid7. Default follows the model mode.
     id_mode: Literal["sim", "live"] | None = None
     user_id: str = "u_demo"
@@ -86,6 +90,7 @@ class AppConfig:
     data_dir: Path | None = None
     world: WorldAccess | None = None
     model_factory: ModelFactory | None = None
+    reader_factory: ModelFactory | None = None
     ids: IdFactory | None = None
     model_settings: ModelSettings | None = None
     limits: LimitSettings | None = None
@@ -180,6 +185,12 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     factory = scripted_factory(load_policy(settings.scripted_policy))
                 else:
                     factory = _no_transport
+            reader_factory = config.reader_factory
+            if reader_factory is None:
+                if model_settings.model_mode == "scripted":
+                    reader_factory = scripted_factory(load_policy(settings.scripted_reader))
+                else:
+                    reader_factory = _no_transport
             manager = RunManager(
                 graph=build_graph(saver),
                 db=db,
@@ -190,6 +201,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 model_settings=model_settings,
                 limits=limits,
                 model_factory=factory,
+                reader_factory=reader_factory,
             )
             app.state.manager = manager
             app.state.user_id = user_id
