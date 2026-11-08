@@ -129,6 +129,14 @@ def test_round3_the_guard_keeps_no_leaked_claim_and_still_exempts_real_negation(
 # A modal exempts a claim only when it reaches the claim verb: modal, optional "also", then
 # be/have/get and object words, then the claim verb.
 ROUND4_LEAKS = [
+    "If you can get it, I booked it.",
+    "If you can get Saturday I booked it.",
+    "Once you approve I can get the call and it's booked.",
+    "When you can have it I've booked Sharma.",
+    "If you want I will see it's booked.",
+    "Once you approve I'll let you know I booked it.",
+    "If you like I would say it is confirmed.",
+    "If you can I have booked it.",
     "Never have I booked a plumber this fast!",
     "If anything it's booked.",
     "If anything I have booked Sharma for Saturday.",
@@ -146,6 +154,9 @@ ROUND4_LEAKS = [
     "After you approve I can see it is confirmed.",
 ]
 ROUND4_STILL_EXEMPT = [
+    "If you want I can also get Sharma Plumbing booked for Saturday.",
+    "Once you approve I can get it booked for Saturday.",
+    "Once you approve it can be booked.",
     "Once you approve it will be booked.",
     "Once you approve, I can book Sharma for Saturday.",
     "If you like I can have it booked.",
