@@ -553,9 +553,42 @@ _CLAIM = re.compile(
     r"\b(booked|confirmed|all set|locked in|reserved|scheduled|ho gaya|kar diya|pakka|sorted)\b",
     re.I,
 )
-_NOT = re.compile(
-    r"\b(not|no|nothing|never|yet|until|unless|once|if|can't|cannot|won't|didn't)\b|n't\b", re.I
+# INV-04 reads negation by position, with its own word list and no code shared with the
+# claim guard: a claim word is exempt only if one of the (at most) four words right
+# before it is a negator, a future or conditional word, with idioms ("no worries")
+# removed first; a negator anywhere else in the sentence exempts nothing.
+_NEGATING = {
+    "not", "no", "nothing", "never", "yet", "unless", "once", "if", "until", "after", "when",
+    "cannot", "can't", "won't", "didn't", "isn't", "hasn't", "haven't", "wasn't", "aren't",
+    "hadn't", "don't", "nahi", "nahin",
+}  # fmt: skip
+_FUTURE_BE = re.compile(
+    r"\b(?:will|would|shall|should|can|could)\s+(?:also\s+)?be\s*$|'ll\s+be\s*$"
 )
+_NOT_IDIOMS = re.compile(
+    r"\b(?:no worries|no problem|no doubt|no need|no hurry|nothing else|not to worry|"
+    r"not only|no more|no longer)\b",
+    re.I,
+)
+_BREAKS = re.compile(r"[,;:()\u2013\u2014]|\s-\s|\b(?:but|and|so|then)\b", re.I)
+_NOT_REACH = 4
+
+
+def _exempt(sentence: str, claim: re.Match[str]) -> bool:
+    """Not a claim: the claim word is sorted-by wording, or a negation scopes over it."""
+    if claim.group(0).lower() == "sorted" and re.match(
+        r"\s+(?:by|in|from|on|using)\b", sentence[claim.end() :], re.I
+    ):
+        return True
+    clause = _BREAKS.split(sentence[: claim.start()])[-1]
+    if _FUTURE_BE.search(clause.lower()):
+        return True
+    words = re.findall(r"[a-z']+", _NOT_IDIOMS.sub(" ", clause.lower()))[-_NOT_REACH:]
+    if any(w in _NEGATING or w.endswith("n't") for w in words):
+        return True
+    return bool(re.match(r"\s+(?:hai\s+|hua\s+)?(?:nahi|nahin)\b", sentence[claim.end() :], re.I))
+
+
 _BID = re.compile(r"\bB-\d+\b")
 _SERVICE_WORDS = {
     "plumber": re.compile(r"\b(plumber|plumbing)\b", re.I),
@@ -620,7 +653,8 @@ def inv04_success_only_after_the_source_of_truth(rec: Records) -> Violations:
                 if not isinstance(text, str):
                     continue
                 for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
-                    if not _CLAIM.search(sentence) or _NOT.search(sentence):
+                    found = [m for m in _CLAIM.finditer(sentence) if not _exempt(sentence, m)]
+                    if not found:
                         continue
                     claims += 1
                     ids = set(_BID.findall(sentence))

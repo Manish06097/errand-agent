@@ -359,6 +359,38 @@ def test_inv04_fails_on_an_unbacked_paraphrased_claim(s01: Records) -> None:
     assert any("unbacked success claim" in v for v in fails("INV-04", doctored))
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Your plumber is booked for Saturday, no worries.",
+        "Booked, nothing else needed from you.",
+        "I've booked Sharma Plumbing for you until further notice.",
+        "All set, Ravi will come at 10, not to worry.",
+        "No problem, it's booked for Saturday.",
+        "If you're wondering, it is confirmed.",
+    ],
+)
+def test_inv04_has_no_negation_hole(s02: Records, line: str) -> None:
+    """BUG-M4-2: a negation word elsewhere in a sentence must not hide an unbacked claim."""
+    doctored = copy.deepcopy(s02)
+    last = [m for m in doctored.messages if m["role"] == "assistant"][-1]
+    last["body"]["text"] = line
+    assert any("unbacked success claim" in v for v in fails("INV-04", doctored)), line
+
+
+def test_inv04_still_exempts_scoped_negation_and_sorted_by(s02: Records) -> None:
+    for line in [
+        "Nothing has been booked yet.",
+        "It isn't confirmed until you tap the button.",
+        "Once you approve, it will be booked.",
+        "Here are three options, sorted by price.",
+    ]:
+        doctored = copy.deepcopy(s02)
+        last = [m for m in doctored.messages if m["role"] == "assistant"][-1]
+        last["body"]["text"] = line
+        assert not any("unbacked success claim" in v for v in fails("INV-04", doctored)), line
+
+
 def test_inv04_fails_when_an_open_errand_has_no_status_line(s01: Records) -> None:
     doctored = copy.deepcopy(s01)
     card = next(m for m in doctored.messages if m["body"].get("type") == "action")
