@@ -82,7 +82,18 @@ _HYPOTHETICAL = re.compile(r"^(?:if|unless)\b", re.I)
 _PRESENT_LEAD = frozenset({"is", "are", "am", "be", "being", "gets", "get", "it's", "that's",
                            "there's", "here's", "you're", "we're", "they're"})  # fmt: skip
 _PRESENT_CLAIM = re.compile(r"^(?:is|are|you'?re|you are|all set|good to go|see you)\b", re.I)
-_MODAL = re.compile(r"\b(?:will|would|can|could|should|shall|may|might|must)\b|'ll\b", re.I)
+_MODALS = frozenset({"will", "would", "can", "could", "should", "shall", "may", "might", "must"})
+# What may sit between a modal's be/have/get and the claim verb for the modal to reach it:
+# object pronouns, determiners, booking nouns, and a capitalised provider name
+# ("I can get Sharma booked", "I can have it booked"). Never a subject pronoun, "is" or a
+# verb of its own ("you'll see it's booked", "you can tell me I booked it").
+_MODAL_LINK = frozenset({"be", "have", "get"})
+_MODAL_OBJECT = frozenset({
+    "been", "being", "be", "it", "you", "them", "that", "this", "a", "an", "the", "any", "your",
+    "my", "their", "its", "one", "also", "anything", "everything", "something", "booking",
+    "bookings", "appointment", "appointments", "slot", "plumber", "electrician", "job", "visit",
+    "errand", "request", "order", "service",
+})  # fmt: skip
 _FUTURE = re.compile(
     r"(?:\b(?:will|would|can|could|should|shall|to|going to)\s+(?:also\s+)?be\s+|'ll\s+be\s+|"
     r"\b(?:will|would|shall)\s+|'ll\s+)$",
@@ -185,6 +196,36 @@ def _present_claim(clause_before: str, claim: str) -> bool:
     return bool(words and words[-1] in _PRESENT_LEAD) or bool(_PRESENT_CLAIM.match(claim))
 
 
+def _modal_reaches_claim(clause: str) -> bool:
+    """True when the last modal in the clause reaches the claim verb through the closed
+    list: modal, optional "also", then be/have/get and object words, then the claim."""
+    words = re.findall(r"[\w']+", clause)
+    last = [i for i, w in enumerate(words) if w.lower() in _MODALS or w.lower().endswith("'ll")]
+    if not last:
+        return False
+    rest = words[last[-1] + 1 :]
+    if rest and rest[0].lower() == "also":
+        rest = rest[1:]
+    if not rest:
+        return True
+    if rest[0].lower() not in _MODAL_LINK:
+        return False
+    return all(
+        w.lower() in _MODAL_OBJECT or (w[0].isupper() and w != "I" and not w.startswith("I'"))
+        for w in rest[1:]
+    )
+
+
+_APPROVAL_OBJECT = frozenset({
+    "approve", "approval", "confirm", "button", "yes", "ok", "okay", "go", "ahead", "goahead",
+})  # fmt: skip
+
+
+def _is_subject_word(word: str) -> bool:
+    """A word that can be part of the claim's own subject: a bridge word or a provider name."""
+    return word.lower() in _BRIDGE or (word[0].isupper() and word != "I")
+
+
 def _condition_exempts(sentence: str, match: re.Match[str]) -> bool:
     """True when a condition in the claim's own clause exempts it (10.8).
 
@@ -208,9 +249,17 @@ def _condition_exempts(sentence: str, match: re.Match[str]) -> bool:
         between = re.findall(r"[\w']+", span.lower())[1:]
         if all(w in _BRIDGE for w in between):
             return True
-    if _MODAL.search(claim_clause) or re.match(r"(?:will|'ll)\b", match.group(0), re.I):
+    if _modal_reaches_claim(claim_clause) or re.match(r"(?:will|'ll)\b", match.group(0), re.I):
         return True
-    return bool(_APPROVAL_CONDITION.match(span)) and _present_claim(claim_clause, match.group(0))
+    approval = _APPROVAL_CONDITION.match(span)
+    if not approval or not _present_claim(claim_clause, match.group(0)):
+        return False
+    # Only the claim's subject may sit between the approval and the claim verb ("once you
+    # approve Sharma is booked"), never a verb of its own ("I can see it is confirmed").
+    gap = claim_clause if comma else span[approval.end() :]
+    return all(
+        w.lower() in _APPROVAL_OBJECT or _is_subject_word(w) for w in re.findall(r"[\w']+", gap)
+    )
 
 
 def _scoped_negation(sentence: str, match: re.Match[str]) -> bool:
