@@ -6,14 +6,17 @@ rebuilds what it needs from the records, so a guard that is removed or wrong mak
 invariant fail instead of vouching for itself. `tests/evals/test_invariants.py` shows
 each one failing on a doctored copy of a real scenario's records.
 
-Wired in M3: INV-07, INV-08, INV-10, INV-11, INV-13.
+Wired in M3: INV-07, INV-08, INV-10, INV-11, INV-13. M10 hardens INV-10.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import re
 import sqlite3
+import unicodedata
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -175,30 +178,97 @@ def _served_reviews(op_log: list[dict[str, Any]]) -> set[str]:
     return texts
 
 
-def inv10_no_review_text_in_planner_requests(rec: Records) -> Violations:
-    """No review text in the catalogue appears in any planner request, raw or as its digest.
+# Needle shapes for INV-10. Shingles overlap (stride < length), so any leaked run of
+# 60 or more characters contains a whole shingle.
+SHINGLE_CHARS = 40
+SHINGLE_STRIDE = 20
+EDGE_CHARS = 30
+_TOOL_DATA = re.compile(r"<tool_data>(.*?)</tool_data>", re.S)
 
-    The needles are every review in world.sqlite plus any the world served (the same
-    texts today; served ones also cover a review a fault or a later milestone adds), so
-    a scenario that never opens a provider still checks the whole catalogue. The trace
-    stores requests sanitized, and the sanitizer turns review text it can see into
-    {review_id, sha256, len}; so the check looks for the text, a long prefix of it, and
-    its sha256. The count goes into the table's notes, so a vacuous check shows.
+
+def normalised(text: str) -> str:
+    """NFKC with every format and control character removed and whitespace collapsed.
+
+    Written here, not imported from the product's sanitizer: the invariant must not
+    share a bug with the code it checks. Category Cf covers zero-width characters, bidi
+    controls, tag characters and the soft hyphen; variation selectors are Mn.
+    """
+    text = unicodedata.normalize("NFKC", text)
+    kept = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cf" or (cat == "Cc" and ch not in "\n\t"):
+            continue
+        if "\ufe00" <= ch <= "\ufe0f" or "\U000e0100" <= ch <= "\U000e01ef":
+            continue
+        kept.append(ch)
+    return re.sub(r"\s+", " ", "".join(kept)).strip()
+
+
+def review_needles(text: str) -> set[str]:
+    """Every form of one review INV-10 looks for: raw, normalised, a prefix, a suffix,
+    40-char shingles at a fixed stride, and the sha256 of each form."""
+    needles: set[str] = set()
+    for form in {text, normalised(text)}:
+        if not form:
+            continue
+        needles.add(form)
+        needles.add(hashlib.sha256(form.encode("utf-8")).hexdigest())
+        if len(form) > EDGE_CHARS:
+            needles.add(form[:EDGE_CHARS])
+            needles.add(form[-EDGE_CHARS:])
+        for i in range(0, max(0, len(form) - SHINGLE_CHARS) + 1, SHINGLE_STRIDE):
+            if len(form) >= SHINGLE_CHARS:
+                needles.add(form[i : i + SHINGLE_CHARS])
+    return needles
+
+
+def _strings(value: Any, out: list[str]) -> None:
+    if isinstance(value, str):
+        out.append(value)
+        for body in _TOOL_DATA.findall(value):
+            with contextlib.suppress(ValueError):
+                _strings(json.loads(body), out)
+    elif isinstance(value, dict):
+        for v in value.values():
+            _strings(v, out)
+    elif isinstance(value, list):
+        for v in value:
+            _strings(v, out)
+
+
+def planner_haystack(record: dict[str, Any]) -> str:
+    """Every string in a planner request, the JSON inside <tool_data> decoded, each also
+    in its normalised form, joined so a needle cannot match across two strings."""
+    strings: list[str] = []
+    _strings(record.get("request"), strings)
+    return "\x00".join([*strings, *(normalised(x) for x in strings)])
+
+
+def inv10_no_review_text_in_planner_requests(rec: Records) -> Violations:
+    """No review text appears in any planner request, in any form.
+
+    The texts are every review in world.sqlite plus any the world served (a scenario
+    that never opens a provider still checks the whole catalogue). Each is looked for
+    raw, normalised (zero-width stripped, NFKC), as a prefix, a suffix, overlapping
+    40-char shingles and as sha256, the form the trace sanitizer turns a review into.
+    The scope is every `model.call` record, by record type: planner calls are the only
+    model calls; the reader writes `reader.call`, which carries no text. The count goes
+    into the table's notes, and a check of zero texts is itself a violation.
     """
     out: Violations = []
     texts = sorted(set(rec.catalog_reviews) | _served_reviews(rec.op_log))
     rec.notes["review_texts_checked"] = len(texts)
-    needles: list[tuple[str, str]] = []
-    for text in texts:
-        needles.append((text, text[:50]))
-        needles.append((text, hashlib.sha256(text.encode("utf-8")).hexdigest()))
+    if not texts:
+        return ["no review texts to check: INV-10 would pass vacuously"]
+    needles = [(text, needle) for text in texts for needle in sorted(review_needles(text))]
     for record in rec.all_records():
         if record["type"] != "model.call":
             continue
-        blob = json.dumps(record.get("request"), ensure_ascii=False)
-        for text, needle in needles:
-            if needle and needle in blob:
-                out.append(f"{record['run_id']} seq {record['seq']}: review text {text[:30]!r}...")
+        hay = planner_haystack(record)
+        hits = {text for text, needle in needles if needle in hay}
+        for text in sorted(hits):
+            out.append(f"{record['run_id']} seq {record['seq']}: review text {text[:30]!r}...")
     return out
 
 

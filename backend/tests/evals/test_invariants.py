@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from errand.world.catalog import INJECTION_REVIEWS
 from evals import invariants
 from evals.dsl import load_scenario
 from evals.invariants import Records
@@ -145,6 +146,62 @@ def test_inv10_fails_on_the_sanitized_digest_of_a_review(s02: Records) -> None:
         {"type": "text", "text": json.dumps({"reviews": [{"text": {"sha256": digest}}]})}
     )
     assert fails("INV-10", doctored)
+
+
+# INV-10 hardening (M10): every form of a review, planted into a planner request.
+
+E1_HIDDEN = next(text for pid, _, text in INJECTION_REVIEWS if pid == "E1")
+
+
+def _plant(rec: Records, text: str, *, record_type: str = "model.call") -> Records:
+    doctored = copy.deepcopy(rec)
+    target = [r for r in doctored.all_records() if r["type"] == "model.call"][-1]
+    if record_type != "model.call":
+        target["type"] = record_type
+    request = target["request"]
+    assert isinstance(request, dict)
+    request["messages"][-1]["content"].append({"type": "text", "text": text})
+    return doctored
+
+
+def _forms(text: str) -> dict[str, str]:
+    norm = invariants.normalised(text)
+    return {
+        "raw": text,
+        "normalised (zero-width stripped, NFKC)": norm,
+        "prefix": norm[: invariants.EDGE_CHARS],
+        "suffix": norm[-invariants.EDGE_CHARS :],
+        "middle shingle": norm[invariants.SHINGLE_STRIDE : invariants.SHINGLE_STRIDE + 60],
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "sha256 of the normalised form": hashlib.sha256(norm.encode("utf-8")).hexdigest(),
+        "inside a tool result": "<tool_data>" + json.dumps({"note": norm}) + "</tool_data>",
+        "with fresh zero-width characters": "\u200b".join(norm),
+    }
+
+
+@pytest.mark.parametrize("form", list(_forms(E1_HIDDEN)))
+def test_inv10_fails_on_every_form_of_a_hidden_review(s02: Records, form: str) -> None:
+    assert not fails("INV-10", s02)
+    leak = _forms(E1_HIDDEN)[form]
+    assert fails("INV-10", _plant(s02, f"Earlier customers said: {leak} Anyway."))
+
+
+def test_inv10_scopes_by_record_type_not_by_what_the_record_says(s02: Records) -> None:
+    # Any model.call is a planner call, whatever model it names: a reader call written
+    # as model.call would carry its review text into INV-10's scope and fail it.
+    doctored = _plant(s02, E1_HIDDEN)
+    call = [r for r in doctored.all_records() if r["type"] == "model.call"][-1]
+    call["model"] = "claude-haiku-5-5"
+    assert fails("INV-10", doctored)
+    # reader.call records are not planner requests.
+    assert not fails("INV-10", _plant(s02, E1_HIDDEN, record_type="reader.call"))
+
+
+def test_inv10_refuses_to_pass_with_nothing_to_check(s02: Records) -> None:
+    doctored = copy.deepcopy(s02)
+    doctored.catalog_reviews = []
+    doctored.op_log = []
+    assert fails("INV-10", doctored) == ["no review texts to check: INV-10 would pass vacuously"]
 
 
 # ---------------------------------------------------------------- INV-11
