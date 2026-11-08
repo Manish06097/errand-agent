@@ -597,7 +597,24 @@ _APPROVAL_NOW = re.compile(
     r"grants?|press(?:es)?|clicks?|says?\s+(?:yes|okay|ok)|okay|gives?\s+(?:the\s+)?"
     r"(?:go\s?ahead|approval))\b"
 )
-_MODAL_WORD = re.compile(r"\b(?:will|would|can|could|should|shall|may|might)\b|'ll\b")
+# A modal exempts a claim only when nothing but "also", then be/have/get and object words (a
+# provider name is a capitalised word that is not "I") stand between it and the claim verb:
+# "I can have it booked", "I can get Sharma booked", never "you'll see it's booked".
+_OBJ_WORD = (
+    r"(?i:been|being|be|it|you|them|that|this|a|an|the|any|your|my|their|its|one|also|"
+    r"anything|everything|something|bookings?|appointments?|slots?|plumber|electrician|job|"
+    r"visit|errand|request|order|service)"
+)
+_NAME_WORD = r"(?!I\b|I')[A-Z][\w']*"
+_MODAL_REACHES = re.compile(
+    r"(?:(?i:\b(?:will|would|can|could|should|shall|may|might)\b)|(?i:'ll\b))\s*(?i:also\b)?\s*"
+    rf"(?:$|(?i:\b(?:be|have|get)\b)(?:\s+(?:{_OBJ_WORD}|{_NAME_WORD}))*\s*$)"
+)
+_APPROVAL_GAP = re.compile(
+    rf"(?:\s*(?:(?i:approve|approval|confirm|button|yes|ok|okay|go|ahead|goahead)\b|{_OBJ_WORD}\b|"
+    rf"(?i:{_FILLER})\b|{_NAME_WORD}))*\s*$"
+)
+_INVERSION = re.compile(rf"\bnever\s+{_AUX}\s+(?:i|we|you|they|he|she)\b")
 _NOT_IDIOMS = re.compile(
     r"\b(?:no worries|no problem|no doubt|no need|no hurry|nothing else|not to worry|"
     r"not only|no more|no longer)\b",
@@ -615,11 +632,12 @@ def _present(tail: str) -> bool:
     )
 
 
-def _condition_exempt(before: str, claim_word: str) -> bool:
+def _condition_exempt(before: str, claim_word: str, raw: str) -> bool:
     """A condition exempts only the claim in its own clause, or in the main clause its
     one closing comma opens ("Once you approve, it is booked")."""
     parts = _BREAKS.split(before)  # text, separator, text, separator, ...
     texts = parts[0::2]
+    raws = _BREAKS.split(raw)[0::2]  # the same split with the case kept, for provider names
     last = len(texts) - 1
     opened = [i for i, t in enumerate(texts) if _OPENER.search(t)]
     if not opened:
@@ -633,13 +651,19 @@ def _condition_exempt(before: str, claim_word: str) -> bool:
             if all(re.fullmatch(_FILLER, w) for w in lead):
                 return True
         claim_side, cond_side = tail, tail
+        raw_side = raws[k][_OPENER.search(texts[k]).start() :]  # type: ignore[union-attr]
     elif k == last - 1 and parts[2 * k + 1] == ",":
-        claim_side, cond_side = texts[last], texts[k]
+        claim_side, cond_side, raw_side = texts[last], texts[k], raws[last]
     else:
         return False
-    if _MODAL_WORD.search(claim_side) or claim_word in ("will", "'ll"):
+    if _MODAL_REACHES.search(raw_side) or claim_word in ("will", "'ll"):
         return True
-    return bool(_APPROVAL_NOW.search(cond_side)) and _present(claim_side)
+    approval = _APPROVAL_NOW.search(cond_side)
+    if not approval or not _present(claim_side):
+        return False
+    # Only the claim's subject may sit between the approval and the claim verb.
+    gap = raw_side[approval.end() :] if k == last else raw_side
+    return bool(_APPROVAL_GAP.fullmatch(gap))
 
 
 def _exempt(sentence: str, claim: re.Match[str]) -> bool:
@@ -653,7 +677,7 @@ def _exempt(sentence: str, claim: re.Match[str]) -> bool:
     clause = re.sub(r"\bable to\b", "able", clause)
     if _NEGATED_TAIL.search(clause.strip()) or _FUTURE_BE.search(clause):
         return True
-    if _condition_exempt(before, claim.group(0).lower()):
+    if _condition_exempt(before, claim.group(0).lower(), sentence[: claim.start()]):
         return True
     return bool(re.match(r"\s+(?:hai\s+|hua\s+)?(?:nahi|nahin)\b", sentence[claim.end() :], re.I))
 
