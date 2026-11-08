@@ -177,6 +177,9 @@ def paraphrase_claim_policy(request: ScriptedRequest) -> AIMessage:
             "Your plumber is booked for Saturday, no worries. "
             "Booked, nothing else needed from you. "
             "I've booked Sharma Plumbing for you until further notice. "
+            "Don't worry I booked Sharma Plumbing for you. "
+            "No stress it's booked for Saturday. "
+            "When you asked I booked it right away. "
             "Here are three options, sorted by price. I've done a search and found three plumbers.",
         )
     if not view.loop and view.last_booking:

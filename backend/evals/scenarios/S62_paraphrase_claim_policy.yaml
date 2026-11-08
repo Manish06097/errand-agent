@@ -18,7 +18,8 @@ steps:
   - expect_card: {kind: reminder, status: pending}
   # BUG-M4-2: negation words elsewhere in a sentence must not exempt a claim
   - expect_transcript:
-      excludes: ["no worries", "nothing else needed", "until further notice", "locked in"]
+      excludes: ["no worries", "nothing else needed", "until further notice", "locked in",
+                "Don't worry I booked", "No stress", "When you asked I booked"]
       includes: ["three options", "done a search"]
   - approve: {}
   - expect_outcome: BOOKED_VERIFIED

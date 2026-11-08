@@ -38,3 +38,30 @@ def test_the_guard_removes_the_leaked_claims_and_keeps_the_harmless_text() -> No
     harmless = ["Here are three options, sorted by price.", "I've done a search and found three."]
     for text in harmless:
         assert guard(text, [], IST).text == text
+
+
+# Second fix (round 2): a negator that belongs to another verb ("don't worry", "no stress",
+# "not a problem") or a conditional opener on a past-tense claim ("when you asked") still
+# exempted a real claim, in both layers.
+_ROUND2_LEAKS = [
+    "Don't worry I booked Sharma Plumbing for you.",
+    "No stress it's booked for Saturday.",
+    "When you asked I booked it right away.",
+    "Not a problem I have booked Ramesh for Saturday.",
+    "Unless you object I have reserved Saturday 10am.",
+]
+_STILL_EXEMPT = [
+    "I haven't booked anything yet.",
+    "Nothing has been booked.",
+    "It is not yet confirmed.",
+    "Once you tap approve it will be booked.",
+    "If you approve, I will book it.",
+    "Once you approve it is booked.",
+]
+
+
+def test_round2_the_guard_keeps_no_leaked_claim_and_still_exempts_real_negation() -> None:
+    for text in _ROUND2_LEAKS:
+        assert guard(text, [], IST).text == "", text
+    for text in _STILL_EXEMPT:
+        assert guard(text, [], IST).text == text, text

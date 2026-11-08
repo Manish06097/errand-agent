@@ -368,6 +368,13 @@ def test_inv04_fails_on_an_unbacked_paraphrased_claim(s01: Records) -> None:
         "All set, Ravi will come at 10, not to worry.",
         "No problem, it's booked for Saturday.",
         "If you're wondering, it is confirmed.",
+        "Don't worry I booked Sharma Plumbing for you.",
+        "No stress it's booked for Saturday.",
+        "When you asked I booked it right away.",
+        "Not a problem I have booked Ramesh for Saturday.",
+        "Once again it's booked.",
+        "After checking prices I scheduled the plumber.",
+        "Unless you object I have reserved Saturday 10am.",
     ],
 )
 def test_inv04_has_no_negation_hole(s02: Records, line: str) -> None:
@@ -383,6 +390,10 @@ def test_inv04_still_exempts_scoped_negation_and_sorted_by(s02: Records) -> None
         "Nothing has been booked yet.",
         "It isn't confirmed until you tap the button.",
         "Once you approve, it will be booked.",
+        "I haven't booked anything yet.",
+        "Nothing has been booked.",
+        "It is not yet confirmed.",
+        "Once you tap approve it is booked.",
         "Here are three options, sorted by price.",
     ]:
         doctored = copy.deepcopy(s02)
