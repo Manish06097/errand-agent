@@ -169,6 +169,8 @@ All five injections (Hinglish and zero-width included) flagged and no clean revi
 
 **Open doubts.** A second search in one run gets K = reads left, possibly 0, so its shortlist can lack digests the first one had (safe, but the two orders can differ). The keyword double is a stand-in; only the live smoke speaks for Haiku, and it ran three times on one seed of the catalogue.
 
+**Sign-off.** I set out to finish the second half of the injection defence: raw reviews reach only a tool-less reader whose enum labels code validates, and a flagged review can only cost its provider rank. Review took two rounds. Round 1 caught three gaps, each now pinned by a scenario or API test that fails without the fix: a reader that skipped a review could launder it (now `incomplete_labels`), a refused prompt would be sent again every run (now the refusal marker), and a store error on the cache or marker could end the run (now `cache_error`). It also had model reads run in their own tracer opening, so the M15 Langfuse sink sees one generation per read. The live smoke showed one false positive on a clean review, fixed by the r2 prompt sentence. Round 2 passed; the only change after it is architecture section 11 brought in line with the r2 key, the per-read opening and `cache_error`. The deviations above are accepted as they stand. Replay-mode cassette misses in the reader are M7's to make loud.
+
 **Next.** Gate 2, then M11 (memory), where `remember` becomes a real tool and S16's memory leg gets its guard.
 
 ## M15: Langfuse sink and infrastructure
