@@ -104,6 +104,15 @@ def recommendation_line(text: str) -> str | None:
     return line
 
 
+def hidden_reviews_notice(flags: int) -> str | None:
+    """The card's code-written line for a provider with flagged reviews."""
+    if flags <= 0:
+        return None
+    if flags == 1:
+        return "1 review hidden: it contained instructions to the assistant"
+    return f"{flags} reviews hidden: they contained instructions to the assistant"
+
+
 def shortlist_card(errand: Errand, recommendation: str | None, tz: tzinfo) -> ShortlistCard:
     shortlist = errand.shortlist
     assert shortlist is not None
@@ -127,6 +136,9 @@ def shortlist_card(errand: Errand, recommendation: str | None, tz: tzinfo) -> Sh
                     )
                     for h in c.slots
                 ],
+                badges=list(c.badges),
+                injection_flags=c.digest.injection_flags if c.digest else 0,
+                notice=hidden_reviews_notice(c.digest.injection_flags if c.digest else 0),
             )
             for c in shortlist.candidates
         ],
