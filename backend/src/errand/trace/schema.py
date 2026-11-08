@@ -145,12 +145,18 @@ class ReaderCall(Envelope):
     latency_ms: NonNegativeFloat | None = None
     stop_reason: str | None = None
     # Why there is no digest: timeout, refusal, max_tokens, schema_violation,
-    # transport_error, cap_reached, deadline, cost_cap. None when labels were produced.
+    # transport_error, cap_reached, deadline, cost_cap, incomplete_labels, not_retried:<why>.
+    # None when labels were produced.
     error: str | None = None
     request_sha256: str | None = None
     # Counts of what code dropped from an otherwise valid answer (unknown ids,
     # duplicates, themes past 3). Counts only, so no model-chosen string lands here.
     dropped: dict[str, NonNegativeInt] | None = None
+    # The model id, for the Langfuse generation (M15). Added in the M10 review pass.
+    model: str | None = None
+    # A cache or refusal-marker store error that was absorbed (lookup, put,
+    # refusal_lookup, mark); the read itself is unaffected.
+    cache_error: str | None = None
 
 
 class ToolCall(Envelope):
