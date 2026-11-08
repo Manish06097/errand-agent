@@ -11,7 +11,9 @@ What respond adds in M4:
   a question): a sentence no record backs is removed and `guard.claim_rewritten` is
   emitted;
 - a code status line on the run's last message whenever the errand is not completed;
-- parking: when a live pending approval exists after the sweep, the run ends at
+- parking: when a live *pending* approval exists after the sweep (a `granted` row whose
+  run could not preflight, `bookings_unavailable`, is not parked on: the user is told to tap
+  again and the stored resume restarts it), the run ends at
   `await_approval` with the card, or a code-rendered reminder of it, as the last
   assistant message. The reminder has `typed_grant_ok=false` if this run's model text
   holds a question mark or the run asked the user anything (8.3). A run that ends
@@ -256,7 +258,12 @@ class _Respond:
         if isinstance(result, ActionFailed):
             return RunOutcome.ACTION_FAILED, [_failed(result)]
         if isinstance(result, PendingCheck):
-            if result.reason == "material_mismatch":
+            if result.reason == "fenced_off":
+                text = (
+                    "Another request took over before the booking was sent, so nothing was "
+                    "booked yet. I'll tell you here when I know."
+                )
+            elif result.reason == "material_mismatch":
                 text = (
                     "The provider recorded something different from what you approved "
                     f"({result.detail}), so I haven't treated it as confirmed. I'll sort it "
@@ -294,11 +301,15 @@ class _Respond:
         if isinstance(result, ProposalRefused):
             return RunOutcome.REPLIED, [notice(RunOutcome.REPLIED, result.text)]
         if isinstance(result, AlreadyHandled):
-            text = (
-                "Already approved: that booking is in progress or done."
-                if result.reason in ("consumed", "not_consumable")
-                else "That card can't be used any more, so nothing was booked."
-            )
+            if result.reason == "bookings_unavailable":
+                text = (
+                    "I couldn't check your bookings just now; nothing was booked. "
+                    "Tap the button again to retry."
+                )
+            elif result.reason in ("consumed", "not_consumable"):
+                text = "Already approved: that booking is in progress or done."
+            else:
+                text = "That card can't be used any more, so nothing was booked."
             return RunOutcome.REPLIED, [notice(RunOutcome.REPLIED, text)]
         return RunOutcome.INTERNAL_ERROR, [internal_error(self.deps.run_id)]
 
@@ -376,6 +387,11 @@ def _failed(result: ActionFailed) -> OutcomeNotice:
         text = "You already have this booking, so I didn't book it again. Nothing new was booked."
     elif result.reason == "provider_refused":
         text = "The provider refused that booking, so nothing was booked."
+    elif result.reason == "never_sent":
+        text = (
+            "The booking was interrupted before it was sent, so nothing was booked. "
+            "Please ask again."
+        )
     else:
         text = "That approval can't be used any more, so nothing was booked."
     return OutcomeNotice(outcome=RunOutcome.ACTION_FAILED, text=text, actions=actions)

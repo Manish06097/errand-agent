@@ -197,7 +197,14 @@ class Booked(_Result):
 class ActionFailed(_Result):
     kind: Literal["action_failed"] = "action_failed"
     approval_id: str
-    reason: Literal["slot_taken", "hold_expired", "provider_refused", "not_consumable", "duplicate"]
+    reason: Literal[
+        "slot_taken",
+        "hold_expired",
+        "provider_refused",
+        "not_consumable",
+        "duplicate",
+        "never_sent",
+    ]
     fresh_quote: bool = False
 
 
@@ -207,7 +214,7 @@ class PendingCheck(_Result):
     kind: Literal["pending_check"] = "pending_check"
     approval_id: str
     intent_id: str
-    reason: Literal["status_not_confirmed", "material_mismatch"]
+    reason: Literal["status_not_confirmed", "material_mismatch", "fenced_off"]
     detail: str = ""
 
 

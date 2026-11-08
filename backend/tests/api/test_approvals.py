@@ -18,7 +18,7 @@ from typing import Any
 
 from errand.approvals import service
 from errand.clock import from_ms, to_ms
-from errand.world.scenario import BookConfig, ScenarioConfig, WorldConfig
+from errand.world.scenario import BookConfig, MalformedFault, ScenarioConfig, WorldConfig
 from evals import invariants
 from evals.runner import Harness, harness
 from tests.api.support import Gate, gated_factory
@@ -310,3 +310,39 @@ async def test_the_transcript_serves_cards_from_card_json(tmp_path: Path) -> Non
     assert shown["body"]["button_label"].startswith("Book for ₹")
     assert shown["approval"]["status"] == "pending"
     assert shown["approval"]["fingerprint"] == shown["body"]["fingerprint"]
+
+
+async def test_a_preflight_that_cannot_list_bookings_keeps_the_grant_and_says_so(
+    tmp_path: Path,
+) -> None:
+    """list_bookings fails at preflight: nothing is consumed or sent, the user is told the
+    truth (not "that card can't be used any more"), the row stays granted for its grace,
+    and tapping again restarts the run and books once."""
+    async with harness(tmp_path, world()) as h:
+        card = await to_card(h)
+        aid, fp = card["approval_id"], card["body"]["fingerprint"]
+        scenario = h.host.world.scenario
+        broken = scenario.faults.model_copy(
+            update={"malformed": MalformedFault(tool="list_bookings", mode="bad_json")}
+        )
+        h.host.world.scenario = scenario.model_copy(update={"faults": broken})
+        first = await h.decide(aid, "approve", fp)
+        assert first.status_code == 202
+        view = await h.finish(first.json()["run_id"])
+        text = (await card_of(h))["body"]
+        assert view.outcome == "REPLIED"
+        assert "couldn't check your bookings" in json.dumps(view.messages[-1]["body"])
+        assert "can't be used any more" not in json.dumps(view.messages[-1]["body"])
+        assert ops(await h.op_log(), "book") == 0
+        assert text["type"] in ("action", "reminder")
+        async with h.manager.db.session() as repos:
+            row = await repos.approvals.get(aid)
+        assert row is not None and row.status == "granted"
+        h.host.world.scenario = scenario
+        retry = await h.decide(aid, "approve", fp)
+        assert retry.status_code in (200, 202), retry.text
+        done = await h.finish(retry.json()["run_id"])
+        rec = await h.records()
+    assert done.outcome == "BOOKED_VERIFIED", done.outcome
+    assert ops(rec.op_log, "book") == 1
+    assert invariants.check(rec) == {name: [] for name in invariants.DEFAULT}

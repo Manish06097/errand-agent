@@ -21,6 +21,11 @@ held through `verify`):
    row. Any answer except a definitive refusal goes to `verify`: a clean `confirmed` is
    not trusted until `get_booking_status` agrees.
 
+A re-entry that finds the attempt still `prepared` closes it as never sent (M4 stopgap,
+8.7; M6 owns sending it once with the same key). If the preflight cannot list the user's
+bookings, nothing is consumed: the row stays `granted` (within its grace) and the user is
+told to tap again, which restarts the run from the stored resume.
+
 Definitive answers end here, with nothing re-sent in M4: `slot_taken` and `hold_expired`
 make the attempt `not_applied`, the intent `failed` and the errand COMPARING, and the
 user hears that nothing was booked (`hold_expired` also offers a fresh quote).
@@ -50,6 +55,7 @@ from errand.domain.outcomes import (
     AlreadyHandled,
     BookCalled,
     Booked,
+    PendingCheck,
     Requote,
     StepResult,
 )
@@ -226,9 +232,12 @@ class _Execute:
                 self._emit_invalidated(row, token.reason, None)
                 self._move(Phase.COMPARING, "approval_invalidated")
                 return ActionFailed(approval_id=self.approval_id, reason="duplicate")
+            # An executor-side refusal (the row was no longer granted), not a planner one.
             deps.tracer.emit(
-                "guard.planner_tool_rejected",
-                detail={"tool": "book", "reason": f"approval {token.status}: not consumable"},
+                "approval.consume_refused",
+                approval_id=self.approval_id,
+                reason=token.reason,
+                status=token.status,
             )
             return AlreadyHandled(approval_id=self.approval_id, reason=token.reason)
 
@@ -261,7 +270,20 @@ class _Execute:
                 add_calls=1,
             )
             sent = await repos.intents.get_attempt(attempt.attempt_id)
-        assert moved and sent is not None, "the attempt was fenced off before it was sent"
+        if not moved or sent is None:
+            # Another holder moved this attempt first (a stale epoch). Nothing was sent by
+            # us: the attempt stays as that holder left it, and recovery (M6) decides.
+            tracer.emit(
+                "approval.consume_refused",
+                approval_id=self.approval_id,
+                reason="attempt_fenced_off",
+                status="consumed",
+            )
+            return PendingCheck(
+                approval_id=self.approval_id,
+                intent_id=intent_row.intent_id,
+                reason="fenced_off",
+            )
         tracer.emit(
             "intent.in_flight",
             intent_id=intent_row.intent_id,
@@ -309,7 +331,7 @@ class _Execute:
                     intent.intent_id,
                     frm=("open",),
                     to="failed",
-                    result_json=f'{{"error":"{answer.error}"}}',
+                    result_json=json.dumps({"error": answer.error}),
                     now_ms=now_ms,
                 )
             deps.tracer.emit(
@@ -368,6 +390,8 @@ class _Execute:
         async with deps.db.session() as repos:
             attempts = await repos.intents.attempts(intent.intent_id)
         last = attempts[-1]
+        if last.state == "prepared":
+            return await self._abandon_unsent(intent, last)
         if self.errand.phase is Phase.AWAITING_APPROVAL:
             self._move(Phase.EXECUTING, "approval_granted")
         return BookCalled(
@@ -376,6 +400,37 @@ class _Execute:
             attempt_id=last.attempt_id,
             answer="unknown",
         )
+
+    async def _abandon_unsent(self, intent: IntentRow, attempt: Any) -> StepResult:
+        """M4 stopgap (8.7): a `prepared` attempt is provably unsent (it moves to
+        `in_flight` in its own committed step before `book` goes out). Architecture 9.4
+        sends it once with the same key; that crash recovery is M6's. Until then it is
+        closed, never left for the next state change to skip: the attempt is
+        `not_applied` ("never_sent"), the intent `failed`, and the user is told nothing
+        was booked and can ask again."""
+        deps = self.deps
+        now_ms = to_ms(deps.clock.now())
+        async with deps.db.transaction() as repos:
+            await repos.intents.move_attempt(
+                attempt.attempt_id,
+                frm=("prepared",),
+                to="not_applied",
+                fence_epoch=attempt.fence_epoch,
+                now_ms=now_ms,
+                last_error="never_sent",
+            )
+            await repos.intents.resolve_intent(
+                intent.intent_id,
+                frm=("open",),
+                to="failed",
+                result_json=json.dumps({"error": "never_sent"}),
+                now_ms=now_ms,
+            )
+        deps.tracer.emit(
+            "intent.resolved", intent_id=intent.intent_id, state="failed", error="never_sent"
+        )
+        self._move(Phase.COMPARING, "never_sent")
+        return ActionFailed(approval_id=self.approval_id, reason="never_sent")
 
     async def _invalidate_and_requote(
         self, row: ApprovalRow, reason: str, new_fp: str | None

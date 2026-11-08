@@ -197,11 +197,14 @@ class ApprovalRecord(Envelope):
         "approval.consumed",
         "approval.expired",
         "approval.hold_rebound",
+        "approval.consume_refused",
     ]
     approval_id: str
     fingerprint: str | None = None
     via: str | None = None
     reason: str | None = None
+    # approval.consume_refused: the row's status when the consume was refused.
+    status: str | None = None
     old_fp: str | None = None
     new_fp: str | None = None
     intent_id: str | None = None

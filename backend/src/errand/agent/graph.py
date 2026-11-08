@@ -7,7 +7,9 @@ M4 wires the booking path:
     prepare_proposal -> respond | plan (one SystemNote replan per run)
     execute -> verify | prepare_proposal (a lapsed hold or changed material) | respond
     verify -> respond
-    respond -> await_approval (a live pending approval) | END
+    respond -> await_approval (a live *pending* approval) | END
+                 (a `granted` row whose run could not preflight is not parked on: the user is
+                 told to tap again, and the stored resume restarts it; 8.7)
     await_approval -> ingress          the only interrupt
 
 Every invocation goes through `invoke`: `durability="sync"` (spike L1, L2),
