@@ -1,0 +1,83 @@
+# Errand's changes to the upstream Langfuse compose file (docker-compose.yml, kept
+# byte-identical to upstream commit 05ece6fd; see spikes/README.md). Run it through
+# `make langfuse-up`, which generates the gitignored .env next to this file first.
+#
+# - Every image is pinned to an exact release (upstream uses floating tags). The
+#   versions are what the upstream tags pointed to on 2026-11-06, when the compose file
+#   was downloaded; minio from chainguard has no version tags, so it is pinned by digest.
+# - Only Langfuse web is published, on 127.0.0.1:${ERRAND_LANGFUSE_PORT:-3100}. Upstream
+#   publishes minio on 9090 on every interface and clickhouse, redis, postgres and the
+#   worker on loopback ports (6379 is taken on the dev machine); none of them are needed
+#   from the host. Without the minio port, browser media uploads would fail, and the
+#   agent sends no media.
+# - Telemetry to Langfuse is off, the AI gateway only starts with `--profile ai-gateway`,
+#   and NEXTAUTH_URL follows the published port.
+# - Every upstream CHANGEME default is replaced by a required value from .env, so the
+#   stack cannot start with `mysalt` or an all-zero encryption key. The org, project,
+#   API keys and the first user are created headlessly from LANGFUSE_INIT_*.
+
+x-errand-secrets: &errand-secrets
+  NEXTAUTH_URL: http://localhost:${ERRAND_LANGFUSE_PORT:-3100}
+  TELEMETRY_ENABLED: "false"
+  DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?run make langfuse-up to generate infra/langfuse/.env}@postgres:5432/postgres
+  SALT: ${SALT:?run make langfuse-up to generate infra/langfuse/.env}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?run make langfuse-up to generate infra/langfuse/.env}
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?run make langfuse-up to generate infra/langfuse/.env}
+  REDIS_AUTH: ${REDIS_AUTH:?run make langfuse-up to generate infra/langfuse/.env}
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?run make langfuse-up to generate infra/langfuse/.env}
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?run make langfuse-up to generate infra/langfuse/.env}
+  LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?run make langfuse-up to generate infra/langfuse/.env}
+
+services:
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4.76.0
+    ports: !reset []
+    environment:
+      <<: *errand-secrets
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4.76.0
+    ports: !override
+      - 127.0.0.1:${ERRAND_LANGFUSE_PORT:-3100}:3000
+    environment:
+      <<: *errand-secrets
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?run make langfuse-up to generate infra/langfuse/.env}
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:?run make langfuse-up to generate infra/langfuse/.env}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:?run make langfuse-up to generate infra/langfuse/.env}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:?run make langfuse-up to generate infra/langfuse/.env}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:?run make langfuse-up to generate infra/langfuse/.env}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:?run make langfuse-up to generate infra/langfuse/.env}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:?run make langfuse-up to generate infra/langfuse/.env}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:?run make langfuse-up to generate infra/langfuse/.env}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:?run make langfuse-up to generate infra/langfuse/.env}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?run make langfuse-up to generate infra/langfuse/.env}
+
+  langfuse-ai-gateway:
+    image: docker.langfuse.com/langfuse/ai-gateway:4.76.0
+    profiles: [ai-gateway]
+    ports: !reset []
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:26.3.62.3
+    ports: !reset []
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?run make langfuse-up to generate infra/langfuse/.env}
+
+  minio:
+    image: cgr.dev/chainguard/minio@sha256:aea6c163749e1caca37f907976dcf337177ddf5f558808f2aa591618fd3a6eef
+    ports: !reset []
+    environment:
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?run make langfuse-up to generate infra/langfuse/.env}
+
+  redis:
+    image: docker.io/redis:7.4.12
+    ports: !reset []
+    command: >
+      --requirepass ${REDIS_AUTH:?run make langfuse-up to generate infra/langfuse/.env}
+      --maxmemory-policy noeviction
+
+  postgres:
+    image: docker.io/postgres:17.11
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run make langfuse-up to generate infra/langfuse/.env}

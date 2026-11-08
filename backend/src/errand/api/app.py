@@ -15,21 +15,26 @@ Routes:
   idempotent on `client_action_id`;
 - `GET /api/runs/{id}/events` is the run's SSE stream with replay from `Last-Event-ID`;
   `card` and `card.update` events are trace records too, so they replay.
+- `GET /api/health` also reports the Langfuse sink (on with its export failures, or off
+  and why), from counters only, so it never waits on Langfuse.
 
-The lifespan opens agent.sqlite, the checkpointer and the world, builds the graph and
+The lifespan builds the optional Langfuse sink once (shut down last, after every run
+has finished), opens agent.sqlite, the checkpointer and the world, builds the graph and
 the RunManager, and on exit lets running runs finish (or cancels them after a grace
 period, each still writing its message and `run.end`) before closing anything.
 
 In scripted mode (the offline default) the planner is a `ScriptedChatModel` driven by
 the policy named in ERRAND_SCRIPTED_POLICY, by default the eval suite's reference
-policy, so `make dev` works end to end with curl and no API key.
+policy, and the review reader one driven by ERRAND_SCRIPTED_READER (the keyword test
+double), so `make dev` works end to end with curl and no API key.
 """
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
@@ -61,12 +66,20 @@ from errand.api.sse import stream_events
 from errand.approvals import service
 from errand.approvals.typed_grant import VisibleCard as VisibleCardRef
 from errand.clock import IST, to_ms
-from errand.config import ApprovalSettings, LimitSettings, ModelSettings, PathSettings
+from errand.config import (
+    ApprovalSettings,
+    LangfuseKeys,
+    LimitSettings,
+    ModelSettings,
+    PathSettings,
+    TraceSettings,
+)
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
 from errand.store.agent_db import AgentDB
 from errand.store.repos.users import User
 from errand.tools.runtime import WorldAccess, open_in_process, over_http
+from errand.trace.sinks import ProcessSink, make_sink, off_reason
 
 SERVICE = "errand-api"
 log = logging.getLogger(__name__)
@@ -86,6 +99,9 @@ class AgentSettings(BaseSettings):
     world_url: str | None = None
     # module:attribute of the scripted planner policy used in scripted mode.
     scripted_policy: str = "evals.policies.reference:policy"
+    # module:attribute of the scripted review reader used in scripted mode. The default
+    # keyword double is a test stand-in, not a defence.
+    scripted_reader: str = "evals.policies.reader:keyword"
     # sim: c_0001, r_0001 ...; live: uuid7. Default follows the model mode.
     id_mode: Literal["sim", "live"] | None = None
     user_id: str = "u_demo"
@@ -98,6 +114,7 @@ class AppConfig:
     data_dir: Path | None = None
     world: WorldAccess | None = None
     model_factory: ModelFactory | None = None
+    reader_factory: ModelFactory | None = None
     ids: IdFactory | None = None
     model_settings: ModelSettings | None = None
     limits: LimitSettings | None = None
@@ -107,6 +124,8 @@ class AppConfig:
     # Tests replace the per-user consequential lock (the S28 backstop test runs two
     # executes with no lock at all).
     consequential: Any = None
+    # Builds the process's dashboard sink once, in the lifespan (tests inject exporters).
+    sink_factory: Callable[[], ProcessSink] = make_sink
 
 
 class VisibleCard(BaseModel):
@@ -207,6 +226,10 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         data_dir = config.data_dir or PathSettings().data_dir
         user_id = config.user_id or settings.user_id
         async with AsyncExitStack() as stack:
+            # First in, so last out: runs are finished before the dashboard is flushed.
+            trace_sink = config.sink_factory()
+            stack.push_async_callback(asyncio.to_thread, trace_sink.shutdown)
+            app.state.trace_sink = trace_sink
             db = await AgentDB.open(data_dir / "agent.sqlite")
             stack.push_async_callback(db.close)
             async with db.session() as repos:
@@ -242,6 +265,12 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     factory = scripted_factory(load_policy(settings.scripted_policy))
                 else:
                     factory = _no_transport
+            reader_factory = config.reader_factory
+            if reader_factory is None:
+                if model_settings.model_mode == "scripted":
+                    reader_factory = scripted_factory(load_policy(settings.scripted_reader))
+                else:
+                    reader_factory = _no_transport
             manager = RunManager(
                 graph=build_graph(saver),
                 db=db,
@@ -254,6 +283,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 model_factory=factory,
                 approval_settings=config.approval_settings,
                 consequential=config.consequential,
+                reader_factory=reader_factory,
+                trace_sink=trace_sink,
             )
             app.state.manager = manager
             app.state.user_id = user_id
@@ -269,8 +300,17 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         return manager
 
     @app.get("/api/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "service": SERVICE}
+    async def health(request: Request) -> dict[str, Any]:
+        # status() reads counters only: no auth_check, nothing that can block on Langfuse.
+        sink: ProcessSink | None = getattr(request.app.state, "trace_sink", None)
+        if sink is not None:
+            langfuse = sink.status()
+        else:
+            langfuse = {
+                "state": "off",
+                "reason": off_reason(TraceSettings(), LangfuseKeys()) or "not_started",
+            }
+        return {"status": "ok", "service": SERVICE, "langfuse": langfuse}
 
     @app.post("/api/conversations", status_code=201)
     async def create_conversation(request: Request) -> dict[str, str]:

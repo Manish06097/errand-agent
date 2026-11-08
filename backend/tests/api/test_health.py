@@ -11,17 +11,23 @@ from errand.api.app import app as api_app
 from errand.world.server import app as world_app
 from errand.world.server import create_app as create_world_app
 
+# The suite forces ERRAND_LANGFUSE=off, so the API reports its Langfuse sink disabled.
+LANGFUSE_OFF = {"langfuse": {"state": "off", "reason": "disabled"}}
+
 
 @pytest.mark.parametrize(
-    ("app", "path", "service"),
-    [(api_app, "/api/health", "errand-api"), (world_app, "/health", "errand-world")],
+    ("app", "path", "service", "extra"),
+    [
+        (api_app, "/api/health", "errand-api", LANGFUSE_OFF),
+        (world_app, "/health", "errand-world", {}),
+    ],
 )
-async def test_health(app: FastAPI, path: str, service: str) -> None:
+async def test_health(app: FastAPI, path: str, service: str, extra: dict[str, object]) -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get(path)
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": service}
+    assert response.json() == {"status": "ok", "service": service, **extra}
 
 
 def routes(app: FastAPI) -> set[str]:

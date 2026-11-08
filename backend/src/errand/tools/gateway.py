@@ -74,6 +74,7 @@ class Caller(StrEnum):
     RECONCILER = "reconciler"
     WATCHER = "watcher"
     FOLLOWUP = "followup"
+    RANKER = "ranker"
 
 
 READ_TOOLS: frozenset[ToolName] = frozenset({"search_providers", "get_provider", "list_bookings"})
@@ -91,6 +92,8 @@ ALLOWED: Mapping[Caller, frozenset[ToolName]] = {
     Caller.RECONCILER: frozenset({"get_booking_status", "list_bookings"}),
     Caller.WATCHER: frozenset({"list_bookings"}),
     Caller.FOLLOWUP: frozenset({"search_providers", "get_provider", "hold_slot"}),
+    # Code fetching the top candidates' reviews for the reader before ranking (10.6).
+    Caller.RANKER: frozenset({"get_provider"}),
 }
 assert not any(tools & SIDE_EFFECT_TOOLS for tools in ALLOWED.values()), (
     "book, cancel and reschedule never go through the ordinary call path"
@@ -185,7 +188,8 @@ class ToolGateway:
                 await self._clock.sleep(self.limits.retry_backoff_s)
             time_left = None if critical else self._check_budget(tool)
             try:
-                return await self._attempt(caller, tool, request, attempt, time_left)
+                with self._tracer.opening("tool.call", tool):
+                    return await self._attempt(caller, tool, request, attempt, time_left)
             except (ToolTimeout, ToolTransient) as exc:
                 last = exc
                 if tool not in READ_TOOLS:

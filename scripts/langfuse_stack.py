@@ -1,0 +1,277 @@
+"""`make langfuse-up` / `make langfuse-down`: the self-hosted Langfuse in infra/langfuse.
+
+up:
+1. Docker must be installed and its daemon answering; otherwise exit 2 with what to do.
+   Every quick docker query (`info`, `stats`) has a timeout, so a hung daemon fails
+   the target instead of hanging it.
+2. Warn when Docker has little memory left: the stack (web, worker, clickhouse, postgres,
+   redis, minio) wants about 4 GiB on top of whatever else is running.
+3. Generate infra/langfuse/.env from openssl rand values if it is missing, and refuse to
+   go on unless git ignores it.
+4. `docker compose up -d --wait`, then poll /api/public/health until it answers or the
+   deadline passes.
+5. Print the URL, the login, and how the API picks up the project keys.
+
+down: `docker compose down`, keeping the volumes (add `-v` by hand to wipe them).
+
+`env` writes the .env alone (`--path` for another file); tests use it.
+
+DOCKER names the docker binary (default `docker`), so a test can simulate a machine
+without it, or with a daemon that hangs. ERRAND_DOCKER_TIMEOUT_S (default 15) bounds
+each quick docker query.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+import uuid
+from pathlib import Path
+from typing import NoReturn
+
+REPO = Path(__file__).resolve().parent.parent
+INFRA = REPO / "infra" / "langfuse"
+ENV_FILE = INFRA / ".env"
+PROJECT = "errand-langfuse"
+DEFAULT_PORT = 3100
+HEALTH_DEADLINE_S = 180.0
+# The stack's own footprint, measured idle on Docker Desktop, rounded up.
+NEEDED_BYTES = 4 * 1024**3
+
+
+def docker() -> str:
+    return os.environ.get("DOCKER", "docker")
+
+
+def fail(message: str, code: int = 2) -> NoReturn:
+    print(f"[langfuse] {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def say(message: str) -> None:
+    print(f"[langfuse] {message}", flush=True)
+
+
+def docker_timeout() -> float:
+    return float(os.environ.get("ERRAND_DOCKER_TIMEOUT_S", "15"))
+
+
+def docker_query(*args: str) -> subprocess.CompletedProcess[str]:
+    """A quick docker CLI call. One the daemon does not answer in time exits 2."""
+    timeout = docker_timeout()
+    try:
+        return subprocess.run([docker(), *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        fail(
+            f"the docker daemon is not answering (`docker {args[0]}` took over "
+            f"{timeout:.0f}s). Restart Docker Desktop, or run without Langfuse: the app and "
+            "the evals do not need it."
+        )
+
+
+def compose(env_file: Path, *args: str) -> list[str]:
+    return [
+        docker(),
+        "compose",
+        "-p",
+        PROJECT,
+        "--project-directory",
+        str(INFRA),
+        "--env-file",
+        str(env_file),
+        "-f",
+        str(INFRA / "docker-compose.yml"),
+        "-f",
+        str(INFRA / "docker-compose.override.yml"),
+        *args,
+    ]
+
+
+def require_docker() -> None:
+    if shutil.which(docker()) is None:
+        fail(
+            f"docker not found (looked for {docker()!r} on PATH). Install Docker Desktop, "
+            "or run without Langfuse: the app and the evals do not need it."
+        )
+    info = docker_query("info", "--format", "{{.MemTotal}}")
+    if info.returncode != 0:
+        fail("docker is installed but its daemon is not answering; start Docker Desktop first.")
+
+
+def rand_hex(nbytes: int) -> str:
+    openssl = shutil.which("openssl")
+    if openssl:
+        out = subprocess.run(
+            [openssl, "rand", "-hex", str(nbytes)], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        if re.fullmatch(rf"[0-9a-f]{{{nbytes * 2}}}", out):
+            return out
+    return secrets.token_hex(nbytes)
+
+
+def env_values() -> dict[str, str]:
+    return {
+        "ERRAND_LANGFUSE_PORT": str(DEFAULT_PORT),
+        "POSTGRES_PASSWORD": rand_hex(24),
+        "SALT": rand_hex(32),
+        # Langfuse requires exactly 64 hex characters here.
+        "ENCRYPTION_KEY": rand_hex(32),
+        "NEXTAUTH_SECRET": rand_hex(32),
+        "CLICKHOUSE_PASSWORD": rand_hex(24),
+        "REDIS_AUTH": rand_hex(24),
+        "MINIO_ROOT_PASSWORD": rand_hex(24),
+        "LANGFUSE_INIT_ORG_ID": "errand",
+        "LANGFUSE_INIT_ORG_NAME": "Errand",
+        "LANGFUSE_INIT_PROJECT_ID": "errand-agent",
+        "LANGFUSE_INIT_PROJECT_NAME": "errand-agent",
+        # Langfuse's own key format: a prefix and a uuid.
+        "LANGFUSE_INIT_PROJECT_PUBLIC_KEY": f"pk-lf-{uuid.uuid4()}",
+        "LANGFUSE_INIT_PROJECT_SECRET_KEY": f"sk-lf-{uuid.uuid4()}",
+        "LANGFUSE_INIT_USER_EMAIL": "dev@errand.local",
+        "LANGFUSE_INIT_USER_NAME": "Errand Dev",
+        "LANGFUSE_INIT_USER_PASSWORD": rand_hex(12),
+    }
+
+
+def read_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        values[name.strip()] = value.strip().strip("'\"")
+    return values
+
+
+def is_gitignored(path: Path) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(REPO), "check-ignore", "-q", "--", str(path)], capture_output=True
+    )
+    return result.returncode == 0
+
+
+def ensure_env(path: Path) -> bool:
+    """Write `path` if it is missing. True if it was written."""
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Generated by `make langfuse-up` (scripts/langfuse_stack.py). Local secrets:",
+        "# gitignored, never commit. Delete the file and the volumes to start over.",
+    ]
+    lines += [f"{k}={v}" for k, v in env_values().items()]
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return True
+
+
+def _bytes(text: str) -> float:
+    match = re.fullmatch(r"\s*([\d.]+)\s*([kKMGT]?i?B)\s*", text)
+    if not match:
+        return 0.0
+    scale = {"B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
+    scale.update({"kB": 1000, "KB": 1000, "MB": 1000**2, "GB": 1000**3, "TB": 1000**4})
+    return float(match.group(1)) * scale.get(match.group(2), 1)
+
+
+def warn_if_low_memory() -> None:
+    total_out = docker_query("info", "--format", "{{.MemTotal}}").stdout.strip()
+    if not total_out.isdigit():
+        return
+    total = int(total_out)
+    stats = docker_query("stats", "--no-stream", "--format", "{{.Name}}\t{{.MemUsage}}").stdout
+    used = 0.0
+    for line in stats.splitlines():
+        name, _, usage = line.partition("\t")
+        if name.startswith(PROJECT):
+            continue  # our own stack, already running
+        used += _bytes(usage.split("/")[0])
+    free = total - used
+    gib = 1024**3
+    if free < NEEDED_BYTES:
+        say(
+            f"warning: Docker has {total / gib:.1f} GiB, other containers use {used / gib:.1f} "
+            f"GiB, leaving {free / gib:.1f} GiB; the Langfuse stack needs about "
+            f"{NEEDED_BYTES / gib:.0f} GiB. It may fail to start or be killed. Raise Docker's "
+            "memory or stop other stacks if it does."
+        )
+
+
+def wait_healthy(url: str, deadline_s: float) -> bool:
+    deadline = time.monotonic() + deadline_s
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                if resp.status == 200:
+                    return True
+        except OSError:
+            pass
+        time.sleep(2)
+    return False
+
+
+def up() -> int:
+    require_docker()
+    warn_if_low_memory()
+    if ensure_env(ENV_FILE):
+        say(f"generated {ENV_FILE.relative_to(REPO)} with fresh random secrets")
+    if not is_gitignored(ENV_FILE):
+        fail(f"{ENV_FILE.relative_to(REPO)} is not gitignored; refusing to use it.")
+    values = read_env(ENV_FILE)
+    port = int(values.get("ERRAND_LANGFUSE_PORT", DEFAULT_PORT))
+    say("starting the stack (the first run pulls about 3 GB of images)")
+    result = subprocess.run(compose(ENV_FILE, "up", "-d", "--wait", "--wait-timeout", "300"))
+    if result.returncode != 0:
+        fail(
+            "docker compose up failed; see the output above. "
+            f"Logs: docker compose -p {PROJECT} logs langfuse-web",
+            result.returncode or 1,
+        )
+    health = f"http://localhost:{port}/api/public/health"
+    say(f"waiting for {health}")
+    if not wait_healthy(health, HEALTH_DEADLINE_S):
+        fail(f"Langfuse did not answer {health} within {HEALTH_DEADLINE_S:.0f}s", 1)
+    say(f"ready: http://localhost:{port}")
+    say(f"login: {values['LANGFUSE_INIT_USER_EMAIL']} / {values['LANGFUSE_INIT_USER_PASSWORD']}")
+    say(
+        "make dev now exports this project's keys and host to the API "
+        "(set ERRAND_LANGFUSE=off to keep it off)"
+    )
+    return 0
+
+
+def down() -> int:
+    require_docker()
+    if not ENV_FILE.exists():
+        fail(f"{ENV_FILE.relative_to(REPO)} is missing, so there is no stack of ours to stop", 1)
+    return subprocess.run(compose(ENV_FILE, "down")).returncode
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("up")
+    sub.add_parser("down")
+    env = sub.add_parser("env")
+    env.add_argument("--path", type=Path, default=ENV_FILE)
+    args = parser.parse_args(argv)
+    if args.cmd == "up":
+        return up()
+    if args.cmd == "down":
+        return down()
+    written = ensure_env(args.path)
+    say(f"{'wrote' if written else 'kept the existing'} {args.path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -17,11 +17,14 @@ tool call. Hitting one ends LIMIT_REACHED.
 How the model's tool calls are handled:
 - search_providers: any argument is a tool error and nothing is forwarded; service,
   area and date_range come from the resolved brief, and a missing required field is a
-  tool error naming it, with no world call;
+  tool error naming it, with no world call. The answer is ranked by code, with the
+  top candidates' reviews read by the quarantined reader first (agent/shortlist.py);
 - get_provider: only an id from the current shortlist (built for this brief version)
-  or from the user's bookings;
+  or from the user's bookings; the reviews go to the quarantined reader, and the view
+  carries only its digest;
 - list_bookings: `user_id` is injected;
-- update_brief: evidence-checked, all-or-nothing field merge (brief_ops);
+- update_brief: evidence-checked, all-or-nothing field merge (brief_ops); a rejected
+  patch also writes `guard.evidence_rejected`;
 - ask_user: the ask guard (ask_guard); an accepted ask ends the loop;
 - propose_booking (M4): `agent/validation.py` against the current shortlist, a fresh
   code-issued `list_bookings` and the unresolved intents. A rejection is a tool error
@@ -62,6 +65,7 @@ from errand.agent.planner_tools import (
     UpdateBriefArgs,
 )
 from errand.agent.records import open_bookings, state_extras
+from errand.agent.shortlist import ranked_shortlist
 from errand.agent.state import SystemNote, ThreadState
 from errand.agent.templates import recommendation_line
 from errand.agent.transitions import transition
@@ -306,8 +310,10 @@ class PlannerLoop:
             return views.render_error(result.error, reason=result.reason), True
         assert isinstance(result, SearchProvidersOut)
         budget = brief.budget_max_inr.value if brief.budget_max_inr else None
-        shortlist = views.build_shortlist(
-            result, window=window, budget=budget, brief_version=brief.version, tz=self.deps.tz
+        # Filter, provisional score, reader enrichment of the top candidates, final score,
+        # order, handles: all before anything is rendered for the loop (10.6).
+        shortlist = await ranked_shortlist(
+            self.deps, result, window=window, budget=budget, brief_version=brief.version
         )
         errand = self.errand.model_copy(update={"shortlist": shortlist})
         if errand.phase is Phase.GATHERING:
@@ -340,7 +346,12 @@ class PlannerLoop:
             return views.render_error(result.error), True
         assert isinstance(result, GetProviderOut)
         window = self.errand.brief.window.value if self.errand.brief.window else None
-        view = views.provider_view(result, window=window, shortlist=shortlist, tz=self.deps.tz)
+        # Raw reviews go to the quarantined reader and nowhere else; the view carries
+        # only its enum digest (None when the read was refused or failed).
+        read = await self.deps.reader.read(result)
+        view = views.provider_view(
+            result, window=window, shortlist=shortlist, tz=self.deps.tz, digest=read.digest
+        )
         return views.render(view.model_dump(mode="json")), False
 
     async def _list_bookings(self, args: Mapping[str, Any]) -> tuple[str, bool]:
@@ -396,6 +407,17 @@ class PlannerLoop:
                 evidence_ok=False,
                 what={"message_id": self.inbound.message_id, "applied": False},
                 reason="; ".join(outcome.errors)[:500],
+            )
+            # The guard record S16 and the eval table look for: a value the user's
+            # message does not support was refused, whatever the planner was told.
+            tracer.emit(
+                "guard.evidence_rejected",
+                detail={
+                    "tool": "update_brief",
+                    "fields": sorted({*set_names, *clear_names}),
+                    "message_id": self.inbound.message_id,
+                    "problems": len(outcome.errors),
+                },
             )
             return views.render_error(
                 "patch_rejected",

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
@@ -315,9 +314,15 @@ def test_trace_paths_refuse_ids_that_escape_the_traces_dir(tmp_path: Path) -> No
             trace_path(tmp_path, bad, "r_1")
 
 
-def test_make_sink_is_null_and_never_imports_langfuse() -> None:
+def test_make_sink_is_null_unless_keys_are_set_and_langfuse_is_not_off() -> None:
+    # That langfuse is then never imported is checked in a fresh interpreter, in
+    # tests/trace/test_langfuse_off.py: this process imports it for the sink tests.
     keys = LangfuseKeys(public_key=SecretStr("pk"), secret_key=SecretStr("sk"))
-    assert isinstance(make_sink(TraceSettings(langfuse="off"), keys), NullSink)
-    assert isinstance(make_sink(TraceSettings(langfuse="auto"), LangfuseKeys()), NullSink)
-    assert isinstance(make_sink(TraceSettings(langfuse="auto"), keys), NullSink)
-    assert "langfuse" not in sys.modules
+    for value in ("off", "OFF", "0", "false"):
+        sink = make_sink(TraceSettings(langfuse=value), keys)
+        assert isinstance(sink, NullSink)
+        assert sink.status() == {"state": "off", "reason": "disabled"}
+    for missing in (LangfuseKeys(), LangfuseKeys(public_key=SecretStr("pk"))):
+        sink = make_sink(TraceSettings(langfuse="auto"), missing)
+        assert isinstance(sink, NullSink)
+        assert sink.status() == {"state": "off", "reason": "no_keys"}

@@ -129,7 +129,7 @@ Acceptance:
 
 ## M8. Conversation quality
 
-Scope: `TimeWindowExpr` and `timewin.resolve`, `INVALIDATES` table and `invalidate` records, card invalidation on corrections, brief chips with provenance, value-bound evidence (section 10.7), out-of-coverage template, ranking with score parts and exclusions, reprompt for missing proposals, `NoEvidencePolicy`, `MatchingQuotePolicy` and `ReaskPolicy`.
+Scope: `TimeWindowExpr` and `timewin.resolve`, `INVALIDATES` table and `invalidate` records, card invalidation on corrections, brief chips with provenance, value-bound evidence (section 10.7), out-of-coverage template, the "Why this order" rendering of the score parts and the exclusion UX (the ranking function itself landed in M10), reprompt for missing proposals, `NoEvidencePolicy`, `MatchingQuotePolicy` and `ReaskPolicy`.
 
 Acceptance:
 - S04, S05, S51, S60 pass; S03 also passes with `ReaskPolicy` (the guard catches it).
@@ -171,7 +171,7 @@ Acceptance:
 
 ## M13. Bounded execution, every exit path
 
-Scope: remaining `RunOutcome` templates, `stop_reason` mapping (`max_tokens`, `refusal` to `MODEL_REFUSED`), cost cap, wall-clock deadline, outer backstop, node exception wrapper, `MODEL_UNAVAILABLE` retry, `ToolUnexpected` from malformed world responses, `LoopForeverPolicy`, `GarbageToolPolicy`.
+Scope: remaining `RunOutcome` templates, `stop_reason` mapping (`max_tokens`, `refusal` to `MODEL_REFUSED`), server-side refusal fallback on live Opus calls with the answering model recorded and priced in the trace (architecture section 10.1), cost cap, wall-clock deadline, outer backstop, node exception wrapper, `MODEL_UNAVAILABLE` retry, `ToolUnexpected` from malformed world responses, `LoopForeverPolicy`, `GarbageToolPolicy`.
 
 Acceptance:
 - S44, S45, S63 pass; a `GarbageToolPolicy` scenario ends with a clear outcome and no crash.

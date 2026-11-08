@@ -18,7 +18,7 @@ A run is a task the manager owns, with a strong reference held until it finishes
 is never garbage-collected and never tied to the request that started it: a closed tab
 or a dropped SSE connection cannot cancel it (ADR 0011). Each run gets its own tracer
 (JSONL first, then the live stream) and its own model and tool gateways, which share
-one `RunCounters`.
+one `RunCounters` with the run's quarantined review reader.
 
 Every run ends with exactly one `run.end` and a user-visible message. `respond` writes
 the normal one; if anything raises (or the 90 s backstop fires), the outer handler
@@ -50,7 +50,7 @@ from errand.api.sse import Broadcaster, RunStream
 from errand.approvals import service
 from errand.approvals.typed_grant import Decision, VisibleCard, decide
 from errand.clock import Clock, to_ms
-from errand.config import ApprovalSettings, LimitSettings, ModelSettings
+from errand.config import ApprovalSettings, LimitSettings, ModelSettings, ReaderSettings
 from errand.domain.counters import RunCounters
 from errand.domain.inbound import (
     ApprovalDeclined,
@@ -62,12 +62,15 @@ from errand.domain.inbound import (
 from errand.domain.outcomes import RunOutcome
 from errand.ids import IdFactory, message_id_for, message_id_for_user
 from errand.llm.gateway import LLMGateway
+from errand.quarantine.reader import ReviewReader
 from errand.store.agent_db import AgentDB
 from errand.store.repos.messages import Message
 from errand.store.repos.runs import RunTotals
 from errand.tools.gateway import ToolGateway, ToolLimits
 from errand.tools.runtime import WorldAccess
+from errand.trace.sinks.base import ProcessSink, Sink
 from errand.trace.sinks.jsonl import JsonlSink, trace_path
+from errand.trace.sinks.null import NullSink
 from errand.trace.sinks.stream import StreamSink
 from errand.trace.tracer import Tracer
 
@@ -80,6 +83,10 @@ TRIGGERS: dict[RoutedAs, str] = {
     "resume": "user_message_resume",
     "grant": "typed_grant",
 }
+
+
+def _no_reader() -> None:
+    return None
 
 
 class RunInProgress(Exception):
@@ -152,6 +159,9 @@ class RunManager:
         broadcaster: Broadcaster | None = None,
         approval_settings: ApprovalSettings | None = None,
         consequential: ConsequentialLocks | None = None,
+        reader_factory: ModelFactory | None = None,
+        reader_settings: ReaderSettings | None = None,
+        trace_sink: ProcessSink | None = None,
     ) -> None:
         self.graph = graph
         self.db = db
@@ -162,7 +172,12 @@ class RunManager:
         self.model_settings = model_settings
         self.limits = limits
         self.model_factory = model_factory
+        # The scripted review reader for one run (None in live mode, like the planner).
+        self.reader_factory = reader_factory or _no_reader
+        self.reader_settings = reader_settings or ReaderSettings()
         self.broadcaster = broadcaster or Broadcaster()
+        # The optional dashboard sink (Langfuse or NullSink), owned by the lifespan.
+        self.trace_sink: ProcessSink = trace_sink or NullSink()
         self._locks = ThreadLocks()
         self._active: dict[str, str] = {}
         # Strong references: a task nobody holds can be garbage-collected mid-run.
@@ -585,7 +600,7 @@ class RunManager:
         tracer = Tracer(
             run_id=run.run_id,
             thread_id=run.conversation_id,
-            sinks=[sink, StreamSink(run.stream.publish_record)],
+            sinks=[sink, StreamSink(run.stream.publish_record), self._dashboard(run)],
             now=self.clock.now,
         )
         outcome: RunOutcome = RunOutcome.INTERNAL_ERROR
@@ -615,6 +630,13 @@ class RunManager:
         if cancelled:
             raise asyncio.CancelledError()
 
+    def _dashboard(self, run: _Run) -> Sink:
+        try:
+            return self.trace_sink.for_run(run.run_id, run.conversation_id)
+        except Exception:
+            log.exception("run %s: no dashboard sink; the JSONL trace is unaffected", run.run_id)
+            return NullSink()
+
     def _deps(self, run: _Run, tracer: Tracer) -> RunDeps:
         llm = LLMGateway(
             tracer=tracer,
@@ -631,6 +653,17 @@ class RunManager:
             counters=run.counters,
             limits=ToolLimits(max_tool_calls=self.limits.tool_calls_per_run),
         )
+        reader = ReviewReader(
+            tracer=tracer,
+            counters=run.counters,
+            clock=self.clock,
+            db=self.db,
+            mode=self.model_settings.model_mode,
+            settings=self.reader_settings,
+            limits=self.limits,
+            transport=self.reader_factory(),
+            cassette_path=self.model_settings.cassette_path,
+        )
         return RunDeps(
             run_id=run.run_id,
             conversation_id=run.conversation_id,
@@ -643,6 +676,7 @@ class RunManager:
             clock=self.clock,
             tz=self.tz,
             limits=self.limits,
+            reader=reader,
             on_token=run.stream.publish_token,
             approval_settings=self.approval_settings,
             consequential=self.consequential,

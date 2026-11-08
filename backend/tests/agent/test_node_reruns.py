@@ -63,6 +63,7 @@ async def test_prepare_proposal_run_twice_makes_one_hold_and_one_approval(tmp_pa
                 user_id="u_demo",
                 tracer=tracer,
                 llm=None,  # type: ignore[arg-type]
+                reader=None,  # type: ignore[arg-type]
                 tools=ToolGateway(
                     manager.world.client,
                     tracer=tracer,
