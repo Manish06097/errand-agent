@@ -555,38 +555,90 @@ _CLAIM = re.compile(
 )
 # INV-04 reads negation by shape, with its own patterns and no code shared with the claim
 # guard. A claim word is exempt only when (1) the clause before it ENDS in a negator
-# followed by nothing but filler (auxiliaries, "yet", pronouns, booking nouns), so
-# "haven't booked", "nothing has been booked", "not yet confirmed" are exempt while
-# "don't worry I booked" and "no stress it's booked" are claims; (2) a future frame
-# ends the clause ("will be booked"); (3) the claim sits under a condition that is the
-# user's own approval ("once you tap approve it is booked"); or (4) a modal sits
-# between a conditional opener and the claim ("if you like I can have it booked").
-# A past-tense claim after "when you asked", "once again" or "after checking" is a claim.
-_NEG_WORD = r"(?:not|no|nothing|never|cannot|nahi|nahin|\w+n't|yet to)"
+# followed by what that negator may reach: "not", "n't" and "yet to" reach it through
+# filler (auxiliaries, "yet", pronouns, booking nouns), "no" only through a booking noun
+# it determines, "nothing" and "none" only through auxiliaries ("haven't booked",
+# "nothing has been booked", "No plumber is booked" are exempt; "No the plumber is
+# booked", "No I booked it" and "Nothing to do it's booked" are claims); (2) a future
+# frame ends the clause ("will be booked"); (3) a condition reaches the claim's own
+# clause (see _condition_exempt): the clause is future or modal, or the condition is the
+# user's present-tense approval and the claim is present, or an "if" or "unless" leads
+# straight to the claim ("if it's booked"); or (4) a Hinglish negator follows.
+# A past-tense claim after "when you asked", "once you approved" or "after checking" is a
+# claim, and so is anything past a "but", "and", "so" or a second comma.
+_NEG_WORD = r"(?:not|never|cannot|nahi|nahin|\w+n't|yet to)"
 _FILLER = (
-    r"(?:is|are|was|were|be|been|being|am|has|have|had|do|does|did|get|got|yet|still|ever|"
+    r"(?:is|are|was|were|be|been|being|am|has|have|had|get|got|yet|still|ever|"
     r"actually|currently|really|fully|also|i|you|we|they|he|she|it|it's|i've|that|this|there|"
     r"that's|a|an|the|any|your|my|their|booking|bookings|appointment|slot|plumber|electrician|"
-    r"job|visit|errand|request|anything|everything|something|one|to)"
+    r"job|visit|errand|request|anything|everything|something|one|able)"
 )
-_NEGATED_TAIL = re.compile(rf"\b{_NEG_WORD}(?:\s+{_FILLER})*\s*$")
+_AUX = (
+    r"(?:is|are|was|were|be|been|being|am|has|have|had|get|got|yet|still|ever|actually|"
+    r"currently|really|fully|also)"
+)
+_NO_NOUN = (
+    r"(?:bookings?|appointments?|slots?|plumbers?|electricians?|providers?|job|visit|errand|"
+    r"request|order|service|confirmation|one)"
+)
+_NEGATED_TAIL = re.compile(
+    rf"\b{_NEG_WORD}(?:\s+{_FILLER})*\s*$"
+    rf"|\bno\s+{_NO_NOUN}(?:\s+{_AUX})*\s*$"
+    rf"|\b(?:nothing|none)(?:\s+{_AUX})*\s*$"
+)
 _FUTURE_BE = re.compile(
     r"\b(?:will|would|shall|should|can|could)\s+(?:also\s+)?be\s*$|'ll\s+be\s*$"
 )
-_APPROVAL_OPENER = re.compile(
-    r"\b(?:once|after|when|if)\s+(?:you|the user)\s+(?:tap|approve|confirm|accept|grant|press|"
-    r"click|say\s+yes|okay|give)\w*\b[^,;:.]*$"
+_OPENER = re.compile(r"\b(?:once|after|when|if|unless|until)\b")
+# The user's own approval, present tense: "approved" and "tapped" do not match.
+_APPROVAL_NOW = re.compile(
+    r"\b(?:once|after|when|if)\s+(?:you|the user)\s+(?:taps?|approves?|confirms?|accepts?|"
+    r"grants?|press(?:es)?|clicks?|says?\s+(?:yes|okay|ok)|okay|gives?\s+(?:the\s+)?"
+    r"(?:go\s?ahead|approval))\b"
 )
-_MODAL_OPENER = re.compile(
-    r"\b(?:once|after|when|if|unless|until)\b[^,;:.]*\b(?:will|would|can|could|should|shall|may|"
-    r"might)\b[^,;:.]*$|\b(?:once|after|when|if|unless|until)\b[^,;:.]*'ll\b[^,;:.]*$"
-)
+_MODAL_WORD = re.compile(r"\b(?:will|would|can|could|should|shall|may|might)\b|'ll\b")
 _NOT_IDIOMS = re.compile(
     r"\b(?:no worries|no problem|no doubt|no need|no hurry|nothing else|not to worry|"
     r"not only|no more|no longer)\b",
     re.I,
 )
-_BREAKS = re.compile(r"[,;:()\u2013\u2014]|\s-\s|\b(?:but|and|so|then)\b", re.I)
+_BREAKS = re.compile(r"([,;:()\u2013\u2014]|\s-\s|\b(?:but|and|so|then)\b)", re.I)
+
+
+def _present(tail: str) -> bool:
+    """The claim is in the present tense: an is/are/gets or a 's right before it."""
+    last = re.findall(r"[\w']+", re.sub(r"\b(?:already|now|also|all)\b", " ", tail))[-1:]
+    return bool(last) and (
+        last[0] in ("is", "are", "am", "be", "being", "get", "gets")
+        or last[0].endswith(("'s", "'re"))
+    )
+
+
+def _condition_exempt(before: str, claim_word: str) -> bool:
+    """A condition exempts only the claim in its own clause, or in the main clause its
+    one closing comma opens ("Once you approve, it is booked")."""
+    parts = _BREAKS.split(before)  # text, separator, text, separator, ...
+    texts = parts[0::2]
+    last = len(texts) - 1
+    opened = [i for i, t in enumerate(texts) if _OPENER.search(t)]
+    if not opened:
+        return False
+    k = opened[-1]
+    if k == last:
+        tail = texts[k][_OPENER.search(texts[k]).start() :]  # type: ignore[union-attr]
+        word = tail.split()[0]
+        if word in ("if", "unless"):
+            lead = re.findall(r"[\w']+", tail)[1:]
+            if all(re.fullmatch(_FILLER, w) for w in lead):
+                return True
+        claim_side, cond_side = tail, tail
+    elif k == last - 1 and parts[2 * k + 1] == ",":
+        claim_side, cond_side = texts[last], texts[k]
+    else:
+        return False
+    if _MODAL_WORD.search(claim_side) or claim_word in ("will", "'ll"):
+        return True
+    return bool(_APPROVAL_NOW.search(cond_side)) and _present(claim_side)
 
 
 def _exempt(sentence: str, claim: re.Match[str]) -> bool:
@@ -597,9 +649,10 @@ def _exempt(sentence: str, claim: re.Match[str]) -> bool:
         return True
     before = sentence[: claim.start()].lower()
     clause = _NOT_IDIOMS.sub(" ", _BREAKS.split(before)[-1])
+    clause = re.sub(r"\bable to\b", "able", clause)
     if _NEGATED_TAIL.search(clause.strip()) or _FUTURE_BE.search(clause):
         return True
-    if _APPROVAL_OPENER.search(before) or _MODAL_OPENER.search(before):
+    if _condition_exempt(before, claim.group(0).lower()):
         return True
     return bool(re.match(r"\s+(?:hai\s+|hua\s+)?(?:nahi|nahin)\b", sentence[claim.end() :], re.I))
 
