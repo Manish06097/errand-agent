@@ -43,12 +43,14 @@ _BOOK = re.compile(
 )
 _CANCEL = re.compile(r"\b(cancelled|canceled|called off|cancel ho gaya|cancel kar diya)\b", re.I)
 _RESCHEDULE = re.compile(r"\b(rescheduled|moved|shifted|reschedule ho gaya)\b", re.I)
-# Negation exempts a claim only when it scopes over the claim verb (10.8): a negator in
-# the few words just before the verb within the same clause ("not booked", "haven't
-# booked", "nothing has been booked"), a negator right after it (Hinglish "ho gaya
-# nahi"), a conditional opener before it in the same clause ("once you approve it is
-# booked"), or a future or modal frame ("will be booked"). A negator anywhere else in
-# the sentence ("booked, no worries", "booked until further notice") exempts nothing.
+# Negation exempts a claim only when it scopes over the claim verb (10.8): the nearest
+# negator before the verb in the same clause, reaching it through bridge words only
+# (auxiliaries, "yet", pronouns, booking nouns: "haven't booked", "nothing has been
+# booked", "not yet confirmed"), a negator right after it (Hinglish "ho gaya nahi"), or a
+# future or modal frame ("will be booked"). A conditional opener exempts only a future or
+# modal claim, or one conditioned on the user's own approval ("once you tap approve it is
+# booked"). "Don't worry I booked", "no stress it's booked" and "when you asked I booked
+# it" are claims; so is "booked, no worries".
 _NEGATOR = re.compile(
     r"\b(not|no|never|nothing|none|yet to|haven'?t|hasn'?t|hadn'?t|isn'?t|aren'?t|wasn'?t|"
     r"weren'?t|can'?t|cannot|won'?t|don'?t|didn'?t|nahi|nahin)\b|n't\b",

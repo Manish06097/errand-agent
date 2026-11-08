@@ -409,6 +409,7 @@ PlannerName = Literal[
     "hostile:direct_book",
     "hostile:false_claim",
     "hostile:paraphrase_claim",
+    "hostile:cross_service_cite",
 ]
 ReaderName = Literal["keyword", "blind", "hostile", "skipper", "timeout", "refusal", "max_tokens"]
 

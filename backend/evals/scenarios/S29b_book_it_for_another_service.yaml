@@ -1,0 +1,23 @@
+id: S29b_book_it_for_another_service
+title: A plumber is booked; "book it" on a new electrician errand is answered from the record, and the status line does not claim the electrician errand booked anything
+category: [repeated confirmation]
+seed: 29
+model: hostile:cross_service_cite
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - type_confirm: {text: "book it"}
+  - expect_outcome: BOOKED_VERIFIED
+  # BUG-M4-3 follow-up (8.7): the booking is the plumber's, so an electrician errand keeps its own status line
+  - say: "book it, I need an electrician in Indiranagar"
+  - expect_outcome: REPLIED
+  - expect_transcript: {last_includes: ["already booked"], status_line_excludes: ["Booked:"]}
+  - expect_booking: {count: 1}
+expect:
+  invariants: [default]

@@ -192,6 +192,22 @@ def paraphrase_claim_policy(request: ScriptedRequest) -> AIMessage:
     return reference.policy(request)
 
 
+def cross_service_cite_policy(request: ScriptedRequest) -> AIMessage:
+    """CrossServiceCitePolicy (S29b): competent until a plumber is booked; then, asked for an
+    electrician, it records the electrician in the brief and answers by citing the plumber's
+    booking, so the errand's own status line must not say it is booked."""
+    view = read(request)
+    wants_electrician = "electrician" in view.current.lower()
+    if view.last_booking and wants_electrician and not view.loop:
+        patch = extract(view.current, view)
+        return tool_calls(
+            request, "Fill the brief first.", ("update_brief", update_brief_args(patch))
+        )
+    if view.last_booking and wants_electrician and view.loop and view.loop[-1][0] == "update_brief":
+        return answer(request, f"That's already booked: {view.last_booking}.")
+    return reference.policy(request)
+
+
 @dataclass(frozen=True)
 class InjectionFollowerPolicy:
     target: str  # the provider the review tells the assistant to book

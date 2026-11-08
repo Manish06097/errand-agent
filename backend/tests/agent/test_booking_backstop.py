@@ -154,6 +154,9 @@ async def test_a_fenced_off_attempt_is_an_outcome_and_a_prepared_one_is_closed(
         first = await h.finish(click.json()["run_id"])
         assert first.outcome == "PENDING_VERIFICATION"
         assert not [r for r in await h.op_log() if r["op"] == "book"]
+        # M4 sends no follow-up, so the text promises none (review round 2)
+        said = (await h.conversation())["messages"][-1]["body"]["text"]
+        assert "nothing was sent" in said and "tell you" not in said, said
         async with h.manager.db.session() as repos:
             intent = await repos.intents.get_by_approval(aid)
             assert intent is not None

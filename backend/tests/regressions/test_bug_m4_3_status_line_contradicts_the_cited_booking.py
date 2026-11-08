@@ -23,3 +23,13 @@ async def test_the_reply_and_its_status_line_agree(tmp_path: Path) -> None:
     scenario = load_scenario(EVALS / "scenarios" / "S29_book_it_twice.yaml")
     result = await run_scenario(scenario, tmp_path)
     assert result.passed, result.failures
+
+
+async def test_another_services_booking_never_becomes_this_errands_status_line(
+    tmp_path: Path,
+) -> None:
+    """Review round 2: a plumber booking cited on an electrician errand must not turn that
+    errand's own status line into "Booked: B-n"."""
+    scenario = load_scenario(EVALS / "scenarios" / "S29b_book_it_for_another_service.yaml")
+    result = await run_scenario(scenario, tmp_path)
+    assert result.passed, result.failures

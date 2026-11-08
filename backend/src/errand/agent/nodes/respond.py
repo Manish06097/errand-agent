@@ -116,6 +116,7 @@ class _Respond:
         self.asked = False
         # A verified booking this run's reply cites by id (guard-approved), for the status line.
         self.cited_booking: str | None = None
+        self.cited_service: str | None = None
 
     # ------------------------------------------------------------------ main
 
@@ -148,9 +149,22 @@ class _Respond:
         "Nothing booked for this request yet" under it (8.7)."""
         assert self.errand is not None
         phase = self.errand.phase
-        if self.cited_booking and phase in (Phase.GATHERING, Phase.COMPARING):
+        if (
+            self.cited_booking
+            and phase in (Phase.GATHERING, Phase.COMPARING)
+            and self._cited_is_ours()
+        ):
             return f"Booked: {self.cited_booking}, confirmed with the provider."
         return cards.status_line(phase)
+
+    def _cited_is_ours(self) -> bool:
+        """The cited booking belongs to this errand: same service as its brief, or the brief
+        names no service yet (a bare "book it" follow-up, S29, has nothing it could
+        contradict). A plumber booking never turns an electrician errand's status line
+        into "Booked" (8.7)."""
+        assert self.errand is not None
+        service = self.errand.brief.service
+        return service is None or str(service.value) == self.cited_service
 
     # ------------------------------------------------------------------ rendering
 
@@ -198,6 +212,7 @@ class _Respond:
             ids = [i for i in dict.fromkeys(BOOKING_ID.findall(guarded.text)) if i in known]
             if len(ids) == 1:
                 self.cited_booking = ids[0]
+                self.cited_service = next(r.service for r in records if r.booking_id == ids[0])
         return guarded.text
 
     def _verified_this_run(self) -> set[str]:
@@ -260,8 +275,8 @@ class _Respond:
         if isinstance(result, PendingCheck):
             if result.reason == "fenced_off":
                 text = (
-                    "Another request took over before the booking was sent, so nothing was "
-                    "booked yet. I'll tell you here when I know."
+                    "Another request took over before this one was sent, so nothing was sent "
+                    "from this request. Please check your bookings, or ask me again."
                 )
             elif result.reason == "material_mismatch":
                 text = (
