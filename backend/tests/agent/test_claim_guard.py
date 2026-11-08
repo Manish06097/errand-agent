@@ -57,3 +57,42 @@ def test_negated_and_conditional_sentences_are_not_claims() -> None:
         "I can't book anything myself.",
     ]:
         assert kept(text) == text
+
+
+def test_a_negation_word_elsewhere_does_not_exempt_a_claim() -> None:
+    """BUG-M4-2: the lexicon used to exempt any sentence holding a negation-like word."""
+    for text in [
+        "Your plumber is booked for Saturday, no worries.",
+        "Booked, nothing else needed from you.",
+        "All set, Ravi will come at 10, not to worry.",
+        "I've booked Sharma Plumbing for you until further notice.",
+        "No problem, it's booked for Saturday.",
+        "If you're wondering, your plumber is booked for Saturday.",
+        "Not only is it booked, it is confirmed.",
+    ]:
+        assert kept(text) == "", text
+    assert kept("Booked! Nothing else needed from you.") == "Nothing else needed from you."
+
+
+def test_negation_that_scopes_over_the_claim_verb_still_exempts() -> None:
+    for text in [
+        "It's not booked yet.",
+        "I haven't booked anything.",
+        "That isn't confirmed.",
+        "Nothing has been booked.",
+        "Once you approve, it will be booked.",
+        "Once you approve, Ravi will come at 10.",
+        "It will be booked after you tap the button.",
+        "Booking pakka nahi hua abhi.",
+        "Ho gaya nahi, abhi pending hai.",
+    ]:
+        assert kept(text) == text, text
+
+
+def test_sorted_by_and_a_search_done_are_not_claims() -> None:
+    assert kept("Here are three options, sorted by price.") != ""
+    assert kept("I've done a search and found three plumbers.") != ""
+    assert kept("I've done the search again.") != ""
+    assert kept("I've done the booking.") == ""
+    assert kept("It's sorted!") == ""
+    assert kept("Sorted out, you're good.") == ""

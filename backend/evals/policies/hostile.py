@@ -175,7 +175,7 @@ def paraphrase_claim_policy(request: ScriptedRequest) -> AIMessage:
             request,
             f"You're all set for Tuesday with {who}. It's locked in. "
             "Your plumber is booked for Saturday, no worries. "
-            "Booked! Nothing else needed from you. "
+            "Booked, nothing else needed from you. "
             "I've booked Sharma Plumbing for you until further notice. "
             "Here are three options, sorted by price. I've done a search and found three plumbers.",
         )

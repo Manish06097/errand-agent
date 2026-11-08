@@ -18,8 +18,9 @@ Records are this run's verified outcomes plus `known_bookings`, which holds a bo
 only after `get_booking_status` confirmed it. "Your booking B-5521 is confirmed" passes
 in a later run when B-5521 is confirmed; "I've booked the electrician too" fails when
 only a plumber was. A sentence that fails is removed and `respond` emits
-`guard.claim_rewritten`. Negated and conditional sentences ("not booked yet", "once
-you approve it will be booked") are not claims.
+`guard.claim_rewritten`. Negation exempts a claim only where it scopes
+over the claim verb ("not booked yet", "once you approve it will be booked"); "booked, no
+worries" is still a claim.
 """
 
 from __future__ import annotations
@@ -42,10 +43,38 @@ _BOOK = re.compile(
 )
 _CANCEL = re.compile(r"\b(cancelled|canceled|called off|cancel ho gaya|cancel kar diya)\b", re.I)
 _RESCHEDULE = re.compile(r"\b(rescheduled|moved|shifted|reschedule ho gaya)\b", re.I)
-_NEGATED = re.compile(
-    r"\b(not|no|never|nothing|none|yet to|until|unless|once you|after you|when you|if you|"
-    r"haven'?t|hasn'?t|isn'?t|aren'?t|wasn'?t|can'?t|cannot|won'?t|don'?t|nahi|nahin)\b|n't\b",
+# Negation exempts a claim only when it scopes over the claim verb (10.8): a negator in
+# the few words just before the verb within the same clause ("not booked", "haven't
+# booked", "nothing has been booked"), a negator right after it (Hinglish "ho gaya
+# nahi"), a conditional opener before it in the same clause ("once you approve it is
+# booked"), or a future or modal frame ("will be booked"). A negator anywhere else in
+# the sentence ("booked, no worries", "booked until further notice") exempts nothing.
+_NEGATOR = re.compile(
+    r"\b(not|no|never|nothing|none|yet to|haven'?t|hasn'?t|hadn'?t|isn'?t|aren'?t|wasn'?t|"
+    r"weren'?t|can'?t|cannot|won'?t|don'?t|didn'?t|nahi|nahin)\b|n't\b",
     re.I,
+)
+# Phrases that carry a negator word but negate nothing.
+_IDIOMS = re.compile(
+    r"\b(?:no (?:worries|problem|doubt|need|hurry|rush|charge|extra)|not to worry|"
+    r"nothing else|not only|no more|not just|no longer)\b",
+    re.I,
+)
+_CLAUSE_BREAK = re.compile(r"[,;:()\u2013\u2014]|\s-\s|\b(?:but|and|so|then|though)\b", re.I)
+_CONDITIONAL = re.compile(r"\b(?:once|after|when|if|unless|until) (?:you|i|it|the|they|we)\b", re.I)
+_FUTURE = re.compile(
+    r"(?:\b(?:will|would|can|could|should|shall|to|going to)\s+(?:also\s+)?be\s+|'ll\s+be\s+|"
+    r"\b(?:will|would|shall)\s+|'ll\s+)$",
+    re.I,
+)
+_TRAILING_NO = re.compile(r"^\s+(?:hai\s+|hua\s+|hui\s+)?(?:nahi|nahin)\b", re.I)
+_NEGATOR_REACH = 5  # words before the claim verb a negator may sit
+# Words that make "done" or "sorted" something other than "the errand is finished".
+_DONE_OBJECT = re.compile(
+    r"^\s+(?:a|an|the|some|my|this|that|one)\s+(?!book|reserv|appointment|job)", re.I
+)
+_SORTED_BY = re.compile(
+    r"^\s+(?:by|in|from|on|according|based|alphabetically|with|so|using)\b", re.I
 )
 _BOOKING_ID = re.compile(r"\bB-\d+\b")
 _SERVICES = {
@@ -79,13 +108,41 @@ class Guarded:
     removed: list[str] = field(default_factory=list)
 
 
+def _scoped_negation(sentence: str, match: re.Match[str]) -> bool:
+    """True when a negation, condition or future frame scopes over this claim match."""
+    before = sentence[: match.start()]
+    clause = _CLAUSE_BREAK.split(before)[-1]
+    words = _IDIOMS.sub(" ", clause).split()
+    if _NEGATOR.search(" ".join(words[-_NEGATOR_REACH:])):
+        return True
+    if _TRAILING_NO.match(sentence[match.end() :]):
+        return True
+    if _FUTURE.search(before):
+        return True
+    cond = [c for c in _CONDITIONAL.finditer(before)]
+    if cond:
+        between = before[cond[-1].end() :]
+        if not _CLAUSE_BREAK.search(between):
+            return True
+        return bool(re.match(r"(?:will|'ll)\b", match.group(0), re.I))
+    return False
+
+
+def _real_claim(sentence: str, match: re.Match[str]) -> bool:
+    word = match.group(0).lower()
+    rest = sentence[match.end() :]
+    if word == "done" and _DONE_OBJECT.match(rest):
+        return False
+    if word == "sorted" and _SORTED_BY.match(rest):
+        return False
+    return not _scoped_negation(sentence, match)
+
+
 def _verb(sentence: str) -> Kind | None:
-    if _CANCEL.search(sentence):
-        return "cancel"
-    if _RESCHEDULE.search(sentence):
-        return "reschedule"
-    if _BOOK.search(sentence):
-        return "book"
+    """The kind of record the sentence claims, if any claim in it is not negated."""
+    for kind, rx in (("cancel", _CANCEL), ("reschedule", _RESCHEDULE), ("book", _BOOK)):
+        if any(_real_claim(sentence, m) for m in rx.finditer(sentence)):
+            return kind  # type: ignore[return-value]
     return None
 
 
@@ -148,7 +205,7 @@ def guard(
         if not sentence.strip():
             continue
         kind = _verb(sentence)
-        if kind is None or _NEGATED.search(sentence) or _backed(sentence, kind, records, names, tz):
+        if kind is None or _backed(sentence, kind, records, names, tz):
             kept.append(sentence.strip())
         else:
             removed.append(sentence.strip())
