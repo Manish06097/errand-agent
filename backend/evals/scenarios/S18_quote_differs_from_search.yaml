@@ -1,0 +1,21 @@
+id: S18_quote_differs_from_search
+title: The held quote is ₹250 above the search price; the card shows both and the delta, and the booking is made at the held quote
+category: [changed price]
+seed: 18
+world:
+  book: {forced: [success]}
+  # every provider, so the scenario does not depend on who ranks first
+  quote_drift: {mode: on_hold, providers: {P1: 250, P2: 250, P3: 250, P4: 250, P5: 250, P6: 250, P7: 250, P8: 250, P9: 250, P10: 250, P11: 250, P12: 250, P13: 250, P14: 250, P15: 250, P16: 250, P17: 250, P18: 250, P19: 250, P20: 250}}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_card: {kind: action, price_delta_inr: 250, price_is_held_quote: true}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_booking: {count: 1, price_is_held_quote: true}
+expect:
+  invariants: [default]

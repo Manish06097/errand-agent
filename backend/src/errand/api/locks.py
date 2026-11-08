@@ -109,3 +109,76 @@ class LeaseKeeper:
                 log.error("lease %s renew task had failed: %r", self.lease.key, task.exception())
         async with self._db.session() as repos:
             await repos.leases.release(self.lease)
+
+
+def user_key(user_id: str) -> str:
+    return f"user:{user_id}"
+
+
+class ConsequentialBusy(RuntimeError):
+    """Another process held the user's consequential lease for too long."""
+
+
+class HeldUserLock:
+    """One run's hold on a user's consequential lock: the in-process lock and the lease.
+
+    `epoch` is the lease epoch, which every attempt-state write is fenced on. `release`
+    is idempotent: execute, verify and the RunManager's finally may all call it.
+    """
+
+    def __init__(self, keeper: LeaseKeeper, lock: asyncio.Lock) -> None:
+        self._keeper = keeper
+        self._lock = lock
+        self.epoch = keeper.lease.epoch
+        self._released = False
+
+    async def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        try:
+            await self._keeper.release()
+        finally:
+            self._lock.release()
+
+
+class UserLocks:
+    """The per-user consequential lock (6.6): only one execute-verify per user at a time.
+
+    Two conversations can each hold a card for the same booking; this lock makes the
+    second one's guard transaction run after the first committed, so it re-checks
+    against what the first did. The in-process lock orders runs in this process; the
+    `user:<id>` lease, on real time like every lease, orders processes.
+    """
+
+    def __init__(
+        self,
+        db: AgentDB,
+        holder: str,
+        *,
+        attempts: int = 100,
+        wait_s: float = 0.1,
+    ) -> None:
+        self._db = db
+        self._holder = holder
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._n = 0
+        self._attempts = attempts
+        self._wait_s = wait_s
+
+    async def acquire(self, user_id: str) -> HeldUserLock:
+        lock = self._locks.setdefault(user_id, asyncio.Lock())
+        await lock.acquire()
+        try:
+            self._n += 1
+            holder = f"{self._holder}:u{self._n}"
+            for _ in range(self._attempts):
+                keeper = await LeaseKeeper.acquire(self._db, user_key(user_id), holder)
+                if keeper is not None:
+                    keeper.start()
+                    return HeldUserLock(keeper, lock)
+                await asyncio.sleep(self._wait_s)
+            raise ConsequentialBusy(f"user:{user_id} is held by another process")
+        except BaseException:
+            lock.release()
+            raise

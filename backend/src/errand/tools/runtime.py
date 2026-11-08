@@ -19,7 +19,7 @@ from pathlib import Path
 
 import httpx
 
-from errand.clock import CLOCK_HEADER, Clock, TrackingClock
+from errand.clock import CLOCK_HEADER, Clock, ClockMode, TrackingClock
 from errand.tools.client import HttpTransport, InProcessTransport, WorldClient
 from errand.tools.timeouts import ToolTimeouts
 from errand.world.engine import WorldHost
@@ -31,6 +31,10 @@ class HostClock:
 
     def __init__(self, host: WorldHost) -> None:
         self._host = host
+
+    @property
+    def mode(self) -> ClockMode:
+        return self._host.world.mode
 
     def now(self) -> datetime:
         return self._host.world.clock.now()

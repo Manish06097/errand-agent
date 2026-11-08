@@ -1,7 +1,11 @@
 """What starts or resumes a run. Every input, from any source, goes through `ingress`.
 
-M3 produces only `UserMessage`; the other members exist so the checkpoint shape and
-the routing function do not change when M4 to M14 start sending them.
+M4 sends `UserMessage`, `UiAction` (`select_slot`, `refresh_hold`), `ApprovalGranted`
+and `ApprovalDeclined`; the other members exist so the checkpoint shape and the routing
+function do not change when M5 to M14 start sending them.
+
+An inbound is a hint, never an authority: `execute` re-reads the approval row, so a
+forged `ApprovalGranted` carries no permission (8.3).
 """
 
 from __future__ import annotations
@@ -21,6 +25,10 @@ class UserMessage(_Inbound):
     client_msg_id: str | None = None
     text: str
     turn_no: int
+    # Set by the messages route when the text is a bare acknowledgement ("ok", "yes")
+    # while the latest card allows typed grants: the run answers with the code hint and
+    # never calls the model. It never grants anything.
+    confirm_hint: bool = False
 
 
 class UiAction(_Inbound):

@@ -1,8 +1,21 @@
 """Ingress: every input lands here first (6.2).
 
 It loads the thread's errand, starts one if there is none (or the last one finished),
-resets the per-run fields and routes. A re-run after a crash produces the same result:
-the new errand's id is derived from the run id, nothing is written anywhere.
+resets the per-run fields, runs the approval sweep and routes:
+
+- `UserMessage` -> plan (or straight to respond with the code hint, for a bare
+  acknowledgement the messages route marked `confirm_hint`);
+- `UiAction(select_slot | refresh_hold)` -> prepare_proposal, no model call;
+- `ApprovalGranted` -> execute, which re-reads the row: the inbound is a hint;
+- `ApprovalDeclined` -> respond (DECLINED).
+
+A thread can be parked on a card that the sweep has since expired, or that something
+else ended. Ingress notices from the approvals table, not from state, moves the errand
+off AWAITING_APPROVAL (to COMPARING) and routes the input normally; respond then does
+not park on it again.
+
+A re-run after a crash produces the same result: the new errand's id is derived from
+the run id, and the only write is the sweep, which is idempotent.
 """
 
 from __future__ import annotations
@@ -12,15 +25,17 @@ from typing import Any, Literal
 from langgraph.runtime import Runtime
 
 from errand.agent.deps import RunDeps
+from errand.agent.records import live_approval
 from errand.agent.state import ThreadState
-from errand.agent.transitions import INITIAL_PHASE
+from errand.agent.transitions import INITIAL_PHASE, transition
 from errand.domain.brief import Brief, ErrandKind
 from errand.domain.errand import Errand, Phase
-from errand.domain.inbound import UserMessage
-from errand.domain.outcomes import Failure
+from errand.domain.inbound import ApprovalDeclined, ApprovalGranted, UiAction, UserMessage
+from errand.domain.outcomes import ConfirmHint, Declined, Failure
 from errand.ids import errand_id_for
 
 TERMINAL = frozenset({Phase.COMPLETED, Phase.FAILED, Phase.ABANDONED})
+M4_ACTIONS = frozenset({"select_slot", "refresh_hold"})
 
 
 async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
@@ -36,19 +51,78 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
     deps.tracer.errand_id = errand.errand_id
     with deps.tracer.node("ingress", phase_before=errand.phase.value) as span:
         update: dict[str, Any] = {
-            "errand": errand,
             "plan_result": None,
+            "result": None,
             "outcome": None,
+            "park": None,
             "system_notes": [],
         }
-        if not isinstance(state.inbound, UserMessage):
-            kind = state.inbound.type if state.inbound is not None else "none"
-            update["plan_result"] = Failure(reason=f"inbound {kind} is not handled until M4")
+        live = await live_approval(deps)
+        if errand.phase is Phase.AWAITING_APPROVAL and (
+            live is None or live.approval_id != errand.approval_id
+        ):
+            errand = await _off_dead_card(deps, errand)
+        inbound = state.inbound
+        if isinstance(inbound, UserMessage):
+            if inbound.confirm_hint and live is not None and live.status == "pending":
+                update["result"] = ConfirmHint(approval_id=live.approval_id)
+        elif isinstance(inbound, UiAction):
+            if inbound.kind not in M4_ACTIONS:
+                update["plan_result"] = Failure(reason=f"ui action {inbound.kind} is not built yet")
+        elif isinstance(inbound, ApprovalGranted):
+            async with deps.db.session() as repos:
+                row = await repos.approvals.get(inbound.approval_id)
+            if row is not None and row.status == "granted":
+                deps.tracer.emit(
+                    "approval.granted",
+                    approval_id=row.approval_id,
+                    fingerprint=row.fingerprint,
+                    via=row.granted_via,
+                    message_id=row.granted_message_id,
+                )
+                deps.tracer.emit("card.update", approval_id=row.approval_id, status="granted")
+        elif isinstance(inbound, ApprovalDeclined):
+            async with deps.db.session() as repos:
+                row = await repos.approvals.get(inbound.approval_id)
+            if row is not None and row.status == "declined":
+                deps.tracer.emit("approval.declined", approval_id=row.approval_id)
+                deps.tracer.emit("card.update", approval_id=row.approval_id, status="declined")
+            update["result"] = Declined(approval_id=inbound.approval_id)
+        else:
+            kind = inbound.type if inbound is not None else "none"
+            update["plan_result"] = Failure(reason=f"inbound {kind} is not handled until M5")
+        update["errand"] = errand
         span.end_fields["phase_after"] = errand.phase.value
     return update
 
 
-def route_after_ingress(state: ThreadState) -> Literal["plan", "respond"]:
-    if isinstance(state.inbound, UserMessage) and state.plan_result is None:
+async def _off_dead_card(deps: RunDeps, errand: Errand) -> Errand:
+    status = "missing"
+    if errand.approval_id is not None:
+        async with deps.db.session() as repos:
+            row = await repos.approvals.get(errand.approval_id)
+        if row is not None:
+            status = row.status
+    reason = {
+        "declined": "declined",
+        "expired": "approval_expired",
+        "invalidated": "approval_invalidated",
+        "consumed": "approval_consumed",
+    }.get(status, "approval_gone")
+    return transition(errand, Phase.COMPARING, reason, deps.tracer)
+
+
+Route = Literal["plan", "prepare_proposal", "execute", "respond"]
+
+
+def route_after_ingress(state: ThreadState) -> Route:
+    if state.result is not None or state.plan_result is not None:
+        return "respond"
+    inbound = state.inbound
+    if isinstance(inbound, UserMessage):
         return "plan"
+    if isinstance(inbound, UiAction) and inbound.kind in M4_ACTIONS:
+        return "prepare_proposal"
+    if isinstance(inbound, ApprovalGranted):
+        return "execute"
     return "respond"

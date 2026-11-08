@@ -216,7 +216,7 @@ def test_fsync_runs_for_approval_intent_and_run_end_records_only(
         t for t in [*emitted, "run.end"] if t.startswith(("approval.", "intent.")) or t == "run.end"
     )
     assert sorted(fsynced) == expected
-    assert len(expected) == 13  # 7 approval.*, 5 intent.*, run.end
+    assert len(expected) == 14  # 8 approval.*, 5 intent.*, run.end
     assert len(read_trace(jsonl.path).records) == len(emitted) + 2
 
 

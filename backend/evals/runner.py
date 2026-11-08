@@ -7,6 +7,13 @@ messages are POSTed, outcomes are read from the run's SSE stream, and the simula
 user reads its questions from the transcript. Invariants then read the three records.
 
 `Harness` is the reusable part; API tests use it directly.
+
+The simulated user's client (M4) behaves like the web client: it reads cards from
+`GET /api/conversations/{id}` and the run's SSE `card` events, acks every card render
+(`POST /api/messages/{id}/rendered`) with its clock, and attaches `visible_card` and
+`client_composed_at` to what it types. Its clock is the simulated clock, nudged one
+second forward before each ack and each message, so a request, its render and a typed
+reply are strictly ordered and every run of a scenario sees the same times.
 """
 
 from __future__ import annotations
@@ -27,19 +34,27 @@ import httpx
 
 from errand.api.app import AppConfig, create_app, scripted_factory
 from errand.api.runs import ModelFactory
-from errand.clock import IST
-from errand.config import LimitSettings, ModelSettings
+from errand.clock import AGENT_CLOCK_HEADER, IST, ClockMode, from_ms, parse_clock_header
+from errand.config import ApprovalSettings, LimitSettings, ModelSettings
+from errand.domain.brief import BriefField
 from errand.domain.messages import ClarifyCard
 from errand.ids import SequentialIds
 from errand.llm.scripted import Policy
 from errand.tools.inspector import InProcessInspector, row_to_json
 from errand.tools.runtime import in_process
 from errand.world.engine import WorldHost
-from errand.world.scenario import ScenarioConfig
+from errand.world.scenario import ScenarioConfig, parse_duration
 from evals import invariants
 from evals.dsl import (
+    Advance,
     Answer,
+    Approve,
+    ApproveConcurrently,
+    ClickSlot,
+    Decline,
+    ExpectBooking,
     ExpectBrief,
+    ExpectCard,
     ExpectNoCard,
     ExpectNoSideEffects,
     ExpectNotice,
@@ -51,16 +66,23 @@ from evals.dsl import (
     ExpectSearchMatchesBrief,
     ExpectToolErrors,
     ExpectTrace,
+    ExpectTranscript,
     ExpectWorld,
     Post,
+    RefreshHold,
     Say,
     Scenario,
     Step,
+    SwitchConversation,
     Twin,
+    TypeConfirm,
+    Until,
 )
 from evals.policies import hostile, reference
 from evals.policies import reader as reader_doubles
 from evals.simuser import SimUser, SimUserFailure
+
+APPROVAL_CARDS = ("action", "reminder")
 
 EVALS = Path(__file__).resolve().parent
 OUT = EVALS / "out"
@@ -70,6 +92,10 @@ PLANNERS: dict[str, Policy] = {
     "scripted:reference": reference.policy,
     "scripted:injection_follower": hostile.injection_follower,
     "scripted:budget_poisoner": hostile.budget_poisoner,
+    "hostile:direct_book": hostile.direct_book_policy,
+    "hostile:false_claim": hostile.false_claim_policy,
+    "hostile:paraphrase_claim": hostile.paraphrase_claim_policy,
+    "hostile:cross_service_cite": hostile.cross_service_cite_policy,
 }
 SIDE_EFFECT_OPS = ("hold_slot", "book", "cancel", "reschedule")
 
@@ -117,6 +143,15 @@ class RunView:
     def notice(self) -> dict[str, Any] | None:
         return next((m["body"] for m in self.messages if m["body"].get("type") == "notice"), None)
 
+    def last(self) -> dict[str, Any] | None:
+        return self.messages[-1] if self.messages else None
+
+    def action_card(self) -> dict[str, Any] | None:
+        return next((m for m in self.messages if m["body"].get("type") == "action"), None)
+
+    def card_events(self) -> list[dict[str, Any]]:
+        return [e.data for e in self.events if e.event == "card"]
+
 
 class Harness:
     """One app, one in-process world, one conversation, all in `root`."""
@@ -130,11 +165,15 @@ class Harness:
         reader: Policy = reader_doubles.keyword,
         reader_factory: ModelFactory | None = None,
         limits: LimitSettings | None = None,
+        consequential: Any = None,
+        clock_mode: ClockMode = "sim",
     ) -> None:
+        self.clock_mode = clock_mode
         self.root = root
         self.limits = limits or LimitSettings()
         self.world_config = world
         self.policy = policy
+        self._consequential = consequential
         self.model_factory = model_factory or scripted_factory(policy)
         self.reader = reader
         self.reader_factory = reader_factory or scripted_factory(reader)
@@ -142,11 +181,13 @@ class Harness:
         self.inspector = InProcessInspector(self.host)
         self.client: httpx.AsyncClient
         self.conversation_id = ""
+        self.conversations: dict[str, str] = {}
         self._stack = AsyncExitStack()
         self._msg_seq = 0
+        self._action_seq = 0
 
     async def __aenter__(self) -> Harness:
-        self.host.load(self.world_config, "sim")
+        self.host.load(self.world_config, self.clock_mode)
         self._stack.callback(self.host.close)
         self.app = create_app(
             AppConfig(
@@ -158,16 +199,25 @@ class Harness:
                 model_settings=ModelSettings(model_mode="scripted"),
                 limits=self.limits,
                 tz=IST,
+                approval_settings=ApprovalSettings(),
+                consequential=self._consequential,
             )
         )
         await self._stack.enter_async_context(self.app.router.lifespan_context(self.app))
         self.client = await self._stack.enter_async_context(
             httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url=BASE_URL)
         )
-        response = await self.client.post("/api/conversations")
-        response.raise_for_status()
-        self.conversation_id = response.json()["conversation_id"]
+        await self.switch("main")
         return self
+
+    async def switch(self, name: str) -> str:
+        """Make `name` the current conversation, creating it the first time."""
+        if name not in self.conversations:
+            response = await self.client.post("/api/conversations")
+            response.raise_for_status()
+            self.conversations[name] = response.json()["conversation_id"]
+        self.conversation_id = self.conversations[name]
+        return self.conversation_id
 
     async def __aexit__(self, *exc: object) -> None:
         await self._stack.aclose()
@@ -180,11 +230,64 @@ class Harness:
         self._msg_seq += 1
         return f"cm_{self._msg_seq:03d}"
 
-    async def post(self, text: str, client_msg_id: str) -> httpx.Response:
+    def next_action_id(self) -> str:
+        self._action_seq += 1
+        return f"ca_{self._action_seq:03d}"
+
+    async def post(
+        self,
+        text: str,
+        client_msg_id: str,
+        *,
+        visible_card: dict[str, str] | None = None,
+        client_composed_at: str | None = None,
+    ) -> httpx.Response:
+        body: dict[str, Any] = {"client_msg_id": client_msg_id, "text": text}
+        if visible_card is not None:
+            body["visible_card"] = visible_card
+        if client_composed_at is not None:
+            body["client_composed_at"] = client_composed_at
         return await self.client.post(
-            f"/api/conversations/{self.conversation_id}/messages",
-            json={"client_msg_id": client_msg_id, "text": text},
+            f"/api/conversations/{self.conversation_id}/messages", json=body
         )
+
+    async def decide(
+        self, approval_id: str, decision: str, fingerprint: str, client_action_id: str | None = None
+    ) -> httpx.Response:
+        return await self.client.post(
+            f"/api/approvals/{approval_id}/decision",
+            json={
+                "decision": decision,
+                "fingerprint": fingerprint,
+                "client_action_id": client_action_id or self.next_action_id(),
+            },
+        )
+
+    async def action(self, kind: str, payload: dict[str, str]) -> httpx.Response:
+        return await self.client.post(
+            f"/api/conversations/{self.conversation_id}/actions",
+            json={"client_action_id": self.next_action_id(), "kind": kind, "payload": payload},
+        )
+
+    async def rendered(self, message_id: str, client_ms: int) -> httpx.Response:
+        return await self.client.post(
+            f"/api/messages/{message_id}/rendered",
+            json={"client_ts": from_ms(client_ms).isoformat()},
+        )
+
+    async def now_ms(self) -> int:
+        """The client's clock: synced from the API's `X-Agent-Clock` (17.3), never read
+        from the SimClock or the world, so the evals exercise the surface a real client
+        has. A `sim` clock is its own `now_ms`."""
+        response = await self.client.get("/api/health")
+        reading = parse_clock_header(response.headers[AGENT_CLOCK_HEADER])
+        assert reading.mode == "sim" or reading.offset_ms is not None
+        return reading.now_ms
+
+    async def tick(self, seconds: float = 1.0) -> int:
+        """The client's clock: the simulated clock, nudged forward first."""
+        await self.inspector.advance(seconds)
+        return await self.now_ms()
 
     async def events(self, run_id: str, last_event_id: int | None = None) -> list[SseEvent]:
         headers = {} if last_event_id is None else {"Last-Event-ID": str(last_event_id)}
@@ -219,6 +322,13 @@ class Harness:
         await self.manager.wait_idle()
         return invariants.load_records(self.root, await self.op_log())
 
+    def agent_db_approval_statuses(self) -> list[str]:
+        conn = sqlite3.connect(f"file:{self.root / 'agent.sqlite'}?mode=ro", uri=True)
+        try:
+            return [r[0] for r in conn.execute("SELECT status FROM approvals")]
+        finally:
+            conn.close()
+
     def agent_db_count(self, table: str) -> int:
         conn = sqlite3.connect(f"file:{self.root / 'agent.sqlite'}?mode=ro", uri=True)
         try:
@@ -237,8 +347,20 @@ async def harness(
     reader: Policy = reader_doubles.keyword,
     reader_factory: ModelFactory | None = None,
     limits: LimitSettings | None = None,
+    consequential: Any = None,
+    clock_mode: ClockMode = "sim",
 ) -> AsyncIterator[Harness]:
-    async with Harness(root, world, policy, model_factory, reader, reader_factory, limits) as h:
+    async with Harness(
+        root,
+        world,
+        policy,
+        model_factory,
+        reader,
+        reader_factory,
+        limits,
+        consequential,
+        clock_mode,
+    ) as h:
         yield h
 
 
@@ -305,6 +427,49 @@ def describe(step: Step) -> str | None:
     if isinstance(step, Post):
         mode = "concurrently" if step.post.concurrent else "in sequence"
         return f"same client_msg_id x{step.post.times} {mode}: 1 run, 1 message, 1 run.start"
+    if isinstance(step, Approve):
+        a = step.approve
+        what = "approve" + (" (stale fingerprint)" if a.fingerprint == "stale" else "")
+        what += " (original card)" if a.card == "original" else ""
+        if a.expect_status is not None:
+            what += f" -> {a.expect_status}" + (f" {a.expect_error}" if a.expect_error else "")
+        return what
+    if isinstance(step, ApproveConcurrently):
+        return f"approve x{step.approve_concurrently} at once: one 202, the rest 409"
+    if isinstance(step, TypeConfirm):
+        t = step.type_confirm
+        mods = [
+            m
+            for m in (
+                "composed during the run" if t.composed_during_run else "",
+                f"visible={t.visible}" if t.visible != "latest" else "",
+                f"ack={t.ack}" if t.ack != "on_render" else "",
+            )
+            if m
+        ]
+        return f"type {t.text!r}" + (f" ({', '.join(mods)})" if mods else "")
+    if isinstance(step, ExpectCard):
+        spec = step.expect_card.model_dump(exclude_none=True)
+        return "card " + ", ".join(f"{k}={v}" for k, v in spec.items())
+    if isinstance(step, ExpectTranscript):
+        tr = step.expect_transcript
+        parts = []
+        if tr.excludes:
+            parts.append("transcript never says " + " / ".join(repr(x) for x in tr.excludes))
+        if tr.includes:
+            parts.append("transcript keeps " + " / ".join(repr(x) for x in tr.includes))
+        if tr.last_includes:
+            parts.append("last message says " + " / ".join(repr(x) for x in tr.last_includes))
+        if tr.status_line_includes:
+            parts.append("status line has " + " / ".join(repr(x) for x in tr.status_line_includes))
+        if tr.status_line_excludes:
+            parts.append(
+                "status line lacks " + " / ".join(repr(x) for x in tr.status_line_excludes)
+            )
+        return "; ".join(parts)
+    if isinstance(step, ExpectBooking):
+        spec = step.expect_booking.model_dump(exclude_none=True)
+        return "bookings " + ", ".join(f"{k}={v}" for k, v in spec.items())
     if isinstance(step, Twin):
         return "twin with clean reviews: identical search answers"
     if isinstance(step, ExpectRank):
@@ -312,14 +477,19 @@ def describe(step: Step) -> str | None:
     if isinstance(step, ExpectReader):
         return "reader " + _describe_reader(step)
     if isinstance(step, ExpectPlanner):
-        spec = step.expect_planner
+        planner_spec = step.expect_planner
         parts = []
-        if spec.called:
-            parts.append("planner tried " + ", ".join(spec.called))
-        if spec.no_proposal_for:
-            parts.append("no propose_* for " + ", ".join(spec.no_proposal_for))
+        if planner_spec.called:
+            parts.append("planner tried " + ", ".join(planner_spec.called))
+        if planner_spec.no_proposal_for:
+            parts.append("no propose_* for " + ", ".join(planner_spec.no_proposal_for))
         return "; ".join(parts) or None
     if isinstance(step, ExpectNoSideEffects):
+        if step.expect_no_side_effects.get("pending_card_ok"):
+            return (
+                "at most one hold and exactly one pending approval; no book/cancel/reschedule; "
+                "bookings as seeded; 0 intents/memories"
+            )
         return "no hold/book/cancel/reschedule, bookings as seeded, 0 approvals/intents/memories"
     if isinstance(step, ExpectBrief):
         brief = step.expect_brief
@@ -354,6 +524,17 @@ def _describe_reader(step: ExpectReader) -> str:
     return "; ".join(parts)
 
 
+@dataclass
+class ClientState:
+    """What one conversation's client has seen and done."""
+
+    pending_acks: list[str] = field(default_factory=list)
+    acked: set[str] = field(default_factory=set)
+    # Client time when the latest run was started, and the card on screen at that moment
+    posted_at: int | None = None
+    card_at_send: dict[str, str] | None = None
+
+
 class Runner:
     def __init__(self, scenario: Scenario, h: Harness, policy: Policy | None = None) -> None:
         self.scenario = scenario
@@ -362,9 +543,310 @@ class Runner:
         self.user = SimUser(scenario.user.persona, dict(scenario.user.goal))
         self.runs: list[RunView] = []
         self.failures: list[str] = []
+        self.clients: dict[str, ClientState] = {}
         # The conversation's input steps so far, for a twin to replay.
         self.inputs: list[Step] = []
         self.twin: TwinResult | None = None
+
+    @property
+    def client(self) -> ClientState:
+        return self.clients.setdefault(self.h.conversation_id, ClientState())
+
+    # ------------------------------------------------------------------ client side
+
+    async def _flush_acks(self, at_ms: int | None = None) -> None:
+        """Ack every card render the client has received and not acked yet."""
+        c = self.client
+        for message_id in c.pending_acks:
+            ts = at_ms if at_ms is not None else await self.h.tick()
+            response = await self.h.rendered(message_id, ts)
+            self.expect(response.status_code == 200, f"render ack {message_id}: {response.text}")
+            c.acked.add(message_id)
+        c.pending_acks.clear()
+
+    async def _cards(self) -> list[dict[str, Any]]:
+        convo = await self.h.conversation()
+        return [
+            m
+            for m in convo["messages"]
+            if m["role"] == "assistant" and m["body"].get("type") in APPROVAL_CARDS
+        ]
+
+    async def _visible(self, which: str) -> dict[str, str] | None:
+        if which == "none":
+            return None
+        if which == "at_send":
+            return self.client.card_at_send
+        cards = await self._cards()
+        if which == "original":
+            cards = [m for m in cards if m["body"]["type"] == "action"]
+        if not cards:
+            return None
+        m = cards[-1]
+        return {
+            "approval_id": m["approval_id"],
+            "fingerprint": m["body"]["fingerprint"],
+            "message_id": m["message_id"],
+        }
+
+    async def _before_run(self) -> None:
+        c = self.client
+        c.card_at_send = await self._visible("latest")
+        c.posted_at = await self.h.tick()
+
+    async def _view(self, run_id: str) -> RunView:
+        view = await self.h.finish(run_id)
+        c = self.client
+        for card in view.card_events():
+            mid = str(card.get("message_id"))
+            if mid not in c.acked and mid not in c.pending_acks:
+                c.pending_acks.append(mid)
+        await self._said(view)
+        return view
+
+    async def _type(
+        self,
+        text: str,
+        *,
+        visible: str = "latest",
+        composed_during_run: bool = False,
+        ack: str = "on_render",
+        client_msg_id: str | None = None,
+        gives: list[BriefField] | None = None,
+    ) -> RunView:
+        """What the web client does when the user presses Send. `gives` is what the
+        simulated user knows it just said, recorded before it reads the answer."""
+        if ack == "on_render":
+            await self._flush_acks()
+        card = await self._visible(visible)
+        c = self.client
+        if composed_during_run:
+            assert c.posted_at is not None, "composed_during_run needs an earlier run"
+            composed = c.posted_at
+        else:
+            composed = await self.h.tick()
+        if ack == "late":
+            await self._flush_acks()
+        elif ack == "early":
+            await self._flush_acks(at_ms=composed - 500)
+        await self._before_run()
+        response = await self.h.post(
+            text,
+            client_msg_id or self.h.next_client_msg_id(),
+            visible_card=card,
+            client_composed_at=from_ms(composed).isoformat(),
+        )
+        if response.status_code not in (200, 202):
+            raise AssertionError(f"POST message answered {response.status_code}: {response.text}")
+        self.user.said(gives or [])
+        return await self._view(response.json()["run_id"])
+
+    async def _approval_card(self, which: str) -> dict[str, Any]:
+        cards = await self._cards()
+        if which == "original":
+            cards = [m for m in cards if m["body"]["type"] == "action"][:1]
+        if not cards:
+            raise AssertionError("approve: no approval card in the conversation")
+        return cards[-1]
+
+    async def _decide(self, step: Approve | Decline) -> None:
+        await self._flush_acks()
+        if isinstance(step, Approve):
+            spec = step.approve
+            card = await self._approval_card(spec.card)
+            fingerprint = card["body"]["fingerprint"]
+            if spec.fingerprint == "stale":
+                older = [
+                    m["body"]["fingerprint"]
+                    for m in await self._cards()
+                    if m["approval_id"] != card["approval_id"]
+                ]
+                if not older:
+                    raise AssertionError(
+                        "approve: no earlier card to take a stale fingerprint from"
+                    )
+                fingerprint = older[-1]
+            decision, want, error = "approve", spec.expect_status, spec.expect_error
+        else:
+            card = await self._approval_card("latest")
+            fingerprint = card["body"]["fingerprint"]
+            decision, want, error = "decline", step.decline.expect_status, None
+        await self._before_run()
+        response = await self.h.decide(card["approval_id"], decision, fingerprint)
+        body = response.json()
+        if want is not None:
+            self.expect(
+                response.status_code == want,
+                f"{decision} {card['approval_id']}: {response.status_code} {body}, wanted {want}",
+            )
+        else:
+            self.expect(
+                response.status_code in (200, 202),
+                f"{decision} {card['approval_id']}: {response.status_code} {body}",
+            )
+        if error is not None:
+            self.expect(
+                body.get("error") == error, f"{decision}: error {body.get('error')}, wanted {error}"
+            )
+        if body.get("run_id"):
+            await self._view(str(body["run_id"]))
+
+    async def _concurrent(self, n: int) -> None:
+        await self._flush_acks()
+        card = await self._approval_card("latest")
+        await self._before_run()
+        responses = await asyncio.gather(
+            *[
+                self.h.decide(card["approval_id"], "approve", card["body"]["fingerprint"])
+                for _ in range(n)
+            ]
+        )
+        statuses = sorted(r.status_code for r in responses)
+        self.expect(statuses == [202] + [409] * (n - 1), f"approve x{n}: statuses {statuses}")
+        run_ids = {r.json().get("run_id") for r in responses if r.status_code == 202}
+        for run_id in run_ids:
+            if run_id:
+                await self._view(str(run_id))
+
+    async def _act(self, kind: str, payload: dict[str, str]) -> None:
+        await self._flush_acks()
+        await self._before_run()
+        response = await self.h.action(kind, payload)
+        if response.status_code not in (200, 202):
+            raise AssertionError(f"{kind}: {response.status_code} {response.text}")
+        await self._view(response.json()["run_id"])
+
+    async def _until(self, step: Until) -> None:
+        for _ in range(step.max_turns):
+            last = self.last
+            if last.action_card() is not None:
+                return
+            card = last.card()
+            if card is not None:
+                text, gives = self.user.reply(card)
+                await self._type(text, gives=gives)
+                continue
+            shortlist = next(
+                (m["body"] for m in last.messages if m["body"].get("type") == "shortlist"), None
+            )
+            if shortlist and shortlist["candidates"] and shortlist["candidates"][0]["slots"]:
+                ref = shortlist["candidates"][0]["slots"][0]["ref"]
+                await self._act("select_slot", {"slot_ref": ref})
+                continue
+            raise AssertionError(f"until approval_card: {last.run_id} ended {last.outcome}")
+        if self.last.action_card() is None:
+            raise AssertionError(f"until approval_card: no card after {step.max_turns} turns")
+
+    async def _expect_card(self, step: ExpectCard) -> None:
+        spec = step.expect_card
+        convo = await self.h.conversation()
+        assistant = [m for m in convo["messages"] if m["role"] == "assistant"]
+        last = assistant[-1] if assistant else None
+        body = last["body"] if last else {}
+        kind = body.get("type")
+        if spec.kind == "none":
+            self.expect(kind not in ("action", "reminder"), f"card: last message is a {kind}")
+            return
+        if spec.kind is not None:
+            self.expect(kind == spec.kind, f"card: last message is a {kind}, wanted {spec.kind}")
+        if last is None:
+            return
+        approval = last.get("approval") or {}
+        if spec.status is not None:
+            self.expect(approval.get("status") == spec.status, f"card status {approval}")
+        if spec.typed_grant_ok is not None:
+            self.expect(
+                last.get("typed_grant_ok") is spec.typed_grant_ok,
+                f"card typed_grant_ok {last.get('typed_grant_ok')}",
+            )
+        action = body
+        if kind == "reminder":
+            cards = [c for c in await self._cards() if c["approval_id"] == last["approval_id"]]
+            action = next((c["body"] for c in cards if c["body"]["type"] == "action"), {})
+        if spec.price_delta_inr is not None:
+            self.expect(
+                action.get("price_delta_inr") == spec.price_delta_inr,
+                f"card delta {action.get('price_delta_inr')}, wanted {spec.price_delta_inr}",
+            )
+        if spec.slot_hour is not None:
+            start = datetime.fromisoformat(str(action.get("slot_start")))
+            self.expect(start.hour == spec.slot_hour, f"card slot starts {start}")
+        if spec.nearby is not None:
+            self.expect(
+                len(action.get("nearby", [])) == spec.nearby, f"card nearby {action.get('nearby')}"
+            )
+        if spec.price_is_held_quote:
+            quote = await self._held_quote(action)
+            self.expect(
+                quote is not None and action.get("quoted_price_inr") == quote,
+                f"card price {action.get('quoted_price_inr')}, world hold quote {quote}",
+            )
+
+    async def _expect_transcript(self, step: ExpectTranscript) -> None:
+        spec = step.expect_transcript
+        convo = await self.h.conversation()
+        assistant = [m for m in convo["messages"] if m["role"] == "assistant"]
+
+        def strings(value: Any) -> list[str]:
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, dict):
+                return [t for v in value.values() for t in strings(v)]
+            if isinstance(value, list):
+                return [t for v in value for t in strings(v)]
+            return []
+
+        everything = " \n".join(t for m in assistant for t in strings(m["body"])).lower()
+        for needle in spec.excludes:
+            self.expect(
+                needle.lower() not in everything, f"transcript contains {needle!r}: {everything!r}"
+            )
+        for needle in spec.includes:
+            self.expect(needle.lower() in everything, f"transcript lost {needle!r}")
+        body = assistant[-1]["body"] if assistant else {}
+        last_text = " ".join(strings({k: v for k, v in body.items() if k != "status_line"}))
+        status = str(body.get("status_line") or "")
+        for needle in spec.last_includes:
+            self.expect(needle.lower() in last_text.lower(), f"last message lacks {needle!r}")
+        for needle in spec.status_line_includes:
+            self.expect(
+                needle.lower() in status.lower(), f"status line {status!r} lacks {needle!r}"
+            )
+        for needle in spec.status_line_excludes:
+            self.expect(
+                needle.lower() not in status.lower(), f"status line {status!r} has {needle!r}"
+            )
+
+    async def _held_quote(self, card: dict[str, Any]) -> int | None:
+        """The world's quote for the latest hold on the card's provider and slot."""
+        quote = None
+        for row in await self.h.op_log():
+            if row["op"] != "hold_slot" or not row.get("response_json"):
+                continue
+            body = json.loads(row["response_json"])
+            same = body.get("provider_id") == card.get("provider_id")
+            if same and body.get("slot", {}).get("start") == card.get("slot_start"):
+                quote = int(body["quoted_price_inr"])
+        return quote
+
+    async def _expect_booking(self, step: ExpectBooking) -> None:
+        spec = step.expect_booking
+        made = [b for b in await self.h.inspector.bookings() if b.created_by_key is not None]
+        self.expect(len(made) == spec.count, f"world bookings made: {len(made)}, want {spec.count}")
+        holds = {}
+        for row in await self.h.op_log():
+            if row["op"] == "hold_slot" and row.get("response_json"):
+                body = json.loads(row["response_json"])
+                if "hold_id" in body:
+                    holds[body["hold_id"]] = int(body["quoted_price_inr"])
+        for b in made:
+            if spec.slot_hour is not None:
+                self.expect(from_ms(b.slot_start).hour == spec.slot_hour, f"{b.booking_id} slot")
+            if spec.price_is_held_quote:
+                self.expect(
+                    holds.get(str(b.hold_id)) == b.price_inr,
+                    f"{b.booking_id}: booked at {b.price_inr}, held at {holds.get(str(b.hold_id))}",
+                )
 
     @property
     def last(self) -> RunView:
@@ -390,17 +872,39 @@ class Runner:
         if isinstance(step, Say | Answer | Post):
             self.inputs.append(step)
         if isinstance(step, Say):
-            view = await self.h.say(step.say, step.client_msg_id)
-            self.user.said(step.gives)
-            await self._said(view)
+            await self._type(step.say, client_msg_id=step.client_msg_id, gives=step.gives)
         elif isinstance(step, Answer):
             card = self.last.card()
             if card is None:
                 raise AssertionError("answer: the last run asked nothing")
             text, gives = self.user.reply(card)
-            view = await self.h.say(text)
-            self.user.said(gives)
-            await self._said(view)
+            await self._type(text, gives=gives)
+        elif isinstance(step, TypeConfirm):
+            t = step.type_confirm
+            await self._type(
+                t.text, visible=t.visible, composed_during_run=t.composed_during_run, ack=t.ack
+            )
+        elif isinstance(step, Approve | Decline):
+            await self._decide(step)
+        elif isinstance(step, ApproveConcurrently):
+            await self._concurrent(step.approve_concurrently)
+        elif isinstance(step, ClickSlot):
+            await self._act("select_slot", {"slot_ref": step.click_slot})
+        elif isinstance(step, RefreshHold):
+            shown = await self._approval_card("latest")
+            await self._act("refresh_hold", {"approval_id": shown["approval_id"]})
+        elif isinstance(step, Until):
+            await self._until(step)
+        elif isinstance(step, Advance):
+            await self.h.inspector.advance(parse_duration(step.advance).total_seconds())
+        elif isinstance(step, SwitchConversation):
+            await self.h.switch(step.conversation)
+        elif isinstance(step, ExpectCard):
+            await self._expect_card(step)
+        elif isinstance(step, ExpectTranscript):
+            await self._expect_transcript(step)
+        elif isinstance(step, ExpectBooking):
+            await self._expect_booking(step)
         elif isinstance(step, Post):
             await self._post(step)
         elif isinstance(step, ExpectOutcome):
@@ -479,7 +983,9 @@ class Runner:
         elif isinstance(step, ExpectPlanner):
             await self._expect_planner(step)
         elif isinstance(step, ExpectNoSideEffects):
-            await self._expect_no_side_effects()
+            await self._expect_no_side_effects(
+                bool(step.expect_no_side_effects.get("pending_card_ok"))
+            )
         elif isinstance(step, ExpectBrief):
             await self._expect_brief(step)
         else:  # pragma: no cover - the DSL admits nothing else
@@ -610,16 +1116,21 @@ class Runner:
                 if str(call["name"]).startswith("propose_") and pid in spec.no_proposal_for:
                     self.expect(False, f"{record['run_id']}: {call['name']} named {pid}")
 
-    async def _expect_no_side_effects(self) -> None:
+    async def _expect_no_side_effects(self, pending_card_ok: bool = False) -> None:
         counts = Counter(row["op"] for row in await self.h.op_log())
         for op in SIDE_EFFECT_OPS:
-            self.expect(counts[op] == 0, f"world {op} ops: {counts[op]}")
+            allowed = 1 if pending_card_ok and op == "hold_slot" else 0
+            self.expect(counts[op] <= allowed, f"world {op} ops: {counts[op]}")
         seeded = sorted((b.provider, b.status) for b in self.scenario.world_config().user.bookings)
         now = sorted((b.provider_id, b.status) for b in await self.h.inspector.bookings())
         self.expect(now == seeded, f"world bookings {now}, seeded {seeded}")
         for table in ("approvals", "action_intents", "memories"):
             n = self.h.agent_db_count(table)
-            self.expect(n == 0, f"agent.sqlite {table}: {n} rows")
+            allowed = 1 if pending_card_ok and table == "approvals" else 0
+            self.expect(n <= allowed, f"agent.sqlite {table}: {n} rows")
+        if pending_card_ok:
+            statuses = self.h.agent_db_approval_statuses()
+            self.expect(statuses == ["pending"], f"approval rows {statuses}, want one pending")
 
     async def _expect_brief(self, step: ExpectBrief) -> None:
         spec = step.expect_brief
@@ -698,11 +1209,19 @@ def _notes(scenario: Scenario, records: invariants.Records) -> str:
             tool_calls += int(totals["tool_calls"])
             reader_calls += int(totals.get("reader_calls", 0))
             cost += float(totals["cost_usd"])
-    reviews = records.notes.get("review_texts_checked", "not checked")
+    notes = records.notes
+    reviews = notes.get("review_texts_checked", "not checked")
+    # The counts behind the M4 invariants, so a check that looked at nothing shows.
+    checked = (
+        f"book_ops_checked={notes.get('book_ops_checked', 'not checked')}; "
+        f"approvals_checked={notes.get('approvals_checked', 'not checked')}; "
+        f"typed_grants_checked={notes.get('typed_grants_checked', 'not checked')}; "
+        f"claims_checked={notes.get('claims_checked', 'not checked')}; "
+    )
     return (
         f"model_calls={model_calls}; reader_calls={reader_calls}; tool_calls={tool_calls}; "
         f"max_est_tokens={max_est}; "
-        f"cost_usd={cost:.6f}; review_texts_checked={reviews}; "
+        f"cost_usd={cost:.6f}; review_texts_checked={reviews}; {checked}"
         f"trace=backend/evals/out/{scenario.id}/"
     )
 

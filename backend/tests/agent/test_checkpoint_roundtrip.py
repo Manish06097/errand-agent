@@ -3,7 +3,9 @@
 One process writes the checkpoints, a fresh process reads them back: every value must
 come back equal and as the same types all the way down (not a dict that a later
 validation would quietly turn back into a model), with no LangGraph serde warning. The
-threads cover every member of the `Inbound` and `PlanResult` unions.
+threads cover every member of the `Inbound`, `PlanResult` and `StepResult` unions,
+including M4's `HoldRef` on the errand, the inbound variants M4 sends (a typed grant, a
+refresh_hold action, a message marked for the confirm hint), `Proposal`, and `park`.
 
 This is also where the generic-`Fact` trap is pinned: a parametrised `Fact[Service]`
 is not restored by a strict checkpoint (it comes back as a dict), so the brief uses
@@ -43,8 +45,9 @@ SCRIPT = textwrap.dedent(
         ApprovalDeclined, ApprovalGranted, Recover, SystemEvent, UiAction, UserMessage,
     )
     from errand.domain.outcomes import (
-        Ask, AskExhausted, Failure, Limit, Options, Proposal, Reply, RunOutcome, TooLarge,
-        ToolDown,
+        ActionFailed, AlreadyHandled, Ask, AskExhausted, BookCalled, Booked, CardReady,
+        ConfirmHint, Declined, Failure, HoldFailed, Limit, Options, OverBudget, PendingCheck,
+        Proposal, ProposalRefused, Replan, Reply, Requote, RunOutcome, TooLarge, ToolDown,
     )
     from errand.domain.slots import (
         Candidate, Exclusion, HoldRef, ReviewDigest, Shortlist, SlotHandle,
@@ -114,6 +117,9 @@ SCRIPT = textwrap.dedent(
         ApprovalDeclined(approval_id="ap_1"),
         SystemEvent(kind="followup_start", booking_id="B-1"),
         Recover(intent_id="in_1"),
+        ApprovalGranted(approval_id="ap_2", via="typed", message_id="r_0002-u"),
+        UiAction(client_action_id="ca_2", kind="refresh_hold", payload={"approval_id": "ap_1"}),
+        UserMessage(message_id="r_0003-u", text="ok", turn_no=3, confirm_hint=True),
     ]
     results = [
         Reply(text="hello"), Ask(fields=[BriefField.AREA], question="where?", options=["x"]),
@@ -122,12 +128,27 @@ SCRIPT = textwrap.dedent(
         ToolDown(tool="search_providers", error_class="ToolTransient"),
         TooLarge(section="current", estimated=2000, cap=1000), Failure(reason="x"),
     ]
+    steps = [
+        CardReady(approval_id="ap_1", replaced_reason="hold_lapsed"),
+        ProposalRefused(reason="duplicate_booking", text="no"),
+        HoldFailed(provider_id="P1", slot_label="Tue 10 Nov, 09:00-10:00"),
+        OverBudget(provider_id="P1", provider_name="Ravi", slot_label="x", quoted_price_inr=1800,
+                   budget_inr=1500),
+        ConfirmHint(approval_id="ap_1"), Declined(approval_id="ap_1"),
+        AlreadyHandled(approval_id="ap_1", reason="consumed"),
+        Requote(approval_id="ap_1", reason="hold_lapsed"), Replan(note="over_budget"),
+        Booked(approval_id="ap_1", intent_id="in_ap_1", booking_id="B-1"),
+        ActionFailed(approval_id="ap_1", reason="hold_expired", fresh_quote=True),
+        PendingCheck(approval_id="ap_1", intent_id="in_ap_1", reason="status_not_confirmed"),
+        BookCalled(approval_id="ap_1", intent_id="in_ap_1", attempt_id="in_ap_1.a1",
+                   answer="confirmed", booking_id="B-1", price_inr=1350),
+    ]
     states = {}
-    for i, (inbound, result) in enumerate(zip_longest(inbounds, results)):
+    for i, (inbound, result, step) in enumerate(zip_longest(inbounds, results, steps)):
         states[f"t{i}"] = ThreadState(
             thread_id=f"t{i}", user_id="u_demo", run_id=f"r_{i:04d}", inbound=inbound,
             errand=errand, system_notes=[SystemNote(kind="slot_taken", text="taken")],
-            plan_result=result,
+            plan_result=result, result=step, park="ap_1" if i % 2 else None,
             counters=RunCounters(model_calls=3, tool_calls=2, reprompts=1, replans=1,
                                  tokens_in=900, tokens_out=80, cost=Decimal("0.012345"),
                                  started_at=T0, deadline_at=T0 + timedelta(seconds=60)),
@@ -198,5 +219,5 @@ def test_full_thread_state_round_trips_through_strict_msgpack_in_a_fresh_process
     assert wrote.returncode == 0, wrote.stdout + wrote.stderr
     read = run(script, "read", db)
     assert read.returncode == 0, read.stdout + read.stderr
-    assert read.stdout.strip() == "read ok: 9 threads"
+    assert read.stdout.strip() == "read ok: 13 threads"
     assert read.stderr == "", read.stderr

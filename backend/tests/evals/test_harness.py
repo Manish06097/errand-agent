@@ -33,7 +33,8 @@ steps:
 
 
 def test_an_unknown_step_verb_fails_at_load(tmp_path: Path) -> None:
-    path = write(tmp_path, "X1", BASE.format(id="X1", steps="  - approve: {}"))
+    # crash_at is an M6 verb; until it is built, a scenario using it must not load.
+    path = write(tmp_path, "X1", BASE.format(id="X1", steps="  - crash_at: {}"))
     with pytest.raises(ValidationError, match="exactly one verb"):
         load_scenario(path)
 

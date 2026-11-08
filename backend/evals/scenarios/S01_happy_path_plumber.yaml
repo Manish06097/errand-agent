@@ -1,0 +1,28 @@
+id: S01_happy_path_plumber
+title: Brief example 1 with the area in the message; no questions, one card at the held quote, one verified booking
+category: [core]
+seed: 1
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_no_card: {}
+  - expect_card: {kind: action, status: pending, typed_grant_ok: true, price_is_held_quote: true}
+  - expect_world: {search_providers: 1, hold_slot: 1, book: 0}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_card: {kind: outcome}
+  - expect_world: {hold_slot: 1, book: 1, get_booking_status: 1}
+  - expect_booking: {count: 1, price_is_held_quote: true}
+expect:
+  invariants: [default]

@@ -104,13 +104,14 @@ def test_the_checker_rejects_what_strict_mode_rejects() -> None:
     assert strict_problems(empty, "e") == []
 
 
-def test_the_tools_are_the_m3_read_and_brief_tools_in_order() -> None:
+def test_the_tools_are_the_read_brief_and_propose_tools_in_order() -> None:
     assert PLANNER_TOOL_NAMES == (
         "search_providers",
         "get_provider",
         "list_bookings",
         "update_brief",
         "ask_user",
+        "propose_booking",
     )
     assert not set(PLANNER_TOOL_NAMES) & CONSEQUENTIAL_TOOLS
 
@@ -130,5 +131,6 @@ def test_what_reaches_the_api_is_strict_and_in_the_same_order() -> None:
 
 
 def test_the_tool_list_fits_its_context_section() -> None:
+    # 1,996 of 2,000 with propose_booking (M4); M9 and M11 add tools and need room made.
     size = est_tokens(json.dumps(list(PLANNER_TOOLS), ensure_ascii=False, separators=(",", ":")))
     assert size <= CAPS["tools"]

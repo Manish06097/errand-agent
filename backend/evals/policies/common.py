@@ -22,6 +22,7 @@ _SHORTLIST_ROW = re.compile(
     r"^- (?P<id>[A-Z]+\d+) (?P<name>.+?): ₹(?P<price>\d+), rating (?P<rating>[\d.]+)"
     r"(?P<verified>, verified)?; (?P<slots>.*)$"
 )
+_SLOT = re.compile(r"(?P<ref>S\d+) (?P<label>[A-Z][a-z]{2} \d+ [A-Z][a-z]{2}, \d\d:\d\d-\d\d:\d\d)")
 
 
 @dataclass
@@ -31,6 +32,9 @@ class Candidate:
     price: int
     rating: float
     first_slot: str | None
+    verified: bool = False
+    # (ref, label) for every slot handle shown, in order
+    slots: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -42,6 +46,11 @@ class TurnView:
     shortlist_current: bool
     # (tool name, parsed result or None, is_error) for every tool call answered so far
     loop: list[tuple[str, Any, bool]] = field(default_factory=list)
+    # Record-backed lines of the errand state (M4)
+    last_booking: str | None = None
+    approval_card: str | None = None
+    notes: list[str] = field(default_factory=list)
+    recent: str = ""
 
 
 def _text_of(message: HumanMessage) -> str:
@@ -72,8 +81,20 @@ def read(request: ScriptedRequest) -> TurnView:
     shortlist: list[Candidate] = []
     current_shortlist = False
     in_known = in_shortlist = False
+    last_booking: str | None = None
+    approval_card: str | None = None
+    notes: list[str] = []
     for line in state.splitlines():
-        if line.startswith("Missing:"):
+        if line.startswith("Last booking in this chat: "):
+            last_booking = line.removeprefix("Last booking in this chat: ")
+            in_known = False
+        elif line.startswith("Approval card: "):
+            approval_card = line.removeprefix("Approval card: ")
+            in_known = False
+        elif line.startswith("App note: "):
+            notes.append(line.removeprefix("App note: "))
+            in_known = False
+        elif line.startswith("Missing:"):
             rest = line.removeprefix("Missing:").strip()
             missing = [] if rest == "none" else [p.strip() for p in rest.split(",")]
             in_known = in_shortlist = False
@@ -97,6 +118,8 @@ def read(request: ScriptedRequest) -> TurnView:
                         price=int(match.group("price")),
                         rating=float(match.group("rating")),
                         first_slot=first,
+                        verified=bool(match.group("verified")),
+                        slots=[(m.group("ref"), m.group("label")) for m in _SLOT.finditer(slots)],
                     )
                 )
     names: dict[str, str] = {}
@@ -115,6 +138,10 @@ def read(request: ScriptedRequest) -> TurnView:
         shortlist=shortlist,
         shortlist_current=current_shortlist and bool(shortlist),
         loop=loop,
+        last_booking=last_booking,
+        approval_card=approval_card,
+        notes=notes,
+        recent=sections.get("recent_turns", ""),
     )
 
 

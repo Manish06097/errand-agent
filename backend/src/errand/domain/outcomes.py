@@ -1,4 +1,5 @@
-"""Run outcomes (15.2) and what the planner loop hands to `respond` (PlanResult)."""
+"""Run outcomes (15.2), what the planner loop hands to `respond` (PlanResult), and what
+the code nodes on the booking path hand to it (StepResult, M4)."""
 
 from __future__ import annotations
 
@@ -68,7 +69,8 @@ class Options(_Result):
 
 
 class Proposal(_Result):
-    """A validated propose_* (M4)."""
+    """A propose_* that passed validation in the loop. `prepare_proposal` validates it
+    again before holding, and `execute` a third time inside its guard transaction."""
 
     kind: Literal["proposal"] = "proposal"
     action: Literal["book", "cancel", "reschedule"]
@@ -105,5 +107,142 @@ class Failure(_Result):
 
 PlanResult = Annotated[
     Reply | Ask | AskExhausted | Options | Proposal | Limit | ToolDown | TooLarge | Failure,
+    Field(discriminator="kind"),
+]
+
+
+# ---------------------------------------------------------------- booking path (M4)
+#
+# Results of the code nodes (prepare_proposal, execute, verify) and of code-only routing
+# in ingress. Each one renders to exactly one outcome template in `respond`.
+
+
+class CardReady(_Result):
+    """A pending approval and its card exist; respond posts the card and parks."""
+
+    kind: Literal["card_ready"] = "card_ready"
+    approval_id: str
+    # Why a card replaced an earlier one in this run, if it did (a lapsed hold at
+    # preflight, a material change at execute time); respond says so above the card.
+    replaced_reason: str | None = None
+
+
+class ProposalRefused(_Result):
+    """prepare_proposal's validation refused (a stale list, a duplicate, a slot gone)."""
+
+    kind: Literal["proposal_refused"] = "proposal_refused"
+    reason: str
+    text: str
+
+
+class HoldFailed(_Result):
+    kind: Literal["hold_failed"] = "hold_failed"
+    provider_id: str
+    slot_label: str
+
+
+class OverBudget(_Result):
+    """The held quote is above the budget: no approval row exists for it (8.6)."""
+
+    kind: Literal["over_budget"] = "over_budget"
+    provider_id: str
+    provider_name: str
+    slot_label: str
+    quoted_price_inr: int
+    budget_inr: int
+
+
+class ConfirmHint(_Result):
+    """A bare acknowledgement while the latest card allows typed grants: a code hint."""
+
+    kind: Literal["confirm_hint"] = "confirm_hint"
+    approval_id: str
+
+
+class Declined(_Result):
+    kind: Literal["declined"] = "declined"
+    approval_id: str
+
+
+class AlreadyHandled(_Result):
+    """execute found the approval no longer consumable (another run consumed it)."""
+
+    kind: Literal["already_handled"] = "already_handled"
+    approval_id: str
+    reason: str
+
+
+class Requote(_Result):
+    """execute's preflight sends the errand back for a fresh hold and a new card."""
+
+    kind: Literal["requote"] = "requote"
+    approval_id: str
+    reason: Literal["hold_lapsed", "material_changed"]
+
+
+class Replan(_Result):
+    """prepare_proposal sends the run back to plan once, with a SystemNote."""
+
+    kind: Literal["replan"] = "replan"
+    note: Literal["hold_failed", "over_budget"]
+
+
+class Booked(_Result):
+    kind: Literal["booked"] = "booked"
+    approval_id: str
+    intent_id: str
+    booking_id: str
+
+
+class ActionFailed(_Result):
+    kind: Literal["action_failed"] = "action_failed"
+    approval_id: str
+    reason: Literal[
+        "slot_taken",
+        "hold_expired",
+        "provider_refused",
+        "not_consumable",
+        "duplicate",
+        "never_sent",
+    ]
+    fresh_quote: bool = False
+
+
+class PendingCheck(_Result):
+    """The provider's answer is not settled: the intent is needs_attention."""
+
+    kind: Literal["pending_check"] = "pending_check"
+    approval_id: str
+    intent_id: str
+    reason: Literal["status_not_confirmed", "material_mismatch", "fenced_off"]
+    detail: str = ""
+
+
+class BookCalled(_Result):
+    """execute handed the attempt to verify: what `book` answered, classified."""
+
+    kind: Literal["book_called"] = "book_called"
+    approval_id: str
+    intent_id: str
+    attempt_id: str
+    answer: Literal["confirmed", "unknown"]
+    booking_id: str | None = None
+    price_inr: int | None = None
+
+
+StepResult = Annotated[
+    CardReady
+    | ProposalRefused
+    | HoldFailed
+    | OverBudget
+    | ConfirmHint
+    | Declined
+    | AlreadyHandled
+    | Requote
+    | Replan
+    | Booked
+    | ActionFailed
+    | PendingCheck
+    | BookCalled,
     Field(discriminator="kind"),
 ]
