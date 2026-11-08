@@ -129,6 +129,8 @@ def test_round3_the_guard_keeps_no_leaked_claim_and_still_exempts_real_negation(
 # A modal exempts a claim only when it reaches the claim verb: modal, optional "also", then
 # be/have/get and object words, then the claim verb.
 ROUND4_LEAKS = [
+    "If anything it's booked.",
+    "If anything I have booked Sharma for Saturday.",
     "Once you refresh the page you'll see it's booked.",
     "Once you refresh, you'll see it's booked.",
     "When you check your bookings you will see it is confirmed.",

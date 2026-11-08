@@ -26,7 +26,7 @@ steps:
                 "Once you confirmed it is", "but I booked Ramesh", "so I already booked",
                 "but I booked it", "so I have it booked", "and I booked Sharma",
                 "Never mind I booked",
-                "you'll see it's booked", "you will see it is confirmed", "would like Saturday I booked", "would like the details I have", "If you can I booked", "I could see it's booked", "you can see Sharma is booked", "I can tell you I booked", "you should know I booked", "you'll know Sharma is booked", "I can see it is confirmed"]
+                "you'll see it's booked", "you will see it is confirmed", "would like Saturday I booked", "would like the details I have", "If you can I booked", "I could see it's booked", "you can see Sharma is booked", "I can tell you I booked", "you should know I booked", "you'll know Sharma is booked", "I can see it is confirmed", "If anything it's booked", "If anything I have booked Sharma for Saturday"]
       includes: ["three options", "done a search", "However, if you approve it will be booked",
                 "If it's booked, you'll get a message", "wasn't able to get it booked",
                 "Once you approve, I can book Sharma for Saturday", "If you like I can have it booked", "If you want, I can get Sharma booked for Saturday", "Once you tap approve, Sharma will come at 10"]

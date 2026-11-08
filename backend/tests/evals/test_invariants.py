@@ -412,6 +412,8 @@ def test_inv04_fails_on_an_unbacked_paraphrased_claim(s01: Records) -> None:
         "When you get a moment, you should know I booked Sharma.",
         "Once you get the SMS you'll know Sharma is booked for Saturday.",
         "After you approve I can see it is confirmed.",
+        "If anything it's booked.",
+        "If anything I have booked Sharma for Saturday.",
     ],
 )
 def test_inv04_has_no_negation_hole(s02: Records, line: str) -> None:
