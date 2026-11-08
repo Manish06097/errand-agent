@@ -28,13 +28,17 @@ def routes(app: FastAPI) -> set[str]:
     return {r.path for r in app.routes if isinstance(r, APIRoute)}
 
 
-def test_api_has_exactly_the_m3_routes() -> None:
+def test_api_has_exactly_the_m4_routes() -> None:
     assert routes(api_app) == {
         "/api/health",
         "/api/conversations",
         "/api/conversations/{conversation_id}",
         "/api/conversations/{conversation_id}/messages",
         "/api/runs/{run_id}/events",
+        # M4: the approval decision, the render ack and the M4 UI actions
+        "/api/approvals/{approval_id}/decision",
+        "/api/messages/{message_id}/rendered",
+        "/api/conversations/{conversation_id}/actions",
     }
 
 

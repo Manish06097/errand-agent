@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from errand.domain.counters import RunCounters
 from errand.domain.errand import Errand, Phase
 from errand.domain.inbound import Inbound
-from errand.domain.outcomes import PlanResult, RunOutcome
+from errand.domain.outcomes import PlanResult, RunOutcome, StepResult
 
 __all__ = ["Errand", "Phase", "SystemNote", "ThreadState"]
 
@@ -39,5 +39,10 @@ class ThreadState(BaseModel):
     errand: Errand | None = None  # one active errand per thread
     system_notes: list[SystemNote] = Field(default_factory=list)
     plan_result: PlanResult | None = None
+    # What the code nodes on the booking path decided (M4); respond renders it in
+    # preference to plan_result.
+    result: StepResult | None = None
+    # The approval respond parked the run on; await_approval interrupts on it (M4).
+    park: str | None = None
     counters: RunCounters = Field(default_factory=RunCounters)
     outcome: RunOutcome | None = None

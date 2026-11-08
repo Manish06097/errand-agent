@@ -1,0 +1,19 @@
+id: S27_over_budget_quote
+title: Every held quote is over the budget; no approval row is created, the planner gets one replan, then the user is asked to raise the budget
+category: [approval]
+seed: 27
+world:
+  quote_drift: {mode: on_hold, providers: {P1: 1000, P2: 1000}}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - expect_outcome: ASKED_USER
+  - expect_notice: raise_budget
+  - expect_card: {kind: none}
+  - expect_trace: {approval.requested: 0}
+  - expect_world: {hold_slot: 2, book: 0}
+expect:
+  invariants: [default]

@@ -9,7 +9,11 @@ Sections and caps (estimated tokens, 13.1):
   same bytes on every turn.
 - S2 tools: the fixed planner tool list (measured here, sent by the gateway).
 - S3 errand state: the brief with provenance, `Known:` and `Missing:`, the ask
-  history, and a digest of the current shortlist.
+  history, the last verified booking in this conversation, the live approval card (if
+  any) with its status, the app's notes for this run (a SystemNote replan), and a
+  digest of the current shortlist. The last-booking and card lines come from the
+  agent's records (`known_bookings`, `approvals`), passed in by the caller, so "book it"
+  after a booking is answered from the record, not from memory of the chat.
 - S6 recent turns: up to the last 6 turns as text, whole turns, newest first until the
   cap, never a thinking block.
 - S7 current message: must fit whole; over its cap the run ends CONTEXT_TOO_LARGE and
@@ -31,7 +35,15 @@ from langchain_core.messages import HumanMessage
 from errand.agent.brief_ops import known_lines, missing
 from errand.domain.errand import Errand
 from errand.domain.inbound import UserMessage
-from errand.domain.messages import ClarifyCard, OutcomeNotice, ShortlistCard, TextBody
+from errand.domain.messages import (
+    ActionCard,
+    CardReminder,
+    ClarifyCard,
+    OutcomeCard,
+    OutcomeNotice,
+    ShortlistCard,
+    TextBody,
+)
 from errand.domain.windows import fmt_day, slot_label
 from errand.llm.tokens import est_tokens
 from errand.store.repos.messages import Message
@@ -53,6 +65,15 @@ def rules_text() -> str:
 
 def system_blocks() -> list[dict[str, Any]]:
     return [{"type": "text", "text": rules_text(), "cache_control": {"type": "ephemeral"}}]
+
+
+@dataclass(frozen=True)
+class StateExtras:
+    """Record-backed lines for S3, already rendered as plain text by the caller."""
+
+    last_booking: str | None = None
+    approval_card: str | None = None
+    notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,11 +100,12 @@ def build_context(
     now: datetime,
     tz: tzinfo,
     tools: Sequence[dict[str, Any]],
+    extras: StateExtras | None = None,
 ) -> BuiltContext:
     system = system_blocks()
     rules_est = est_tokens(system[0]["text"])
     tools_est = est_tokens(json.dumps(list(tools), ensure_ascii=False, separators=(",", ":")))
-    state = "<errand_state>\n" + render_state(errand, now, tz) + "\n</errand_state>"
+    state = "<errand_state>\n" + render_state(errand, now, tz, extras) + "\n</errand_state>"
     recent_text, included, dropped = _render_recent(history, current.message_id)
     recent = "<recent_turns>\n" + (recent_text or "(none)") + "\n</recent_turns>"
     current_text = "<current_message>\n" + current.text + "\n</current_message>"
@@ -121,7 +143,9 @@ def build_context(
     )
 
 
-def render_state(errand: Errand, now: datetime, tz: tzinfo) -> str:
+def render_state(
+    errand: Errand, now: datetime, tz: tzinfo, extras: StateExtras | None = None
+) -> str:
     brief = errand.brief
     local = now.astimezone(tz)
     lines = [
@@ -143,6 +167,13 @@ def render_state(errand: Errand, now: datetime, tz: tzinfo) -> str:
         )
     if brief.ask_exhausted:
         lines.append("Do not ask again: " + ", ".join(f.value for f in brief.ask_exhausted))
+    if extras is not None:
+        if extras.last_booking:
+            lines.append("Last booking in this chat: " + extras.last_booking)
+        if extras.approval_card:
+            lines.append("Approval card: " + extras.approval_card)
+        for note in extras.notes:
+            lines.append("App note: " + note)
     lines += _render_shortlist(errand, tz)
     return "\n".join(lines)
 
@@ -183,6 +214,15 @@ def render_body(body: dict[str, Any]) -> str:
         return f"[showed {len(sl.candidates)} options for {sl.window_label}: {names}]{rec}"
     if kind == "notice":
         return OutcomeNotice.model_validate(body).text
+    if kind == "action":
+        action = ActionCard.model_validate(body)
+        return (
+            f"[showed an approval card: {action.title}, {action.slot_label}, {action.button_label}]"
+        )
+    if kind == "reminder":
+        return CardReminder.model_validate(body).text
+    if kind == "outcome":
+        return OutcomeCard.model_validate(body).text
     return ""
 
 

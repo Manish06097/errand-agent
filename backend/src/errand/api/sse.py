@@ -25,7 +25,12 @@ from fastapi.sse import ServerSentEvent
 
 from errand.trace.reader import read_trace
 
-EVENT_NAMES = {"run.start": "run.started", "run.end": "run.finished"}
+EVENT_NAMES = {
+    "run.start": "run.started",
+    "run.end": "run.finished",
+    "card": "card",
+    "card.update": "card.update",
+}
 
 
 @dataclass(frozen=True)

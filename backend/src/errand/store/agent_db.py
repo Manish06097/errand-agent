@@ -19,7 +19,12 @@ from pathlib import Path
 import aiosqlite
 
 from errand.store.db import open_agent_db, transaction_immediate
+from errand.store.repos.approvals import ApprovalsRepo
+from errand.store.repos.client_requests import ClientRequestsRepo
 from errand.store.repos.conversations import ConversationsRepo
+from errand.store.repos.holds import HoldsRepo
+from errand.store.repos.intents import IntentsRepo
+from errand.store.repos.known_bookings import KnownBookingsRepo
 from errand.store.repos.leases import LeasesRepo
 from errand.store.repos.messages import MessagesRepo
 from errand.store.repos.runs import RunsRepo
@@ -34,6 +39,11 @@ class Repos:
     messages: MessagesRepo
     runs: RunsRepo
     leases: LeasesRepo
+    approvals: ApprovalsRepo
+    holds: HoldsRepo
+    intents: IntentsRepo
+    known_bookings: KnownBookingsRepo
+    client_requests: ClientRequestsRepo
 
 
 class AgentDB:
@@ -47,6 +57,11 @@ class AgentDB:
             messages=MessagesRepo(conn),
             runs=RunsRepo(conn),
             leases=LeasesRepo(conn),
+            approvals=ApprovalsRepo(conn),
+            holds=HoldsRepo(conn),
+            intents=IntentsRepo(conn),
+            known_bookings=KnownBookingsRepo(conn),
+            client_requests=ClientRequestsRepo(conn),
         )
 
     @classmethod

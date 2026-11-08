@@ -1,12 +1,21 @@
 """ToolGateway: every world call the agent makes goes through here (architecture 3, 15.1).
 
+Two call paths:
+- `call()`, the ordinary path: the read tools plus `hold_slot` and `get_booking_status`,
+  per caller. It refuses `book`, `cancel` and `reschedule` for every caller.
+- `_consequential()`, reachable only through `errand.tools.consequential`, which
+  import-linter lets only `errand.execution.executor` import: `book`, `cancel` and
+  `reschedule`, for `Caller.EXECUTOR` and nobody else.
+
 Per call, in order:
 1. caller allowlist: the planner reaches the three read tools and nothing else; a
    refusal emits `guard.planner_tool_rejected` and raises `PlannerToolRejected`
    without touching the world;
 2. validation of the arguments against the wire contract (`ToolInvalid`);
 3. the run's tool-call cap and deadline, checked before every attempt
-   (`ToolBudgetExceeded`, nothing sent);
+   (`ToolBudgetExceeded`, nothing sent), except inside the booking critical section
+   (`critical=True`: execute and verify), where a cap must never strand a booking
+   half done (15.1); those calls still count;
 4. the call, with its timeout from `ToolTimeouts` capped by the run time left;
 5. a `tool.call` record per attempt: caller, args, result or error class, latency and
    the world's op_log seq. The tracer sanitizes both once.
@@ -22,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, NoReturn
 
 from pydantic import ValidationError
 
@@ -57,6 +66,9 @@ from errand.world.contracts import (
 
 class Caller(StrEnum):
     PLANNER = "planner"
+    # Code placing a hold and reading bookings for a proposal (prepare_proposal), never
+    # the model: holds are not consequential, but they are not the planner's either.
+    PROPOSER = "proposer"
     EXECUTOR = "executor"
     VERIFIER = "verifier"
     RECONCILER = "reconciler"
@@ -69,15 +81,20 @@ READ_TOOLS: frozenset[ToolName] = frozenset({"search_providers", "get_provider",
 CONSEQUENTIAL_TOOLS: frozenset[ToolName] = frozenset(
     {"book", "cancel", "reschedule", "hold_slot", "get_booking_status"}
 )
+# The side effects themselves: only `_consequential`, only for the executor.
+SIDE_EFFECT_TOOLS: frozenset[ToolName] = frozenset({"book", "cancel", "reschedule"})
 ALLOWED: Mapping[Caller, frozenset[ToolName]] = {
     Caller.PLANNER: READ_TOOLS,
-    # The remaining callers are wired by the milestones that build them (M4 to M14).
-    Caller.EXECUTOR: frozenset({"hold_slot", "book", "cancel", "reschedule"}),
+    Caller.PROPOSER: frozenset({"hold_slot", "list_bookings"}),
+    Caller.EXECUTOR: frozenset({"hold_slot", "list_bookings", "get_booking_status"}),
     Caller.VERIFIER: frozenset({"get_booking_status", "list_bookings"}),
     Caller.RECONCILER: frozenset({"get_booking_status", "list_bookings"}),
     Caller.WATCHER: frozenset({"list_bookings"}),
     Caller.FOLLOWUP: frozenset({"search_providers", "get_provider", "hold_slot"}),
 }
+assert not any(tools & SIDE_EFFECT_TOOLS for tools in ALLOWED.values()), (
+    "book, cancel and reschedule never go through the ordinary call path"
+)
 
 
 @dataclass(frozen=True)
@@ -103,26 +120,54 @@ class ToolGateway:
         self.counters = counters
         self.limits = limits or ToolLimits()
 
-    async def call(self, caller: Caller, tool: ToolName, args: Mapping[str, Any]) -> WireModel:
+    async def call(
+        self,
+        caller: Caller,
+        tool: ToolName,
+        args: Mapping[str, Any],
+        *,
+        critical: bool = False,
+    ) -> WireModel:
         """Make one logical call (with its retry, for a read tool) and return the answer.
 
         Business answers (`not_found`, `invalid_args`, ...) are returned as typed
         results; transport failures raise.
         """
         if tool not in ALLOWED[caller]:
+            self._refuse(caller, tool)
+        return await self._call(caller, tool, args, critical=critical)
+
+    async def _consequential(
+        self, caller: Caller, tool: ToolName, args: Mapping[str, Any]
+    ) -> WireModel:
+        """book, cancel or reschedule. Only `errand.tools.consequential` calls this.
+
+        One attempt, never retried here (execute and verify own those rules), inside
+        the critical section: no cap refuses it and the run's time left does not
+        shorten its timeout.
+        """
+        if caller is not Caller.EXECUTOR or tool not in SIDE_EFFECT_TOOLS:
+            self._refuse(caller, tool)
+        return await self._call(caller, tool, args, critical=True)
+
+    def _refuse(self, caller: Caller, tool: ToolName) -> NoReturn:
+        if caller is Caller.PLANNER:
             self._tracer.emit(
-                "guard.planner_tool_rejected" if caller is Caller.PLANNER else "error",
-                **(
-                    {"detail": {"tool": tool, "caller": caller.value, "reason": "not_allowed"}}
-                    if caller is Caller.PLANNER
-                    else {
-                        "where": "tools.gateway",
-                        "exception_type": "PlannerToolRejected",
-                        "message": f"{caller.value} may not call {tool}",
-                    }
-                ),
+                "guard.planner_tool_rejected",
+                detail={"tool": tool, "caller": caller.value, "reason": "not_allowed"},
             )
-            raise PlannerToolRejected(tool, f"{caller.value} may not call {tool}")
+        else:
+            self._tracer.emit(
+                "error",
+                where="tools.gateway",
+                exception_type="PlannerToolRejected",
+                message=f"{caller.value} may not call {tool} on this path",
+            )
+        raise PlannerToolRejected(tool, f"{caller.value} may not call {tool}")
+
+    async def _call(
+        self, caller: Caller, tool: ToolName, args: Mapping[str, Any], *, critical: bool
+    ) -> WireModel:
         try:
             request = SPECS[tool].input.model_validate(dict(args))
         except ValidationError as exc:
@@ -138,7 +183,7 @@ class ToolGateway:
         for attempt in range(1, attempts + 1):
             if attempt > 1:
                 await self._clock.sleep(self.limits.retry_backoff_s)
-            time_left = self._check_budget(tool)
+            time_left = None if critical else self._check_budget(tool)
             try:
                 return await self._attempt(caller, tool, request, attempt, time_left)
             except (ToolTimeout, ToolTransient) as exc:

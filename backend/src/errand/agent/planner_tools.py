@@ -12,7 +12,12 @@ scripted mode would accept a schema the API rejects.
 
 `book`, `cancel`, `reschedule`, `hold_slot` and `get_booking_status` are absent by
 construction (INV-11 checks every traced request), and the ToolGateway refuses them
-for the planner anyway.
+for the planner anyway. `propose_booking` (M4) only names a slot handle; code holds the
+slot, prices it, renders the card and waits for the user (agent/validation.py checks
+the proposal first). `propose_cancel` and `propose_reschedule` join it in M9, after it
+in the fixed order. The list's measured size is pinned by
+`test_the_tool_list_fits_its_context_section`: 1,996 of the 2,000-token section in M4
+(1,809 before propose_booking), so M9 and M11 need room made for theirs.
 """
 
 from __future__ import annotations
@@ -123,13 +128,21 @@ ASK_USER: dict[str, Any] = {
     ),
 }
 
+PROPOSE_BOOKING: dict[str, Any] = {
+    "name": "propose_booking",
+    "description": "Propose one shortlisted slot; the user approves it on a card.",
+    "input_schema": _object({"provider_id": {"type": "string"}, "slot_ref": {"type": "string"}}),
+}
+
 PLANNER_TOOLS: tuple[dict[str, Any], ...] = (
     SEARCH_PROVIDERS,
     GET_PROVIDER,
     LIST_BOOKINGS,
     UPDATE_BRIEF,
     ASK_USER,
+    PROPOSE_BOOKING,
 )
+PROPOSE_TOOLS: frozenset[str] = frozenset({"propose_booking"})
 PLANNER_TOOL_NAMES: tuple[str, ...] = tuple(t["name"] for t in PLANNER_TOOLS)
 
 
@@ -180,6 +193,13 @@ class UpdateBriefArgs(_Args):
 ASK_QUESTION_MAX_CHARS = 400
 ASK_OPTIONS_MAX = 6
 ASK_OPTION_MAX_CHARS = 40
+
+
+class ProposeBookingArgs(_Args):
+    # Strict mode rejects maxLength and pattern, so the handle's shape is checked in
+    # code (agent/validation.py), not here.
+    provider_id: str = Field(min_length=1, max_length=40)
+    slot_ref: str = Field(min_length=1, max_length=8)
 
 
 class AskUserArgs(_Args):

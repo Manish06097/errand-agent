@@ -102,3 +102,17 @@ def load_anthropic_credentials() -> AnthropicCredentials:
     env_file = EnvFileSettings().env_file
     # The process environment wins over the file, as pydantic-settings does by default.
     return AnthropicCredentials(_env_file=env_file if env_file.is_file() else None)
+
+
+class ApprovalSettings(BaseSettings):
+    """Approval lifetimes (architecture 8.2, 8.4). Agent clock, simulated in evals."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_APPROVAL_", extra="ignore")
+
+    # A pending card lapses this long after it was requested.
+    ttl_s: float = Field(default=1800.0, gt=0)
+    # A granted row must be consumed within this long after the grant, or it expires.
+    execute_grace_s: float = Field(default=120.0, gt=0)
+    # A bound hold with less than the book timeout plus this left is not booked on
+    # (9.4 step 2); M4 sends it through a fresh hold and a new card instead.
+    hold_margin_s: float = Field(default=30.0, ge=0)

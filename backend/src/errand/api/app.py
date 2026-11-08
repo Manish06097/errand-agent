@@ -1,12 +1,20 @@
 """errand-api: the agent's HTTP surface (architecture 17.3).
 
-Routes in M3:
+Routes:
 - `POST /api/conversations` creates a conversation;
 - `GET /api/conversations/{id}` returns the transcript, the runs and a state snapshot
-  read with `aget_state` (never the sync API, spike L6);
+  read with `aget_state` (never the sync API, spike L6). Approval cards are rehydrated
+  from `approvals.card_json` with their current status (M4);
 - `POST /api/conversations/{id}/messages` admits a message and returns
-  `{run_id, routed_as}`, or 409 `run_in_progress`;
-- `GET /api/runs/{id}/events` is the run's SSE stream with replay from `Last-Event-ID`.
+  `{run_id, routed_as}` (`input`, `resume` or `grant`), or 409 `run_in_progress`. It
+  takes `visible_card` and `client_composed_at`, captured by the client at Send, for the
+  typed-grant check (8.3);
+- `POST /api/approvals/{id}/decision` is the only button grant path, and decline (M4);
+- `POST /api/messages/{id}/rendered` records the client's render ack (M4);
+- `POST /api/conversations/{id}/actions` takes `select_slot` and `refresh_hold` (M4),
+  idempotent on `client_action_id`;
+- `GET /api/runs/{id}/events` is the run's SSE stream with replay from `Last-Event-ID`;
+  `card` and `card.update` events are trace records too, so they replay.
 
 The lifespan opens agent.sqlite, the checkpointer and the world, builds the graph and
 the RunManager, and on exit lets running runs finish (or cancels them after a grace
@@ -24,7 +32,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from datetime import tzinfo
+from datetime import datetime, tzinfo
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,16 +48,20 @@ from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
 from errand.api.runs import (
+    Answer,
     ClientMsgIdReused,
     ModelFactory,
     RunInProgress,
     RunManager,
     ShuttingDown,
+    UnknownApproval,
     UnknownConversation,
 )
 from errand.api.sse import stream_events
+from errand.approvals import service
+from errand.approvals.typed_grant import VisibleCard as VisibleCardRef
 from errand.clock import IST, to_ms
-from errand.config import LimitSettings, ModelSettings, PathSettings
+from errand.config import ApprovalSettings, LimitSettings, ModelSettings, PathSettings
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
 from errand.store.agent_db import AgentDB
@@ -91,6 +103,20 @@ class AppConfig:
     limits: LimitSettings | None = None
     tz: tzinfo = IST
     user_id: str | None = None
+    approval_settings: ApprovalSettings | None = None
+    # Tests replace the per-user consequential lock (the S28 backstop test runs two
+    # executes with no lock at all).
+    consequential: Any = None
+
+
+class VisibleCard(BaseModel):
+    """The card the user was looking at when they pressed Send (8.3)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    approval_id: str = Field(min_length=1, max_length=100)
+    fingerprint: str = Field(min_length=1, max_length=100)
+    message_id: str = Field(min_length=1, max_length=100)
 
 
 class NewMessage(BaseModel):
@@ -98,8 +124,44 @@ class NewMessage(BaseModel):
 
     client_msg_id: str = Field(min_length=1, max_length=100)
     text: str = Field(min_length=1, max_length=200_000)
-    client_composed_at: str | None = None
-    visible_card: dict[str, str] | None = None  # used from M4 (typed grants)
+    # ISO 8601 with an offset, the client's clock at Send (server-synced, 5.7).
+    client_composed_at: str | None = Field(default=None, max_length=40)
+    visible_card: VisibleCard | None = None
+
+
+class DecisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "decline"]
+    fingerprint: str = Field(min_length=1, max_length=100)
+    client_action_id: str = Field(min_length=1, max_length=100)
+
+
+class RenderedIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_ts: str = Field(min_length=1, max_length=40)
+
+
+class ActionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_action_id: str = Field(min_length=1, max_length=100)
+    kind: Literal["select_slot", "refresh_hold"]
+    payload: dict[str, str] = Field(default_factory=dict)
+
+
+def parse_client_ms(value: str | None) -> int | None:
+    """A client timestamp (ISO 8601 with an offset) as epoch ms; None if absent or bad."""
+    if value is None:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        return None
+    return to_ms(moment)
 
 
 def load_policy(spec: str) -> Policy:
@@ -190,6 +252,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 model_settings=model_settings,
                 limits=limits,
                 model_factory=factory,
+                approval_settings=config.approval_settings,
+                consequential=config.consequential,
             )
             app.state.manager = manager
             app.state.user_id = user_id
@@ -226,23 +290,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             conversation = await repos.conversations.get(conversation_id)
             if conversation is None:
                 return JSONResponse({"error": "not_found"}, status_code=404)
+        # The sweep first, so a lapsed card is served as expired, not pending.
+        await service.live_approval(
+            manager.db, conversation_id, to_ms(manager.clock.now()), manager.approval_policy
+        )
+        async with manager.db.session() as repos:
             messages = await repos.messages.list_for_conversation(conversation_id)
             runs = await repos.runs.list_for_conversation(conversation_id)
+            approvals = {
+                a.approval_id: a
+                for a in await repos.approvals.list_for_conversation(conversation_id)
+            }
         snapshot = await manager.graph.aget_state(run_config(conversation_id))
         return {
             "conversation_id": conversation_id,
-            "messages": [
-                {
-                    "message_id": m.message_id,
-                    "role": m.role,
-                    "kind": m.kind,
-                    "body": m.body,
-                    "run_id": m.run_id,
-                    "turn_no": m.turn_no,
-                    "created_at": m.created_at,
-                }
-                for m in messages
-            ],
+            "messages": [_message_view(m, approvals) for m in messages],
             "runs": [
                 {"run_id": r.run_id, "status": r.status, "outcome": r.outcome, "trigger": r.trigger}
                 for r in runs
@@ -254,9 +316,17 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     @app.post("/api/conversations/{conversation_id}/messages", response_model=None)
     async def post_message(conversation_id: str, body: NewMessage, request: Request) -> Any:
         manager = manager_of(request)
+        card = body.visible_card
         try:
             admission = await manager.submit_message(
-                conversation_id, text=body.text, client_msg_id=body.client_msg_id
+                conversation_id,
+                text=body.text,
+                client_msg_id=body.client_msg_id,
+                client_composed_at=body.client_composed_at,
+                composed_at_ms=parse_client_ms(body.client_composed_at),
+                visible_card=None
+                if card is None
+                else VisibleCardRef(card.approval_id, card.fingerprint, card.message_id),
             )
         except UnknownConversation:
             return JSONResponse({"error": "not_found"}, status_code=404)
@@ -270,6 +340,58 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         return JSONResponse(
             {"run_id": admission.run_id, "routed_as": admission.routed_as}, status_code=status
         )
+
+    @app.post("/api/approvals/{approval_id}/decision", response_model=None)
+    async def approval_decision(approval_id: str, body: DecisionIn, request: Request) -> Any:
+        manager = manager_of(request)
+        try:
+            answer = await manager.submit_decision(
+                approval_id,
+                decision=body.decision,
+                fingerprint=body.fingerprint,
+                client_action_id=body.client_action_id,
+            )
+        except UnknownApproval:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except RunInProgress as exc:
+            return JSONResponse({"error": "run_in_progress", "run_id": exc.run_id}, status_code=409)
+        except ShuttingDown:
+            return JSONResponse({"error": "shutting_down"}, status_code=503)
+        return _answer(answer)
+
+    @app.post("/api/messages/{message_id}/rendered", response_model=None)
+    async def message_rendered(message_id: str, body: RenderedIn, request: Request) -> Any:
+        manager = manager_of(request)
+        client_ms = parse_client_ms(body.client_ts)
+        if client_ms is None:
+            return JSONResponse({"error": "bad_client_ts"}, status_code=422)
+        async with manager.db.session() as repos:
+            message = await repos.messages.get(message_id)
+            if message is None:
+                return JSONResponse({"error": "not_found"}, status_code=404)
+            # The first ack wins; a later one (a re-render) changes nothing.
+            await repos.messages.mark_rendered(message_id, client_ms)
+            message = await repos.messages.get(message_id)
+        assert message is not None
+        return {"message_id": message_id, "rendered_at": message.rendered_at}
+
+    @app.post("/api/conversations/{conversation_id}/actions", response_model=None)
+    async def post_action(conversation_id: str, body: ActionIn, request: Request) -> Any:
+        manager = manager_of(request)
+        try:
+            answer = await manager.submit_action(
+                conversation_id,
+                client_action_id=body.client_action_id,
+                kind=body.kind,
+                payload=body.payload,
+            )
+        except UnknownConversation:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except RunInProgress as exc:
+            return JSONResponse({"error": "run_in_progress", "run_id": exc.run_id}, status_code=409)
+        except ShuttingDown:
+            return JSONResponse({"error": "shutting_down"}, status_code=503)
+        return _answer(answer)
 
     @app.get("/api/runs/{run_id}/events", response_class=EventSourceResponse, response_model=None)
     async def run_events(
@@ -297,6 +419,39 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
 def _no_transport() -> None:
     return None
+
+
+def _answer(answer: Answer) -> JSONResponse:
+    return JSONResponse(answer.body, status_code=answer.status)
+
+
+def _message_view(m: Any, approvals: dict[str, Any]) -> dict[str, Any]:
+    """A transcript row as the client renders it. An approval card's body is the stored
+    `card_json` (what code fingerprinted), and its current status rides beside it."""
+    body = m.body
+    approval = approvals.get(m.approval_id) if m.approval_id else None
+    if approval is not None and body.get("type") == "action":
+        body = approval.card
+    view: dict[str, Any] = {
+        "message_id": m.message_id,
+        "role": m.role,
+        "kind": m.kind,
+        "body": body,
+        "run_id": m.run_id,
+        "turn_no": m.turn_no,
+        "created_at": m.created_at,
+        "approval_id": m.approval_id,
+        "typed_grant_ok": m.typed_grant_ok,
+        "rendered_at": m.rendered_at,
+    }
+    if approval is not None:
+        view["approval"] = {
+            "status": approval.status,
+            "reason": approval.invalidated_reason,
+            "fingerprint": approval.fingerprint,
+            "expires_at": approval.expires_at,
+        }
+    return view
 
 
 def _parse_last_id(value: str | None) -> int:

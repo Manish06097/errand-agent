@@ -2,6 +2,17 @@
 
 This is the single definition of what the user sees; the web types are generated from
 it in M7. `kind` on the messages row follows the body: text, card or notice.
+
+`status_line` is the code-rendered line `respond` puts under the last message of a run
+whenever the errand is not completed ("Not booked yet: waiting for your approval"), so
+a paraphrased claim in model text is never the only signal on screen (10.8).
+
+Approval cards (M4): `ActionCard` is rendered from, and stored as, `approvals.card_json`;
+the UI shows it only from that row. Its `material` is the exact object the fingerprint
+was computed from. `CardReminder` repeats a live card as the last message after a run
+said something below it; `typed_grant_ok` says whether a typed "book it" may bind to it
+(8.3). `OutcomeCard` is the verified result. The approval's current status is not part
+of any card body: the API adds it from the approvals row when it serves the transcript.
 """
 
 from __future__ import annotations
@@ -11,6 +22,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from errand.domain.brief import BriefField
+from errand.domain.material import Material
 from errand.domain.outcomes import RunOutcome
 
 
@@ -21,6 +33,7 @@ class _Body(BaseModel):
 class TextBody(_Body):
     type: Literal["text"] = "text"
     text: str
+    status_line: str | None = None
 
 
 class ClarifyCard(_Body):
@@ -31,6 +44,7 @@ class ClarifyCard(_Body):
     fields: list[BriefField]
     question: str
     options: list[str] = Field(default_factory=list)
+    status_line: str | None = None
 
 
 class SlotOption(_Body):
@@ -59,11 +73,16 @@ class ShortlistCard(_Body):
     candidates: list[CandidateOption]
     excluded_count: int = 0
     recommendation: str | None = None
+    status_line: str | None = None
 
 
 class NoticeAction(_Body):
-    kind: Literal["retry", "narrow_search", "shorten", "answer"]
+    kind: Literal[
+        "retry", "narrow_search", "shorten", "answer", "refresh_hold", "raise_budget", "options"
+    ]
     label: str
+    # For refresh_hold: the approval whose slot gets a fresh hold and a new card.
+    approval_id: str | None = None
 
 
 class OutcomeNotice(_Body):
@@ -74,10 +93,86 @@ class OutcomeNotice(_Body):
     text: str
     actions: list[NoticeAction] = Field(default_factory=list)
     still_needed: list[BriefField] = Field(default_factory=list)
+    status_line: str | None = None
+
+
+class MaterialLine(_Body):
+    label: str  # "Provider", "When", "Price"
+    value: str
+
+
+class NearbyBooking(_Body):
+    """A confirmed booking of the same service within a day of the card's slot."""
+
+    booking_id: str
+    provider_name: str
+    label: str  # "Sat 14 Nov, 10:00-11:00"
+
+
+ApprovalAction = Literal["book", "cancel", "reschedule"]
+
+
+class ActionCard(_Body):
+    type: Literal["action"] = "action"
+    approval_id: str
+    errand_id: str
+    action: ApprovalAction
+    fingerprint: str
+    title: str  # "Book Ravi Plumbing"
+    lines: list[MaterialLine]
+    provider_id: str
+    provider_name: str
+    service: str
+    slot_start: str  # ISO 8601 with +05:30
+    slot_end: str
+    slot_label: str
+    search_price_inr: int
+    quoted_price_inr: int  # the held quote: this is the price approved
+    price_delta_inr: int  # quoted minus search price
+    hold_expires_at: str  # world clock
+    expires_at: str  # the approval's own expiry, agent clock
+    button_label: str  # "Book for ₹1,350"
+    decline_label: str = "Decline"
+    nearby: list[NearbyBooking] = Field(default_factory=list)
+    material: Material
+    status_line: str | None = None
+
+
+class CardReminder(_Body):
+    type: Literal["reminder"] = "reminder"
+    approval_id: str
+    fingerprint: str
+    text: str  # "Still waiting on: Book Ravi Plumbing, Thu 13 Nov 09:00, ₹1,350"
+    button_label: str
+    decline_label: str = "Decline"
+    typed_grant_ok: bool
+    hint: str  # "Tap the button to confirm" when typed_grant_ok is false
+    status_line: str | None = None
+
+
+class OutcomeCard(_Body):
+    """A verified result. `verified` is true only for *_VERIFIED outcomes."""
+
+    type: Literal["outcome"] = "outcome"
+    outcome: RunOutcome
+    verified: bool
+    title: str
+    text: str
+    lines: list[MaterialLine] = Field(default_factory=list)
+    booking_id: str | None = None
+    approval_id: str | None = None
+    status_line: str | None = None
 
 
 MessageBody = Annotated[
-    TextBody | ClarifyCard | ShortlistCard | OutcomeNotice, Field(discriminator="type")
+    TextBody
+    | ClarifyCard
+    | ShortlistCard
+    | OutcomeNotice
+    | ActionCard
+    | CardReminder
+    | OutcomeCard,
+    Field(discriminator="type"),
 ]
 
 KIND_OF: dict[str, Literal["text", "card", "notice"]] = {
@@ -85,4 +180,7 @@ KIND_OF: dict[str, Literal["text", "card", "notice"]] = {
     "clarify": "card",
     "shortlist": "card",
     "notice": "notice",
+    "action": "card",
+    "reminder": "card",
+    "outcome": "card",
 }

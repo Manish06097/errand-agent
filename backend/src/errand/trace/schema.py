@@ -52,6 +52,11 @@ class RunStart(Envelope):
     trigger: str
     inbound_type: str | None = None
     user_message_id: str | None = None
+    # What the client sent with the message, recorded as received (M4): when it says
+    # the message was composed, and the card it says the user was looking at.
+    client_composed_at: str | None = None
+    visible_card: dict[str, Json] | None = None
+    routed_as: str | None = None
 
 
 class RunEnd(Envelope):
@@ -59,6 +64,9 @@ class RunEnd(Envelope):
     outcome: str
     user_message_id: str | None = None
     totals: RunTotals
+    # The approval the run ended parked on, read from the graph's v2 output interrupts,
+    # not from agent state (M4). None when the run did not end at an interrupt.
+    parked_approval_id: str | None = None
 
 
 class NodeRecord(Envelope):
@@ -175,6 +183,10 @@ class ApprovalRecord(Envelope):
     new_fp: str | None = None
     intent_id: str | None = None
     hold_id: str | None = None
+    # approval.requested: when the card lapses (agent clock), and what it replaced.
+    expires_at: str | None = None
+    superseded: list[str] | None = None
+    message_id: str | None = None
 
 
 class IntentRecord(Envelope):
@@ -189,6 +201,7 @@ class IntentRecord(Envelope):
     same_key_retries: int | None = None
     booking_id: str | None = None
     book_calls: int | None = None
+    error: str | None = None
 
 
 class StatusCheck(Envelope):
@@ -202,6 +215,10 @@ class StatusCheck(Envelope):
         ]
         | None
     ) = None
+    # Set when the confirmed booking could not be checked against the approved price,
+    # because the book answer that carried the price never arrived (a timeout).
+    price_unverified: bool | None = None
+    mismatch: list[str] | None = None
 
 
 class BudgetRecord(Envelope):
@@ -237,6 +254,22 @@ class GuardRecord(Envelope):
     detail: dict[str, Json] = Field(default_factory=dict)
 
 
+class CardRecord(Envelope):
+    """A card the user is shown (`card`) or a change to one (`card.update`), M4.
+
+    Both are trace records with a seq, so the run's SSE stream replays them; the web
+    client (and the eval harness, which reads cards the way the client does) never
+    needs anything else to draw the card or grey it out.
+    """
+
+    type: Literal["card", "card.update"]
+    approval_id: str | None = None
+    message_id: str | None = None
+    body: dict[str, Json] | None = None
+    status: str | None = None
+    reason: str | None = None
+
+
 class ErrorRecord(Envelope):
     type: Literal["error"]
     where: str
@@ -261,6 +294,7 @@ TraceRecord = Annotated[
     | MemoryRecord
     | FollowupRecord
     | GuardRecord
+    | CardRecord
     | ErrorRecord,
     Field(discriminator="type"),
 ]

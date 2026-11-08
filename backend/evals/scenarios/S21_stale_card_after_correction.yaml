@@ -1,0 +1,25 @@
+id: S21_stale_card_after_correction
+title: The user moves the slot before approving; the old card and the old fingerprint get 409, and only the re-approved slot is booked
+category: [changed slot before approval]
+seed: 21
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_card: {kind: action, slot_hour: 8}
+  - type_confirm: {text: "actually make it at 11"}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, slot_hour: 11}
+  - approve: {card: original, expect_status: 409, expect_error: no_longer_valid}
+  - approve: {fingerprint: stale, expect_status: 409, expect_error: details_changed}
+  - expect_world: {book: 0}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_booking: {count: 1, slot_hour: 11}
+expect:
+  invariants: [default]

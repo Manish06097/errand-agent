@@ -1,0 +1,25 @@
+id: S29_book_it_twice
+title: A typed "book it" grants; a second one (queued during the run) and a third after the booking are ordinary messages answered from the record, with no world call
+category: [repeated confirmation]
+seed: 29
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - type_confirm: {text: "book it"}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_world: {book: 1, get_booking_status: 1, list_bookings: 4, hold_slot: 1, search_providers: 1}
+  - type_confirm: {text: "book it", composed_during_run: true, visible: at_send}
+  - expect_outcome: REPLIED
+  - type_confirm: {text: "book it"}
+  - expect_outcome: REPLIED
+  - expect_trace: {tool.call: 0, approval.granted: 0}
+  - expect_world: {book: 1, get_booking_status: 1, list_bookings: 4, hold_slot: 1, search_providers: 1}
+  - expect_booking: {count: 1}
+expect:
+  invariants: [default]

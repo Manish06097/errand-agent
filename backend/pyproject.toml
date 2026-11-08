@@ -172,3 +172,40 @@ ignore_imports = [
   "errand.tools.runtime -> errand.world.engine",
   "errand.tools.client -> errand.world.engine",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Only the executor reaches book, cancel and reschedule (errand.tools.consequential)"
+type = "forbidden"
+# Everything except errand.execution.executor. A forbidden contract cannot name a
+# parent of the forbidden module as a source, so errand.tools is listed module by
+# module; tests/tools/test_consequential_boundary.py also scans the tree for importers.
+source_modules = [
+  "errand.agent",
+  "errand.api",
+  "errand.approvals",
+  "errand.clock",
+  "errand.config",
+  "errand.context",
+  "errand.domain",
+  "errand.execution.idempotency",
+  "errand.execution.intents",
+  "errand.ids",
+  "errand.llm",
+  "errand.quarantine",
+  "errand.store",
+  "errand.tools.client",
+  "errand.tools.errors",
+  "errand.tools.gateway",
+  "errand.tools.inspector",
+  "errand.tools.runtime",
+  "errand.tools.sanitize",
+  "errand.tools.timeouts",
+  "errand.tools.views",
+  "errand.trace",
+  "errand.usage",
+  "errand.world",
+]
+forbidden_modules = ["errand.tools.consequential"]
+# The executor is the one sanctioned importer; the nodes that call it (execute) reach
+# the consequential module only through it.
+ignore_imports = ["errand.execution.executor -> errand.tools.consequential"]

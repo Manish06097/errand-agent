@@ -23,8 +23,19 @@ How the model's tool calls are handled:
 - list_bookings: `user_id` is injected;
 - update_brief: evidence-checked, all-or-nothing field merge (brief_ops);
 - ask_user: the ask guard (ask_guard); an accepted ask ends the loop;
+- propose_booking (M4): `agent/validation.py` against the current shortlist, a fresh
+  code-issued `list_bookings` and the unresolved intents. A rejection is a tool error
+  the model can correct; a valid proposal ends the loop (prepare_proposal validates it
+  again). More than one propose_* in one response is refused as a whole: every one of
+  them gets "propose one action at a time", because guessing which one was meant
+  would be the model deciding, not code. Calls after a valid proposal in the same
+  response are not executed and are recorded as such;
 - a world tool that is not a planner tool (book, ...) goes to the ToolGateway as the
   planner, which refuses it and records `guard.planner_tool_rejected`.
+
+The errand-state section also carries the record-backed lines the context builder
+takes (the last verified booking, the live approval card, this run's SystemNotes). A
+SystemNote replan is a new invocation of this node, rebuilt from state (spike C2).
 """
 
 from __future__ import annotations
@@ -44,13 +55,17 @@ from errand.agent.planner_tools import (
     ASK_QUESTION_MAX_CHARS,
     PLANNER_TOOL_NAMES,
     PLANNER_TOOLS,
+    PROPOSE_TOOLS,
     AskUserArgs,
     GetProviderArgs,
+    ProposeBookingArgs,
     UpdateBriefArgs,
 )
-from errand.agent.state import ThreadState
+from errand.agent.records import open_bookings, state_extras
+from errand.agent.state import SystemNote, ThreadState
 from errand.agent.templates import recommendation_line
 from errand.agent.transitions import transition
+from errand.agent.validation import Rejected, check_book_proposal
 from errand.context.builder import build_context
 from errand.domain.brief import BriefField, TimeWindowExpr
 from errand.domain.errand import Errand, Phase
@@ -63,6 +78,7 @@ from errand.domain.outcomes import (
     LimitName,
     Options,
     PlanResult,
+    Proposal,
     Reply,
     TooLarge,
     ToolDown,
@@ -80,6 +96,7 @@ from errand.tools.gateway import Caller
 from errand.tools.sanitize import clean_text
 from errand.world.contracts import (
     TOOLS,
+    BookingItem,
     GetProviderError,
     GetProviderOut,
     ListBookingsOut,
@@ -99,7 +116,7 @@ async def plan(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     deps = runtime.context
     assert state.errand is not None and isinstance(state.inbound, UserMessage)
     with deps.tracer.node("plan", phase_before=state.errand.phase.value) as span:
-        loop = PlannerLoop(deps, state.errand, state.inbound)
+        loop = PlannerLoop(deps, state.errand, state.inbound, state.system_notes)
         result = await loop.run()
         span.end_fields["phase_after"] = loop.errand.phase.value
     return {
@@ -109,11 +126,22 @@ async def plan(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     }
 
 
+def route_after_plan(state: ThreadState) -> str:
+    return "prepare_proposal" if isinstance(state.plan_result, Proposal) else "respond"
+
+
 class PlannerLoop:
-    def __init__(self, deps: RunDeps, errand: Errand, inbound: UserMessage) -> None:
+    def __init__(
+        self,
+        deps: RunDeps,
+        errand: Errand,
+        inbound: UserMessage,
+        notes: list[SystemNote] | None = None,
+    ) -> None:
         self.deps = deps
         self.errand = errand
         self.inbound = inbound
+        self.notes = list(notes or [])
         self.searched = False
         self.booking_providers: set[str] = set()
 
@@ -123,6 +151,7 @@ class PlannerLoop:
         deps = self.deps
         async with deps.db.session() as repos:
             history = await repos.messages.list_for_conversation(deps.conversation_id)
+        extras = await state_extras(deps, [n.text for n in self.notes])
         built = build_context(
             errand=self.errand,
             history=history,
@@ -130,6 +159,7 @@ class PlannerLoop:
             now=deps.clock.now(),
             tz=deps.tz,
             tools=PLANNER_TOOLS,
+            extras=extras,
         )
         if built.over_cap is not None:
             over = built.over_cap
@@ -157,10 +187,23 @@ class PlannerLoop:
             calls = list(turn.message.tool_calls)
             if not calls:
                 return Failure(reason="stop_reason tool_use without a tool call")
+            proposals = sum(1 for c in calls if str(c["name"]) in PROPOSE_TOOLS)
             replies: list[ToolMessage] = []
-            for call in calls:
-                handled = await self._handle(str(call["name"]), call.get("args") or {})
+            for i, call in enumerate(calls):
+                name = str(call["name"])
+                if name in PROPOSE_TOOLS and proposals > 1:
+                    self._reject(name, "more_than_one_proposal", count=proposals)
+                    handled: tuple[str, bool] | _End = (
+                        views.render_error(
+                            "one_proposal_at_a_time", detail="propose one action at a time"
+                        ),
+                        True,
+                    )
+                else:
+                    handled = await self._handle(name, call.get("args") or {})
                 if isinstance(handled, _End):
+                    if isinstance(handled.result, Proposal):
+                        self._not_executed(calls[i + 1 :])
                     return handled.result
                 content, is_error = handled
                 replies.append(
@@ -172,6 +215,12 @@ class PlannerLoop:
                 )
             session.append(*replies)
         return Limit(limit="iterations")
+
+    def _not_executed(self, calls: list[Any]) -> None:
+        # The loop ends on a valid proposal, so nothing after it in the response runs
+        # (and no tool_result is owed: this session makes no further call).
+        for call in calls:
+            self._reject(str(call["name"]), "not_executed_after_proposal")
 
     def _finish(self, text: str) -> PlanResult:
         shortlist = self.errand.shortlist
@@ -200,6 +249,8 @@ class PlannerLoop:
                 return self._update_brief(args)
             if name == "ask_user":
                 return self._ask_user(args)
+            if name == "propose_booking":
+                return await self._propose_booking(args)
             if name in TOOLS:
                 # Not a planner tool: let the gateway refuse it, so its allowlist is the
                 # control that is exercised, not just this branch.
@@ -416,6 +467,38 @@ class PlannerLoop:
             return _End(AskExhausted(still_needed=decision.still_needed))
         self.errand = self.errand.model_copy(update={"brief": decision.brief})
         return _End(Ask(fields=list(parsed.fields), question=question, options=options))
+
+    # ------------------------------------------------------------------ proposals
+
+    async def _propose_booking(self, args: Mapping[str, Any]) -> tuple[str, bool] | _End:
+        try:
+            parsed = ProposeBookingArgs.model_validate(dict(args))
+        except ValidationError:
+            return views.render_error(
+                "invalid_arguments", expected={"provider_id": "string", "slot_ref": "S1"}
+            ), True
+        deps = self.deps
+        listed = await deps.tools.call(Caller.PROPOSER, "list_bookings", {"user_id": deps.user_id})
+        bookings: list[BookingItem] | None = (
+            list(listed.bookings) if isinstance(listed, ListBookingsOut) else None
+        )
+        if bookings is None:
+            return views.render_error("unavailable", detail="bookings could not be read"), True
+        verdict = check_book_proposal(
+            self.errand,
+            parsed.provider_id,
+            parsed.slot_ref,
+            now=deps.clock.now(),
+            tz=deps.tz,
+            bookings=bookings,
+            unresolved=await open_bookings(deps),
+        )
+        if isinstance(verdict, Rejected):
+            self._reject("propose_booking", verdict.code)
+            return views.render_error(verdict.code, detail=verdict.message), True
+        return _End(
+            Proposal(action="book", provider_id=parsed.provider_id, slot_ref=parsed.slot_ref)
+        )
 
 
 def answer_text(message: AIMessage) -> str:
