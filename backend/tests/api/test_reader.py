@@ -267,20 +267,121 @@ async def test_a_hostile_readers_output_is_fully_dropped(tmp_path: Path) -> None
     assert provider["digest"] is None
 
 
-async def test_a_failure_is_never_cached(tmp_path: Path) -> None:
+def table_rows(root: Path, table: str) -> list[tuple[Any, ...]]:
+    conn = sqlite3.connect(root / "agent.sqlite")
+    try:
+        return list(conn.execute(f"SELECT * FROM {table}"))
+    finally:
+        conn.close()
+
+
+async def test_a_refusal_is_never_cached_and_never_sent_again(tmp_path: Path) -> None:
     shared = Shared(doubles.refusal)
     async with harness(tmp_path, world(), reader_factory=shared.factory()) as h:
         first = await h.say(OPENER)
         assert cache_rows(tmp_path) == []
+        sent = len(shared.requests)
+        assert sent == 4
         second = await h.say(AGAIN)
         rec = await h.records()
     assert first.outcome == second.outcome == "PRESENTED_OPTIONS"
-    # Turn 2 asks again (a new run), because nothing from turn 1 was cached; inside a
-    # run a refused prompt is not sent twice.
-    assert len(shared.requests) == 8
-    errors = [r["error"] for r in of_type(rec.traces[second.run_id], "reader.call")]
-    assert errors[:4] == ["refusal"] * 4
+    # The refused prompts are marked, not cached; turn 2 sends nothing for them.
+    assert len(shared.requests) == sent
     assert cache_rows(tmp_path) == []
+    assert len(table_rows(tmp_path, "reader_refusals")) == 4
+    reads = of_type(rec.traces[second.run_id], "reader.call")
+    assert [r["error"] for r in reads[:4]] == ["not_retried:refusal"] * 4
+    assert all(r["labels"] is None and not r["cache_hit"] for r in reads)
+    assert of_type(rec.traces[second.run_id], "run.end")[0]["totals"]["reader_calls"] == 0
+
+
+async def test_a_changed_reader_model_key_tries_a_refused_prompt_again(tmp_path: Path) -> None:
+    shared = Shared(doubles.refusal)
+    async with harness(tmp_path, world(), reader_factory=shared.factory()) as h:
+        await h.say(OPENER)
+        sent = len(shared.requests)
+        conn = sqlite3.connect(tmp_path / "agent.sqlite")
+        with conn:
+            conn.execute("UPDATE reader_refusals SET reader_model = 'claude-haiku-5-5/r0-0'")
+        conn.close()
+        again = await h.say(AGAIN)
+        rec = await h.records()
+    assert len(shared.requests) == sent + 4
+    reads = of_type(rec.traces[again.run_id], "reader.call")
+    assert [r["error"] for r in reads[:4]] == ["refusal"] * 4
+
+
+async def test_timeouts_and_transport_errors_are_not_marked_and_may_be_retried(
+    tmp_path: Path,
+) -> None:
+    shared = Shared(doubles.timeout)
+    async with harness(tmp_path, world(), reader_factory=shared.factory()) as h:
+        await h.say(OPENER)
+        sent = len(shared.requests)
+        await h.say(AGAIN)
+    assert table_rows(tmp_path, "reader_refusals") == []
+    assert len(shared.requests) > sent
+
+
+async def test_max_tokens_fails_closed_end_to_end_and_caches_nothing(tmp_path: Path) -> None:
+    shared = Shared(doubles.max_tokens)
+    async with harness(tmp_path, world(), reader_factory=shared.factory()) as h:
+        view = await h.say(OPENER)
+        records = await run_records(h, view.run_id)
+        state = (await h.conversation())["state"]
+    assert view.outcome == "PRESENTED_OPTIONS"
+    reads = of_type(records, "reader.call")
+    assert [r["error"] for r in reads[:4]] == ["max_tokens"] * 4
+    assert all(r["labels"] is None for r in reads)
+    assert cache_rows(tmp_path) == [] and table_rows(tmp_path, "reader_refusals") == []
+    candidates = state["errand"]["shortlist"]["candidates"]
+    assert candidates and all(c["score_parts"]["review_signal"] == 0 for c in candidates)
+    assert all(c.get("digest") is None for c in candidates)
+
+
+async def test_the_cache_key_hashes_raw_reviews_so_a_zero_width_edit_misses(
+    tmp_path: Path,
+) -> None:
+    # Two raw payloads that clean to the same text must not share an entry: an update
+    # that only inserts an invisible character would otherwise be missed.
+    shared = Shared()
+    async with harness(tmp_path, world(), reader_factory=shared.factory()) as h:
+        await h.say(OPENER)
+        before = cache_rows(tmp_path)
+        sent = len(shared.requests)
+        conn = sqlite3.connect(tmp_path / "world.sqlite")
+        with conn:
+            (rid, text) = conn.execute(
+                "SELECT review_id, text FROM reviews WHERE provider_id = 'P12' "
+                "ORDER BY review_id LIMIT 1"
+            ).fetchone()
+            conn.execute("UPDATE reviews SET text = ? WHERE review_id = ?", (text + "\u200b", rid))
+        conn.close()
+        assert clean_review(text + "\u200b") == clean_review(text)
+        second = await h.say(AGAIN)
+        rec = await h.records()
+    p12 = [
+        r for r in of_type(rec.traces[second.run_id], "reader.call") if r["provider_id"] == "P12"
+    ]
+    assert p12 and not p12[0]["cache_hit"]
+    assert len(shared.requests) == sent + 1  # only the edited provider is read again
+    after = cache_rows(tmp_path)
+    assert len(after) == len(before) + 1
+    assert len({row[1] for row in after if row[0] == "P12"}) == 2
+
+
+async def test_a_cache_store_error_costs_the_digest_not_the_run(tmp_path: Path) -> None:
+    async with harness(tmp_path, world()) as h:
+        conn = sqlite3.connect(tmp_path / "agent.sqlite")
+        with conn:
+            conn.execute("DROP TABLE reader_cache")
+        conn.close()
+        view = await h.say(OPENER)
+        records = await run_records(h, view.run_id)
+    assert view.outcome == "PRESENTED_OPTIONS"
+    reads = of_type(records, "reader.call")
+    assert reads and all(r["cache_error"] in ("lookup", "put") for r in reads)
+    assert any(r["labels"] for r in reads)  # the answer was still used
 
 
 async def test_concurrent_timeouts_cost_the_run_one_timeout_not_four(tmp_path: Path) -> None:

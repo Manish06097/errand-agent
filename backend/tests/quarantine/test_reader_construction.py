@@ -173,3 +173,62 @@ def test_the_reader_binds_structured_output_and_nothing_else() -> None:
     kwargs = structured_bind_kwargs(build_reader(ReaderSettings()), ReaderOutput)
     assert set(kwargs) == {"output_config", "ls_structured_output_format"}
     assert "tools" not in kwargs and "tool_choice" not in kwargs
+
+
+class RecordingSink:
+    """A live sink that notes what the tracer tells it, like the Langfuse sink does."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, ...]] = []
+        self.written: list[dict[str, Any]] = []
+
+    def begin(
+        self, open_id: str, run_id: str, parent_span_id: str | None, kind: str, name: str
+    ) -> None:
+        self.events.append(("begin", open_id, kind, name))
+
+    def bind(self, open_id: str, span_id: str) -> None:
+        self.events.append(("bind", open_id, span_id))
+
+    def abandon(self, open_id: str, error: str) -> None:
+        self.events.append(("abandon", open_id, error))
+
+    def write(self, record: Any, line: str) -> None:
+        self.written.append(dict(record))
+
+    def close(self) -> None:
+        pass
+
+
+async def test_each_model_read_runs_inside_its_own_reader_call_opening(
+    tmp_path: Path, db: AgentDB
+) -> None:
+    # The reader's model call goes through the same opening() path as the planner's, so
+    # a live sink shows one generation per call; concurrent reads still write their
+    # records in input order.
+    live = RecordingSink()
+    tracer = Tracer(run_id="r_1", thread_id="c_1", sinks=[JsonlSink(tmp_path / "t.jsonl"), live])
+    reader = ReviewReader(
+        tracer=tracer,
+        counters=RunCounters(),
+        clock=SimClock(datetime(2026, 11, 9, 8, tzinfo=IST)),
+        db=db,
+        settings=ReaderSettings(),
+        mode="scripted",
+        transport=ScriptedChatModel(script=doubles.keyword),
+    )
+    one = provider()
+    two = one.model_copy(update={"provider_id": "P10"})
+    await reader.read_many([one, two])
+    begins = [e for e in live.events if e[0] == "begin"]
+    binds = [e for e in live.events if e[0] == "bind"]
+    assert [(e[2], e[3]) for e in begins] == [("reader.call", "claude-haiku-5-5")] * 2
+    assert not [e for e in live.events if e[0] == "abandon"]
+    records = [r for r in live.written if r["type"] == "reader.call"]
+    assert [r["provider_id"] for r in records] == ["P9", "P10"]
+    assert [r["model"] for r in records] == ["claude-haiku-5-5"] * 2
+    assert sorted(e[2] for e in binds) == sorted(r["span_id"] for r in records)
+    # A cache hit makes no model call, so it opens nothing.
+    live.events.clear()
+    await reader.read_many([one])
+    assert live.events == []

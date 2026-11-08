@@ -26,6 +26,20 @@ from errand.quarantine.reader import (
 from errand.world.contracts import Area, Attributes, GetProviderOut, Review, Service
 
 IDS = {"r1": "R-P1-1", "r2": "R-P1-2", "r3": "R-P1-X1"}
+ALL = [
+    {
+        "review_id": r,
+        **{
+            k: v
+            for k, v in {
+                "sentiment": "positive",
+                "themes": ["punctual"],
+                "injection_suspected": False,
+            }.items()
+        },
+    }
+    for r in IDS
+]
 
 
 def label(rid: str, *, flag: bool = False, themes: list[str] | None = None) -> dict[str, Any]:
@@ -50,41 +64,62 @@ def ok(result: Validated | Rejected) -> Validated:
 
 
 def test_a_clean_answer_maps_local_ids_back_to_world_ids_in_input_order() -> None:
-    out = ok(validate(answer(label("r3", flag=True), label("r1")), "end_turn", IDS))
-    assert [lb.review_id for lb in out.labels] == ["R-P1-1", "R-P1-X1"]
-    assert [lb.injection_suspected for lb in out.labels] == [False, True]
+    out = ok(validate(answer(label("r3", flag=True), label("r2"), label("r1")), "end_turn", IDS))
+    assert [lb.review_id for lb in out.labels] == ["R-P1-1", "R-P1-2", "R-P1-X1"]
+    assert [lb.injection_suspected for lb in out.labels] == [False, False, True]
     assert out.dropped == {}
 
 
 def test_unknown_ids_are_dropped_and_counted() -> None:
-    out = ok(validate(answer(label("r1"), label("r99", flag=True)), "end_turn", IDS))
-    assert [lb.review_id for lb in out.labels] == ["R-P1-1"]
+    out = ok(validate(answer(*ALL, label("r99", flag=True)), "end_turn", IDS))
+    assert [lb.review_id for lb in out.labels] == ["R-P1-1", "R-P1-2", "R-P1-X1"]
     assert out.dropped == {"unknown_ids": 1}
 
 
 def test_a_world_id_is_not_accepted_in_place_of_a_local_one() -> None:
     # The model was never shown world ids; one in the answer is unknown, not trusted.
-    out = ok(validate(answer(label("R-P1-X1", flag=False)), "end_turn", IDS))
-    assert out.labels == ()
+    out = ok(validate(answer(*ALL, label("R-P1-X1", flag=False)), "end_turn", IDS))
     assert out.dropped == {"unknown_ids": 1}
+    # ...and standing in for a real one it counts as a missing label.
+    stand_in = answer(label("r1"), label("r2"), label("R-P1-X1", flag=False))
+    assert validate(stand_in, "end_turn", IDS) == Rejected("incomplete_labels")
 
 
 def test_a_duplicate_id_keeps_the_first_label() -> None:
-    out = ok(validate(answer(label("r3", flag=True), label("r3", flag=False)), "end_turn", IDS))
-    assert [(lb.review_id, lb.injection_suspected) for lb in out.labels] == [("R-P1-X1", True)]
+    out = ok(
+        validate(
+            answer(label("r1"), label("r2"), label("r3", flag=True), label("r3", flag=False)),
+            "end_turn",
+            IDS,
+        )
+    )
+    assert out.labels[-1].review_id == "R-P1-X1" and out.labels[-1].injection_suspected
+    assert len(out.labels) == 3
     assert out.dropped == {"duplicate_ids": 1}
 
 
 def test_themes_beyond_three_are_truncated_with_a_flag() -> None:
     themes = ["punctual", "polite", "clean", "price_fair", "quality_good"]
-    out = ok(validate(answer(label("r1", themes=themes)), "end_turn", IDS))
+    out = ok(validate(answer(label("r1", themes=themes), *ALL[1:]), "end_turn", IDS))
     assert [t.value for t in out.labels[0].themes] == ["punctual", "polite", "clean"]
     assert out.dropped == {"themes_truncated": 1}
 
 
-def test_a_missing_label_leaves_that_review_unlabelled() -> None:
-    out = ok(validate(answer(label("r1"), label("r2")), "end_turn", IDS))
-    assert "R-P1-X1" not in {lb.review_id for lb in out.labels}
+def test_a_missing_label_fails_the_whole_read_closed() -> None:
+    # An injection can tell the reader to skip it. A partial answer must not keep the
+    # other reviews' labels: it gains nothing over being flagged.
+    assert validate(answer(label("r1"), label("r2")), "end_turn", IDS) == Rejected(
+        "incomplete_labels"
+    )
+
+
+def test_an_empty_answer_for_reviews_that_were_sent_is_incomplete() -> None:
+    assert validate(answer(), "end_turn", IDS) == Rejected("incomplete_labels")
+
+
+def test_a_duplicate_does_not_stand_in_for_a_missing_label() -> None:
+    twice = answer(label("r1"), label("r1"), label("r2"))
+    assert validate(twice, "end_turn", IDS) == Rejected("incomplete_labels")
 
 
 @pytest.mark.parametrize(
@@ -207,7 +242,7 @@ def test_the_reader_model_key_carries_the_prompt_and_schema_version(
     monkeypatch.setattr(reader, "SYSTEM_PROMPT", reader.SYSTEM_PROMPT + " Be brief.")
     assert reader_model_key("claude-haiku-5-5") != key
     monkeypatch.undo()
-    monkeypatch.setattr(reader, "PROMPT_VERSION", "r2")
+    monkeypatch.setattr(reader, "PROMPT_VERSION", "r99")
     assert reader_model_key("claude-haiku-5-5") != key
 
 
