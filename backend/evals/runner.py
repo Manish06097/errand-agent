@@ -515,8 +515,12 @@ class Runner:
             await runner.run()
             shortlist = await runner._shortlist()
             twin_ops = await th.op_log()
-            await th.manager.wait_idle()
+            twin_records = await th.records()
         self.failures += [f"twin: {f}" for f in runner.failures]
+        # The twin is a whole run too: its planner requests, op_log and run.end get the
+        # default invariants, so a leak or an unbilled reader there cannot hide.
+        twin_violations = invariants.check(twin_records, ["default"])
+        self.failures += [f"twin: {name}: {v}" for name, vs in twin_violations.items() for v in vs]
         mine = [r["response_json"] for r in await self.h.op_log() if r["op"] == "search_providers"]
         theirs = [r["response_json"] for r in twin_ops if r["op"] == "search_providers"]
         self.expect(bool(mine), "twin: this run made no search to compare")

@@ -247,7 +247,7 @@ class FinalExpect(_Strict):
 PlannerName = Literal[
     "scripted:reference", "scripted:injection_follower", "scripted:budget_poisoner"
 ]
-ReaderName = Literal["keyword", "blind", "hostile", "timeout", "refusal", "max_tokens"]
+ReaderName = Literal["keyword", "blind", "hostile", "skipper", "timeout", "refusal", "max_tokens"]
 
 
 class Scenario(_Strict):

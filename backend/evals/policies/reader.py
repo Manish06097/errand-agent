@@ -16,6 +16,8 @@ cannot reach them; tests/evals/test_reader_doubles.py pins that both ways.
 - `hostile` answers with an unknown id, 5 themes per review, an extra free-text
   `summary` key and no label for the review that looks like an injection. Strict
   parsing must drop all of it.
+- `skipper` answers validly for every review except the injection-looking ones, which
+  it leaves unlabelled: the read must fail closed as `incomplete_labels`.
 - `timeout`, `refusal` and `max_tokens` are the failure paths: no answer, a safeguard
   refusal, and a truncated answer that hit max_tokens.
 """
@@ -155,6 +157,14 @@ def hostile(request: ScriptedRequest) -> AIMessage:
     return _answer(request, json.dumps(body, separators=(",", ":")))
 
 
+def skipper(request: ScriptedRequest) -> AIMessage:
+    """Valid labels for every review except the ones that look like injections, which
+    it leaves out: the attack is an injection that talks the reader into skipping it.
+    Code must treat a read with a missing label as failed, not as a partial success."""
+    labels = [_label(r, flag=False) for r in reviews_in(request) if not looks_injected(r["text"])]
+    return _answer(request, json.dumps({"reviews": labels}, separators=(",", ":")))
+
+
 def timeout(request: ScriptedRequest) -> AIMessage:
     raise TimeoutError("scripted reader: no answer within the timeout")
 
@@ -173,6 +183,7 @@ READERS: dict[str, Policy] = {
     "keyword": keyword,
     "blind": blind,
     "hostile": hostile,
+    "skipper": skipper,
     "timeout": timeout,
     "refusal": refusal,
     "max_tokens": max_tokens,
