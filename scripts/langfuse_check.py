@@ -10,6 +10,10 @@ public API until a deadline (ingestion lags 15 to 30 s) and checks:
 - the generations' total cost equals `run.end.totals.cost_usd` (ours, not Langfuse's
   price table, which knows these models at different prices);
 - one generation per model call, and one observation per JSONL span id.
+Observations with no `span_id` in their metadata are calls the sink opened that never
+produced a record (a model or tool call that raised: level ERROR, nothing in the JSONL
+to match). They are counted as `abandoned` and left out of the generation, cost and
+span comparisons; one that is not at level ERROR is a mismatch.
 Exits 1 on any mismatch, 2 when it cannot run at all. Keys and host come from LANGFUSE_*
 or else from infra/langfuse/.env; neither key is ever printed.
 """
@@ -124,7 +128,11 @@ def observations(api: Api, trace_id: str) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     cursor: str | None = None
     while True:
-        query: dict[str, Any] = {"traceId": trace_id, "limit": 100, "fields": "core,basic,usage"}
+        query: dict[str, Any] = {
+            "traceId": trace_id,
+            "limit": 100,
+            "fields": "core,basic,usage,metadata",
+        }
         if cursor:
             query["cursor"] = cursor
         page = api.get("/api/public/v2/observations", **query) or {}
@@ -134,21 +142,40 @@ def observations(api: Api, trace_id: str) -> list[dict[str, Any]]:
             return found
 
 
+def span_id_of(observation: dict[str, Any]) -> str | None:
+    """Our JSONL span id, from the observation's metadata (absent on abandoned calls)."""
+    meta = observation.get("metadata")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            return None
+    if not isinstance(meta, dict) or meta.get("span_id") in (None, ""):
+        return None
+    return str(meta["span_id"])
+
+
 def check(api: Api, run: Run) -> Result:
-    seen_obs = observations(api, run.trace_id)
-    if not seen_obs:
+    all_obs = observations(api, run.trace_id)
+    if not all_obs:
         return Result(run, [f"no observations under trace {run.trace_id}"], {})
+    seen_obs = [o for o in all_obs if span_id_of(o) is not None]
+    abandoned = [o for o in all_obs if span_id_of(o) is None]
     roots = [o for o in seen_obs if o.get("isRootObservation")]
     generations = [o for o in seen_obs if str(o.get("type", "")).upper() == "GENERATION"]
-    sessions = sorted({str(o.get("sessionId")) for o in seen_obs})
+    sessions = sorted({str(o.get("sessionId")) for o in all_obs})
     cost = sum(float(o.get("totalCost") or 0.0) for o in generations)
     seen = {
         "session": ",".join(sessions),
         "cost_usd": round(cost, 10),
         "generations": len(generations),
         "observations": len(seen_obs),
+        "abandoned": len(abandoned),
     }
     problems = []
+    not_error = [o.get("name") for o in abandoned if str(o.get("level") or "").upper() != "ERROR"]
+    if not_error:
+        problems.append(f"observations with no span_id that are not abandoned calls: {not_error}")
     if len(roots) != 1 or str(roots[0].get("type", "")).upper() != "AGENT":
         problems.append(f"expected one AGENT root, got {[o.get('type') for o in roots]}")
     if sessions != [run.thread_id]:
@@ -205,7 +232,7 @@ def main(argv: list[str]) -> int:
             f"session={result.seen.get('session')} cost={result.seen.get('cost_usd')} "
             f"(jsonl {run.cost_usd}) generations={result.seen.get('generations')} "
             f"(model calls {run.model_calls}) observations={result.seen.get('observations')} "
-            f"(spans {run.spans})"
+            f"(spans {run.spans}) abandoned={result.seen.get('abandoned')}"
         )
         for problem in result.problems:
             print(f"       {problem}")
