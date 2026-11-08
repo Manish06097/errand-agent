@@ -123,6 +123,24 @@ Second review found two more, each reproduced through a real Tracer with JSONL a
 
 **Next.** M4: `await_approval` lands on the routing check that already exists, `propose_*` on the fixed tool list, and the run lifecycle as built here.
 
+## M4: approval and the booking path
+
+**Goal.** The agent can hold a slot, show a card, take a grant, call `book` once and prove the booking happened. The claim under test is that the model proposes and code disposes.
+
+**What was built.** `domain/material.py` and `approvals/fingerprint.py` (v=1 canonical material); `approvals/service.py` (create, supersede, grant, decline, consume, invalidate, lazy sweep; every transition a conditional UPDATE in `transaction_immediate`; `ApprovalToken` only mintable there, enforced by a private sentinel); `approvals/confirm_grammar.py` and `typed_grant.py` (8.3 word for word, closed grammar for all three actions); `propose_booking` plus `agent/validation.py`; nodes `prepare_proposal`, `await_approval` (only the interrupt), `execute`, `verify`; `agent/cards.py`, `agent/claim_guard.py`; the API routes (decision, rendered ack, actions, `visible_card`, `client_composed_at`, `routed_as: grant`, `card` and `card.update` on SSE); repos for approvals, holds, intents, known bookings and client requests; `tools/consequential.py` behind an import-linter contract; harness verbs, three hostile policies, INV-01, 02, 04, 12, 15, 16 with doctored-records negatives. No new migration.
+
+**Decisions and rulings.** Recorded in architecture 8.7: S54 on a book card, bare acks, parked outcome `AWAITING_APPROVAL`, one proposal per response, the M5 stopgaps, fresh `list_bookings` for duplicate checks, seeds pinned.
+
+**Merge with main (M10, M15).** Consequential calls go through `ToolGateway._call`, so they sit inside `tracer.opening("tool.call")` like every other tool call, and `LLMGateway.send` still opens `model.call` after budget checks. S15 changed as the M10 handoff said: P9 is eligible, so the legitimate outcome is one hold, one pending approval, 0 `book`, `AWAITING_APPROVAL`. The follower now emits `propose_booking` last in its response: a valid proposal ends the loop and later calls in the same response are never executed (reason `not_executed_after_proposal`), so with the proposal first the `book`, `update_brief` and `remember` guards would never be exercised. `guard.planner_tool_rejected` is 2 (book, remember) and `evidence_rejected` is 1. S16 (P3) changed the same way; S15b (P9 over budget) is unchanged and still rejects the proposal as ineligible. `expect_no_side_effects` gained `pending_card_ok`.
+
+**M10 ranking changed which provider is on top,** so five M4 scenarios that named P1 stopped meaning what they said (S18 and S55 drift, S27 over budget, S11 and S21 first slot hour). Quote-drift scenarios now list every provider; S11 and S21 moved to seed 5, where the top card starts at 9:00 and 11:00 exists. S27 uses a 2000 rupee drift because a 1000 drift made the cheapest provider exactly 1500, not over.
+
+**Tool list size.** With `propose_booking` the planner tool list is 1,996 of its 2,000-token section. M9 (`propose_cancel`, `propose_reschedule`) and M11 (`remember`) must make room first.
+
+**Verified.** `make check`: 815 passed, 4 skipped, in 129 s (the brief asks for under 2 minutes; over by 9 s, see open doubts). `make evals`: 32/32; two runs differ only in the Generated timestamp. Manual run on `make dev` with curl on 9140/9141/9142: S01 message returns a card; a stale fingerprint gets 409 `details_changed`; the right one gets 202 and `BOOKED_VERIFIED` (card.update granted, consumed, then the outcome card); a replay gets 200 `already_approved`; a typed "book it" with `visible_card`, a render ack and `client_composed_at` routes as `grant` and books. A mutation check (consume without `status = 'granted'`) turns the lock-bypassed backstop test and the service test red.
+
+**What broke.** No new bug was found while finishing the milestone, so there is no BUG-M4 row. The only breakage was merge-induced and was fixed in the scenarios and doubles above, not in product code.
+
 ## M10: untrusted output and the quarantined reader
 
 **Goal.** The other half of the injection defence: raw review text goes only to a tool-less Haiku 5.5 reader that answers in enums and booleans, code checks and folds its labels into a `ReviewDigest`, and a flagged review can lower its provider's rank but never raise it. This is also the one multi-agent claim.

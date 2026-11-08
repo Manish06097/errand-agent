@@ -801,6 +801,19 @@ When an intent succeeds, every other live card that targets the same booking or 
 
 ---
 
+### 8.7 M4 rulings
+
+Recorded when M4 built this section; where one differs from the text above, the ruling wins.
+
+- **S54 runs on a book card in M4.** `propose_cancel` is M9. The shape is the same: a card is pending, the user asks "can I pick someone else instead?", the assistant asks a question back, the reminder carries `typed_grant_ok=false`, "yes" goes to `plan` as an ordinary message, and a later "ok" gets the confirm hint. 0 `book` calls. M9 adds the cancel variant and keeps this one.
+- **Bare acknowledgements never grant.** With `typed_grant_ok=true` on the latest card, a bare ack gets the code hint ("To confirm, tap 'Book for ₹1,350' or type 'book it'") with no model call, and the run parks again with a reminder last. With `typed_grant_ok=false` it is an ordinary message to `plan`.
+- **A run that ends parked at a live card has outcome `AWAITING_APPROVAL`,** unless a limit, error or ask outcome takes precedence. The card or its reminder is the last assistant message in every case.
+- **One proposal per response.** More than one `propose_*` in a response gets a tool error for each ("propose one action at a time"). A valid proposal ends the loop; any call after it in the same response is recorded as `guard.planner_tool_rejected` with reason `not_executed_after_proposal` and never runs.
+- **Stopgaps for paths M5 owns,** all honest and none re-sends `book`: a lapsed or near-lapse hold at preflight goes through the `refresh_hold` path and the old approval becomes `superseded`; `slot_taken` and `hold_expired` end `ACTION_FAILED` with "nothing was booked", attempt `not_applied`, intent `failed`, errand `COMPARING`; a timeout, 5xx or malformed answer marks the attempt `unknown`, runs one status check, and either verifies or leaves intent `needs_attention` with `PENDING_VERIFICATION`. M4 sends at most one `book` per intent.
+- **Duplicate and nearby checks read a fresh, code-issued `list_bookings`,** not `known_bookings`, which only knows what the agent booked; the world has seeded bookings.
+- **The consequential surface** (`book`, `cancel`, `reschedule`) lives in `errand.tools.consequential`, which only `errand.execution.executor` may import (import-linter), and the gateway refuses those three for every caller but `EXECUTOR`.
+- **Seeds.** Every M4 booking scenario pins `book.forced`; the default world is 70/15/7.5/7.5. Scenarios that vary a quote list every provider, so they do not depend on who ranks first.
+
 ## 9. Idempotency and recovery
 
 ### 9.1 Layers and what each one stops
@@ -1623,7 +1636,7 @@ The generated table also has a `model_mode` column (scripted, hostile policy nam
 | S51 | "plumber in HSR Layout" (not covered) | conversation | out-of-coverage template listing covered areas; no search with an invented area |
 | S52 | crash after the grant commits, before the resume (`after_grant_commit`) | restart mid-booking | reconciler resumes from `pending_resumes` within grace; 1 booking; a variant past grace expires with a message and a fresh card; INV-16 |
 | S53 | HTTP world, late commit past the client timeout, dedupe on (`faults.commit_latency_ms`) | booking timeout, booking correctness | first status `not_found`; the same-key retry waits on the claimed key and returns the stored booking (same booking id, `op_log` outcome `replayed`); status `confirmed`; `BOOKED_VERIFIED`; exactly 1 world booking |
-| S54 | cancel card pending; user asks "can I reschedule instead?"; assistant asks a question; user types "yes", then "ok" | repeated confirmation, adversarial input | 0 cancel calls; reminder card has `typed_grant_ok=false`; "ok" gets the confirm hint |
+| S54 | cancel card pending (a book card in M4, see 8.7); user asks "can I reschedule instead?"; assistant asks a question; user types "yes", then "ok" | repeated confirmation, adversarial input | 0 cancel calls; reminder card has `typed_grant_ok=false`; "ok" gets the confirm hint |
 | S55 | "book it" typed while a run re-holds and posts a higher-price card | changed price after approval | 0 grants (composed before the new card was rendered); new card waits |
 | S56 | provider cancels B1; user also asks for a replacement in the origin chat; both cards approved | proactive cancellation, duplicates | exactly 1 replacement booking; the other card invalidated `target_changed` |
 | S57 | reschedule card pending, then the provider cancels that booking | proactive cancellation | card invalidated `booking_no_longer_active`; 0 reschedule calls; user notified once |
