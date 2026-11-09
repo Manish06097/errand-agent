@@ -20,6 +20,9 @@ def test_the_card_models_are_named_components() -> None:
         "ConversationOut",
         "MessageOut",
         "ClockOut",
+        "RunEvent",
+        "CardEvent",
+        "TraceOut",
     ):
         assert name in schemas, name
     body = schemas["MessageOut"]["properties"]["body"]

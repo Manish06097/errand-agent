@@ -11,7 +11,8 @@ Routes:
   typed-grant check (8.3);
 - `POST /api/approvals/{id}/decision` is the only button grant path, and decline (M4);
 - `POST /api/messages/{id}/rendered` records the client's render ack (M4);
-- `POST /api/conversations/{id}/actions` takes `select_slot` and `refresh_hold` (M4),
+- `POST /api/conversations/{id}/actions` takes `select_slot` and `refresh_hold` (M4) and
+  `check_now` (N1: 409 `nothing_to_check` when no intent waits on the provider),
   idempotent on `client_action_id`;
 - `GET /api/runs/{id}/events` is the run's SSE stream with replay from `Last-Event-ID`;
   `card` and `card.update` events are trace records too, so they replay.
@@ -49,10 +50,13 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from errand import faults
 from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
+from errand.api import dev_routes, web_routes
 from errand.api.memory_routes import mount as mount_memory_routes
+from errand.api.reconciler import Reconciler
 from errand.api.runs import (
     Answer,
     ClientMsgIdReused,
@@ -69,11 +73,13 @@ from errand.approvals.typed_grant import VisibleCard as VisibleCardRef
 from errand.clock import AGENT_CLOCK_HEADER, IST, encode_clock_header, reading_of, to_ms
 from errand.config import (
     ApprovalSettings,
+    BookingSettings,
     LangfuseKeys,
     LimitSettings,
     MemorySettings,
     ModelSettings,
     PathSettings,
+    ReconcilerSettings,
     TraceSettings,
 )
 from errand.domain.messages import MessageBody
@@ -85,6 +91,7 @@ from errand.memory.service import MemoryService
 from errand.store.agent_db import AgentDB
 from errand.store.repos.users import User
 from errand.tools.runtime import WorldAccess, open_in_process, over_http
+from errand.trace.masked import MaskUnavailable, masker_for
 from errand.trace.sinks import ProcessSink, make_sink, off_reason
 
 SERVICE = "errand-api"
@@ -127,6 +134,8 @@ class AppConfig:
     tz: tzinfo = IST
     user_id: str | None = None
     approval_settings: ApprovalSettings | None = None
+    booking_settings: BookingSettings | None = None
+    reconciler: ReconcilerSettings | None = None
     # Tests replace the per-user consequential lock (the S28 backstop test runs two
     # executes with no lock at all).
     consequential: Any = None
@@ -172,7 +181,7 @@ class ActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     client_action_id: str = Field(min_length=1, max_length=100)
-    kind: Literal["select_slot", "refresh_hold"]
+    kind: Literal["select_slot", "refresh_hold", "check_now"]
     payload: dict[str, str] = Field(default_factory=dict)
 
 
@@ -274,6 +283,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings = AgentSettings()
+        faults.configure()  # an unknown fault point refuses to start (9.9)
         model_settings = config.model_settings or ModelSettings()
         limits = config.limits or LimitSettings()
         data_dir = config.data_dir or PathSettings().data_dir
@@ -335,6 +345,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 limits=limits,
                 model_factory=factory,
                 approval_settings=config.approval_settings,
+                booking_settings=config.booking_settings,
                 consequential=config.consequential,
                 reader_factory=reader_factory,
                 trace_sink=trace_sink,
@@ -346,9 +357,14 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 lambda: to_ms(manager.clock.now()),
                 load_or_create(data_dir / MemorySettings().hmac_key_file),
             )
+            reconciler = Reconciler(manager, config.reconciler or ReconcilerSettings())
+            app.state.reconciler = reconciler
+            await reconciler.startup()  # before the first request is served (9.7)
+            reconciler.start_periodic()
             try:
                 yield
             finally:
+                await reconciler.stop()
                 await manager.shutdown()
 
     app = FastAPI(title=SERVICE, lifespan=lifespan)
@@ -530,13 +546,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             yield ServerSentEvent(data={"error": "not_found", "run_id": run_id}, event="error")
             return
         start = after if after is not None else _parse_last_id(last_event_id)
+        try:
+            masker = masker_for(manager.traces_dir.parent)
+        except MaskUnavailable:
+            yield ServerSentEvent(data={"error": "mask_unavailable"}, event="error")
+            return
         async for event in stream_events(
             trace_file=manager.traces_dir / run.trace_path,
             stream=manager.broadcaster.get(run_id),
             last_event_id=start,
+            masker=masker,
         ):
             yield event
 
+    web_routes.register(app)
+    dev_routes.register(app)
     return app
 
 

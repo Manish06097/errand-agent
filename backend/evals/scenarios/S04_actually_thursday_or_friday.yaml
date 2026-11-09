@@ -1,0 +1,39 @@
+id: S04_actually_thursday_or_friday
+title: '"Actually Thursday or Friday" after the shortlist; only the window changes, every other fact keeps its words, and the shortlist is rebuilt for the new days'
+category: [correction]
+seed: 4
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Find a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, area, issue, window, budget_max_inr]
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_world: {search_providers: 1}
+  - expect_brief: {version: 1}
+  - say: "Actually Thursday or Friday"
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_patch: {set: [window]}
+  - expect_world: {search_providers: 2}
+  - expect_shortlist:
+      window_label_includes: "Thu 12 Nov - Fri 13 Nov, 07:00-12:00"
+      slot_weekdays: [4, 5]
+      slot_hours: ["07:00", "12:00"]
+      chips: [service, issue, area, window, budget_max_inr]
+      score_parts: true
+  - expect_brief:
+      version: 2
+      values: {service: plumber, area: indiranagar, budget_max_inr: 1500, issue: kitchen tap}
+      evidence:
+        service: plumber
+        area: Indiranagar
+        issue: kitchen tap
+        budget_max_inr: under ₹1,500
+        window: Thursday or Friday
+      set_at_turn: {service: 1, area: 1, issue: 1, budget_max_inr: 1, window: 2}
+expect:
+  invariants: [default]

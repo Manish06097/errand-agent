@@ -54,3 +54,15 @@ def read_trace_masked(path: Path, masker: Masker) -> TraceFile:
     """
     raw = read_trace(path)
     return TraceFile(raw.path, [masker.record(r) for r in raw.records], raw.truncated_tail)
+
+
+def to_jsonl(trace: TraceFile) -> bytes:
+    """The records of a read trace as JSONL, one line each, same shape the writer emits.
+
+    A download is built from the records `read_trace` returned, not from the file's
+    bytes, so whatever the reader masks (M11's forget mask) is masked here too.
+    """
+    lines = (
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")) for record in trace.records
+    )
+    return b"".join(line.encode("utf-8") + b"\n" for line in lines)

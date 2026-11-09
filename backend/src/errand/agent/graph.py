@@ -2,11 +2,13 @@
 
 M4 wires the booking path:
 
-    START -> ingress -> plan | prepare_proposal | execute | respond
+    START -> ingress -> plan | prepare_proposal | execute | verify | respond
+                 (verify: a Recover or check_now inbound, N1)
     plan -> prepare_proposal (a validated proposal) | respond
     prepare_proposal -> respond | plan (one SystemNote replan per run)
-    execute -> verify | prepare_proposal (a lapsed hold or changed material) | respond
-    verify -> respond
+    execute -> verify | prepare_proposal (a changed price or slot, a hold that could not be
+               held again) | plan (slot_taken: one SystemNote replan per run) | respond
+    verify -> respond | plan (slot_taken on the same-key retry)
     respond -> await_approval (a live *pending* approval) | END
                  (a `granted` row whose run could not preflight is not parked on: the user is
                  told to tap again, and the stored resume restarts it; 8.7)
@@ -46,7 +48,7 @@ from errand.agent.nodes.ingress import ingress, route_after_ingress
 from errand.agent.nodes.plan import plan, route_after_plan
 from errand.agent.nodes.prepare_proposal import prepare_proposal, route_after_prepare
 from errand.agent.nodes.respond import respond, route_after_respond
-from errand.agent.nodes.verify import verify
+from errand.agent.nodes.verify import route_after_verify, verify
 from errand.agent.state import ThreadState
 
 RECURSION_LIMIT = 40
@@ -72,14 +74,14 @@ def build_graph(checkpointer: BaseCheckpointSaver[Any]) -> Graph:
     g.add_node("await_approval", await_approval)
     g.add_edge(START, "ingress")
     g.add_conditional_edges(
-        "ingress", route_after_ingress, ["plan", "prepare_proposal", "execute", "respond"]
+        "ingress", route_after_ingress, ["plan", "prepare_proposal", "execute", "verify", "respond"]
     )
     g.add_conditional_edges("plan", route_after_plan, ["prepare_proposal", "respond"])
     g.add_conditional_edges("prepare_proposal", route_after_prepare, ["plan", "respond"])
     g.add_conditional_edges(
-        "execute", route_after_execute, ["verify", "prepare_proposal", "respond"]
+        "execute", route_after_execute, ["verify", "prepare_proposal", "plan", "respond"]
     )
-    g.add_edge("verify", "respond")
+    g.add_conditional_edges("verify", route_after_verify, ["plan", "respond"])
     g.add_conditional_edges("respond", route_after_respond, ["await_approval", END])
     g.add_edge("await_approval", "ingress")
     return g.compile(checkpointer=checkpointer)

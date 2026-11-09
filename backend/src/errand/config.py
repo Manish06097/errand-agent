@@ -6,10 +6,11 @@ Later milestones extend this module rather than adding settings elsewhere.
 
 from __future__ import annotations
 
+from datetime import time
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ModelMode = Literal["scripted", "replay", "record", "live"]
@@ -40,6 +41,10 @@ class ModelSettings(BaseSettings):
     cassette_path: Path | None = None
 
 
+# p95 of a live planning turn in seconds, measured in M7 (16 turns; journal M7 entry).
+LIVE_PLANNING_TURN_P95_S = 11.5
+
+
 class LimitSettings(BaseSettings):
     """The limits from architecture 15.1 that are enforced in the model gateway so far."""
 
@@ -56,6 +61,48 @@ class LimitSettings(BaseSettings):
     # Per-run cost cap (15.1). M10 applies it to the quarantined reader only: a reader
     # call is skipped once the run has spent this much. M13 applies it to the planner.
     run_cost_cap_usd: float = 0.40
+    # The wall clock per run when the planner is the real model (15.1), live and record
+    # modes only; evals keep run_deadline_s. M13 owns the enforcement.
+    # 43 = ceil(2 x p95 of a planning turn) + the reader's timeout: the reader is skipped
+    # once less run time is left than its timeout, so 2 x p95 alone turns it off on every
+    # cold-cache turn. tests/quarantine/test_live_deadline_leaves_reader_time.py pins it.
+    live_run_deadline_s: float = Field(default=43.0, gt=0)
+
+
+class BookingSettings(BaseSettings):
+    """How the agent recovers from an ambiguous `book` (architecture 9.4 steps 6 and 7)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_BOOKING_", extra="ignore")
+
+    # A same-key retry per approval after `not_found` on a live hold. 0 gives the pure
+    # wait rule (the hold-lapse fallback), and the tests build both.
+    max_same_key_retries: int = Field(default=1, ge=0)
+    # Declared, never guessed: whether the provider treats a repeated key as the same
+    # request. With false there is never a second `book` on a hold. The eval harness
+    # derives it from the scenario's `world.enforce_idempotency`.
+    provider_dedupes_keys: bool = True
+
+
+class ReconcilerSettings(BaseSettings):
+    """The reconciler (architecture 9.7 as trimmed, 9.9)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_RECONCILER_", extra="ignore")
+
+    # Real seconds between background re-checks of `needs_attention` intents in a running
+    # process. 0 turns the periodic task off; the evals set it to 0 and drive every tick
+    # themselves, so they stay deterministic.
+    interval_s: float = Field(default=30.0, ge=0)
+    # The periodic task asks the provider about an intent again only this long (agent
+    # clock) after the last answer, or at once when its hold has lapsed since: a pending
+    # message every 30 s would bury the conversation. An explicit tick (Check now, the dev
+    # drawer, the evals) never waits.
+    recheck_after_s: float = Field(default=120.0, ge=0)
+    # The periodic task stops asking about an intent this long (agent clock) after it was
+    # written: a contradiction the provider never resolves, or a status endpoint that never
+    # comes back, would otherwise get a new pending message every `recheck_after_s` for
+    # ever. The default is ten answers at the default cadence. A hold's lapse still fires
+    # its one check, and Check now, a restart and an explicit tick are never limited.
+    periodic_window_s: float = Field(default=1200.0, ge=0)
 
 
 class ReaderSettings(BaseSettings):
@@ -162,3 +209,67 @@ class MemorySettings(BaseSettings):
     half_life_days: float = Field(default=60.0, gt=0)
     # The seeds `python -m errand.seed` and the dev drawer know (13.5).
     seed_names: tuple[str, ...] = ("memory_demo", "memory_rich_v1")
+
+
+class ContextCaps(BaseSettings):
+    """The gate 2 budget split (architecture 13.1), in estimated tokens per section.
+
+    One source of truth: `context.builder.CAPS` reads it, the S6 shed and every section
+    check read `CAPS`, and the sum is validated against `context_budget_tokens`, so the
+    table can never drift from the 12,000 cap. S2 includes the 400-token tools preamble.
+    S8 (the loop reserve) is a floor the builder never refuses on; it is counted here
+    because the sum has to account for it.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_CAP_", extra="ignore")
+
+    rules: int = Field(default=1_600, gt=0)  # S1
+    tools: int = Field(default=3_800, gt=0)  # S2
+    state: int = Field(default=1_100, gt=0)  # S3
+    memory: int = Field(default=600, gt=0)  # S4
+    ledger: int = Field(default=400, gt=0)  # S5
+    recent: int = Field(default=1_000, gt=0)  # S6
+    current: int = Field(default=1_000, gt=0)  # S7
+    loop: int = Field(default=2_300, gt=0)  # S8, a floor
+    slack: int = Field(default=200, ge=0)
+
+    @property
+    def total(self) -> int:
+        return (
+            self.rules
+            + self.tools
+            + self.state
+            + self.memory
+            + self.ledger
+            + self.recent
+            + self.current
+            + self.loop
+            + self.slack
+        )
+
+    @model_validator(mode="after")
+    def _sums_to_the_budget(self) -> ContextCaps:
+        budget = LimitSettings().context_budget_tokens
+        if self.total != budget:
+            raise ValueError(f"context section caps sum to {self.total}, not {budget}")
+        return self
+
+
+class DayPartSettings(BaseSettings):
+    """Part-of-day bounds for `timewin` (architecture 10.5: "from config")."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_DAY_", extra="ignore")
+
+    morning_from: time = time(7)
+    morning_to: time = time(12)
+    afternoon_from: time = time(12)
+    afternoon_to: time = time(17)
+    evening_from: time = time(17)
+    evening_to: time = time(21)
+
+    def bounds(self) -> dict[str, tuple[time, time]]:
+        return {
+            "morning": (self.morning_from, self.morning_to),
+            "afternoon": (self.afternoon_from, self.afternoon_to),
+            "evening": (self.evening_from, self.evening_to),
+        }

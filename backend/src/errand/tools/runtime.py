@@ -21,6 +21,7 @@ import httpx
 
 from errand.clock import CLOCK_HEADER, Clock, ClockMode, TrackingClock
 from errand.tools.client import HttpTransport, InProcessTransport, WorldClient
+from errand.tools.inspector import HttpInspector, InProcessInspector, WorldInspector
 from errand.tools.timeouts import ToolTimeouts
 from errand.world.engine import WorldHost
 
@@ -52,10 +53,16 @@ class WorldAccess:
     client: WorldClient
     clock: Clock
     aclose: Callable[[], Awaitable[None]] = _noop
+    # Dev access to the same world (the /api/dev routes). Never handed to the agent.
+    inspector: WorldInspector | None = None
 
 
 def in_process(host: WorldHost, timeouts: ToolTimeouts | None = None) -> WorldAccess:
-    return WorldAccess(client=InProcessTransport(host, timeouts), clock=HostClock(host))
+    return WorldAccess(
+        client=InProcessTransport(host, timeouts),
+        clock=HostClock(host),
+        inspector=InProcessInspector(host),
+    )
 
 
 def open_in_process(path: Path, timeouts: ToolTimeouts | None = None) -> WorldAccess:
@@ -95,5 +102,17 @@ async def over_http(
     if not clock.synced:
         await http.aclose()
         raise RuntimeError(f"the world at {base_url} sent no {CLOCK_HEADER}")
+    if clock.mode == "sim":
+        # A simulated world moves only when told to: the agent's `clock.sleep` (a verify
+        # backoff, a cancel's retry delay) advances it through /dev/clock/advance, which
+        # the world serves with ERRAND_DEV=1 (the restart harness runs it that way).
+
+        async def advance(seconds: float) -> None:
+            moved = await http.post("/dev/clock/advance", json={"seconds": seconds})
+            moved.raise_for_status()
+            clock.update_from_header(moved.headers.get(CLOCK_HEADER))
+
+        clock.advance_hook = advance
     transport = HttpTransport(base_url, timeouts, clock=clock, http=http)
-    return WorldAccess(client=transport, clock=clock, aclose=http.aclose)
+    inspector = HttpInspector(base_url, clock, http=http)
+    return WorldAccess(client=transport, clock=clock, aclose=http.aclose, inspector=inspector)

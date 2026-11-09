@@ -272,28 +272,33 @@ async def test_ui_actions_are_idempotent_on_client_action_id(tmp_path: Path) -> 
         run_id = first.json()["run_id"]
         await h.finish(run_id)
         again = await h.client.post(url, json=body)
-        other = await h.client.post(url, json={**body, "kind": "check_now"})
+        other = await h.client.post(
+            url, json={"client_action_id": "check-1", "kind": "check_now", "payload": {}}
+        )
         rec = await h.records()
     assert again.status_code == first.status_code == 202 and again.json()["run_id"] == run_id
-    assert other.status_code == 422  # not an M4 action
+    # check_now (N1) with no intent waiting on the provider: 409, nothing started
+    assert other.status_code == 409 and other.json()["error"] == "nothing_to_check"
     assert len(rec.runs) == 2 and ops(rec.op_log, "hold_slot") == 1
 
 
-async def test_a_lapsed_hold_at_preflight_gets_a_new_card_and_no_book(tmp_path: Path) -> None:
+async def test_a_lapsed_hold_at_preflight_is_held_again_and_books_on_an_equal_quote(
+    tmp_path: Path,
+) -> None:
+    """9.4 step 2 (M5 replaces M4's refresh stopgap): an equal fingerprint after the
+    re-hold moves the approval to the new hold, with no second card, and books once."""
     async with harness(tmp_path, world()) as h:
         card = await to_card(h)
         hold_ends = to_ms(datetime.fromisoformat(card["body"]["hold_expires_at"]))
         await h.inspector.advance((hold_ends - await h.now_ms()) / 1000 - 20)  # inside the margin
         click = await h.decide(card["approval_id"], "approve", card["body"]["fingerprint"])
         view = await h.finish(click.json()["run_id"])
-        convo = await h.conversation()
         rec = await h.records()
-    assert view.outcome == "AWAITING_APPROVAL"
-    statuses = {a["approval_id"]: (a["status"], a["invalidated_reason"]) for a in rec.approvals}
-    assert statuses[card["approval_id"]] == ("invalidated", "superseded")
-    new = [m for m in convo["messages"] if m["body"].get("type") == "action"][-1]
-    assert new["approval_id"] != card["approval_id"] and new["approval"]["status"] == "pending"
-    assert ops(rec.op_log, "book") == 0 and ops(rec.op_log, "hold_slot") == 2
+    assert view.outcome == "BOOKED_VERIFIED"
+    assert [a["status"] for a in rec.approvals] == ["consumed"]
+    assert ops(rec.op_log, "hold_slot") == 2 and ops(rec.op_log, "book") == 1
+    rebound = [r for r in rec.all_records() if r["type"] == "approval.hold_rebound"]
+    assert len(rebound) == 1 and rebound[0]["old_hold_id"] != rebound[0]["hold_id"]
     assert invariants.check(rec) == {name: [] for name in invariants.DEFAULT}
 
 

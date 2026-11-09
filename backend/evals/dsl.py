@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from errand.domain.brief import BriefField
 from errand.domain.outcomes import RunOutcome
@@ -111,7 +111,15 @@ class ExpectSearchMatchesBrief(_Strict):
 
 class ExpectNotice(_Strict):
     expect_notice: Literal[
-        "retry", "narrow_search", "shorten", "answer", "refresh_hold", "raise_budget", "options"
+        "retry",
+        "narrow_search",
+        "shorten",
+        "answer",
+        "refresh_hold",
+        "raise_budget",
+        "options",
+        "check_now",
+        "cancel",
     ]
     names: list[BriefField] = Field(default_factory=list)
 
@@ -125,6 +133,9 @@ class Until(_Strict):
 
 
 class ApproveSpec(_Strict):
+    # The button press itself is expected to die with the API process (crash_at:
+    # after_grant_commit): the harness answers 599 and the process exits with code 1.
+    expect_crash: bool = False
     # stale: send the fingerprint of the card shown before the current one
     fingerprint: Literal["current", "stale"] = "current"
     # original: press the button on the first approval card of the conversation
@@ -184,6 +195,69 @@ class Advance(_Strict):
     advance: str
 
 
+class Restart(_Strict):
+    """Wait for the API to exit with code 1 (the scenario's `crash_at`), start it again on
+    the same data directory without the fault and wait until it serves. The reconciler
+    runs before the first request, so the recovery runs it started are in the transcript
+    when this step returns; the runner then reads them like any other run."""
+
+    restart: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReconcilerTick(_Strict):
+    """Run the reconciler's re-check of `needs_attention` intents now (the dev drawer's
+    "Reconcile now"): the evals set the periodic interval to 0 and drive every tick."""
+
+    reconciler_tick: dict[str, Any] = Field(default_factory=dict)
+
+
+class CheckNow(_Strict):
+    """The "Check now" button on a PENDING_VERIFICATION message. `expect_status` 409
+    asserts there was nothing to check."""
+
+    check_now: dict[str, Any] = Field(default_factory=dict)
+
+
+class CancelSpec(_Strict):
+    # world cancel ops (every call, the 503 ones included)
+    calls: int
+    # every call carried the same idempotency key
+    same_key: bool = True
+    # the target booking's status in the world's own store afterwards
+    booking_status: Literal["confirmed", "cancelled", "cancelled_by_provider"] | None = None
+
+
+class ExpectCancel(_Strict):
+    """What the world saw of the cancel, and where the booking ended up."""
+
+    expect_cancel: CancelSpec
+
+
+class MoveSpec(_Strict):
+    # world reschedule ops (every call), and how many of them the world applied
+    calls: int
+    applied: int | None = None
+    # the booking's ISO weekday in the world's own store afterwards (1 = Monday), or
+    # `unchanged` for "still where the scenario seeded it"
+    weekday: int | None = None
+    unchanged: bool = False
+    # every call carried the same idempotency key
+    same_key: bool = True
+
+
+class ExpectMove(_Strict):
+    """What the world saw of the reschedule, and where the booking ended up."""
+
+    expect_move: MoveSpec
+
+
+class ClickAction(_Strict):
+    """Press a button of the last run's notice, the way the web client does for a quick
+    reply: its label is sent as the user's message. `kind` is the NoticeAction kind."""
+
+    click_action: dict[str, str]
+
+
 class SwitchConversation(_Strict):
     """Make `name` the current conversation, creating it on first use. "main" is the one
     every scenario starts in."""
@@ -197,6 +271,10 @@ class CardSpec(_Strict):
     typed_grant_ok: bool | None = None
     price_delta_inr: int | None = None
     slot_hour: int | None = None
+    # the card's slot starts at or after this local hour ("not before 10")
+    slot_not_before_hour: int | None = None
+    # text (case-insensitive) every one of which some line of the card must contain
+    lines_include: list[str] = Field(default_factory=list)
     nearby: int | None = None
     # the price on the card is the held quote the world gave for its hold
     price_is_held_quote: bool | None = None
@@ -305,10 +383,112 @@ class ExpectNoSideEffects(_Strict):
 class BriefSpec(_Strict):
     version: int | None = None
     values: dict[BriefField, Any] = Field(default_factory=dict)
+    # M8: provenance. The exact evidence span each fact carries, and the turn it was set
+    # at; a fact a later message did not touch keeps both.
+    evidence: dict[BriefField, str] = Field(default_factory=dict)
+    set_at_turn: dict[BriefField, int] = Field(default_factory=dict)
 
 
 class ExpectBrief(_Strict):
     expect_brief: BriefSpec
+
+
+class BookCallsSpec(_Strict):
+    # `book` calls the agent made (tool.call records), `book` rows in the world's op_log
+    # (a duplicate delivery adds a row without a second agent call), distinct keys and
+    # holds among them, and the op_log outcome of each row in order.
+    agent_calls: int | None = None
+    world_rows: int | None = None
+    keys: int | None = None
+    holds: int | None = None
+    outcomes: list[str] | None = None
+
+
+class ExpectBookCalls(_Strict):
+    """M5: the shape of the book traffic, from the trace and the world's op_log."""
+
+    expect_book_calls: BookCallsSpec
+
+
+class RowsSpec(_Strict):
+    table: Literal[
+        "action_intents", "intent_attempts", "followup_jobs", "known_bookings", "approvals"
+    ]
+    where: dict[str, str | int] = Field(default_factory=dict)
+    count: int
+
+
+class ExpectRows(_Strict):
+    """M5: rows in agent.sqlite (an intent's state, an attempt's calls, a follow-up job)."""
+
+    expect_rows: list[RowsSpec]
+
+
+Dedupe = Literal["on", "off"]
+
+
+def _yaml_bool_modes(value: Any) -> Any:
+    """YAML 1.1 reads a bare `on` or `off` as a boolean; the scenarios write them bare."""
+    if isinstance(value, list):
+        return ["on" if v is True else "off" if v is False else v for v in value]
+    if isinstance(value, dict):
+        return {("on" if k is True else "off" if k is False else k): v for k, v in value.items()}
+    return value
+
+
+class IfDedupe(_Strict):
+    """M5: steps that apply in one dedupe mode only, where the facts differ between the
+    two (`if_dedupe: {on: [...], off: [...]}`). A mode with no list runs nothing."""
+
+    if_dedupe: Annotated[
+        dict[Dedupe, list[Annotated[Any, BeforeValidator(lambda raw: parse_step(raw))]]],
+        BeforeValidator(_yaml_bool_modes),
+    ]
+
+
+class PatchSpec(_Strict):
+    set: list[BriefField] = Field(default_factory=list)
+    clear: list[BriefField] = Field(default_factory=list)
+
+
+class ExpectPatch(_Strict):
+    """The fields the last run's applied `brief.patch` records set and cleared (M8)."""
+
+    expect_patch: PatchSpec
+
+
+class ShortlistSpec(_Strict):
+    # substring of the shortlist card's window label
+    window_label_includes: str | None = None
+    # every slot on the card starts on one of these ISO weekdays (1 = Monday)
+    slot_weekdays: list[int] | None = None
+    # every slot on the card lies inside these local hours, ["07:00", "12:00"] (the
+    # carried-over day part of a correction, M8 review)
+    slot_hours: list[str] | None = None
+    # the brief chips on the card name exactly these fields
+    chips: list[BriefField] | None = None
+    # every candidate carries its score parts
+    score_parts: bool | None = None
+    # the exclusion reasons on the card, as a set
+    excluded_reasons: list[str] | None = None
+
+
+class ExpectShortlist(_Strict):
+    """The shortlist card the last run showed (M8)."""
+
+    expect_shortlist: ShortlistSpec
+
+
+class ExpectOptions(_Strict):
+    """The quick replies of the last ClarifyCard, exactly (M8)."""
+
+    expect_options: list[str]
+
+
+class ExpectApprovals(_Strict):
+    """Every approval row of the conversation as `status` or `status:reason`, in order."""
+
+    expect_approvals: list[str]
 
 
 STEP_TYPES: dict[str, type[_Strict]] = {
@@ -332,6 +512,12 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "refresh_hold": RefreshHold,
     "advance": Advance,
     "conversation": SwitchConversation,
+    "click_action": ClickAction,
+    "restart": Restart,
+    "reconciler_tick": ReconcilerTick,
+    "check_now": CheckNow,
+    "expect_cancel": ExpectCancel,
+    "expect_move": ExpectMove,
     "expect_card": ExpectCard,
     "expect_transcript": ExpectTranscript,
     "expect_booking": ExpectBooking,
@@ -341,6 +527,13 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "expect_planner": ExpectPlanner,
     "expect_no_side_effects": ExpectNoSideEffects,
     "expect_brief": ExpectBrief,
+    "if_dedupe": IfDedupe,
+    "expect_book_calls": ExpectBookCalls,
+    "expect_rows": ExpectRows,
+    "expect_patch": ExpectPatch,
+    "expect_shortlist": ExpectShortlist,
+    "expect_options": ExpectOptions,
+    "expect_approvals": ExpectApprovals,
 }
 
 Step = (
@@ -364,6 +557,12 @@ Step = (
     | RefreshHold
     | Advance
     | SwitchConversation
+    | ClickAction
+    | Restart
+    | ReconcilerTick
+    | CheckNow
+    | ExpectCancel
+    | ExpectMove
     | ExpectCard
     | ExpectTranscript
     | ExpectBooking
@@ -373,7 +572,19 @@ Step = (
     | ExpectPlanner
     | ExpectNoSideEffects
     | ExpectBrief
+    | IfDedupe
+    | ExpectBookCalls
+    | ExpectRows
+    | ExpectPatch
+    | ExpectShortlist
+    | ExpectOptions
+    | ExpectApprovals
 )
+
+
+# A step that grants an approval can reach `book`; a scenario with one runs in both
+# dedupe modes unless it says otherwise.
+GRANTING = ("approve", "approve_concurrently", "type_confirm")
 
 
 def parse_step(raw: Any) -> Step:
@@ -404,6 +615,7 @@ class FinalExpect(_Strict):
     invariants: list[str] = Field(default_factory=lambda: ["default"])
 
 
+CrashPoint = Literal["after_intent_write", "after_world_book", "after_grant_commit"]
 PlannerName = Literal[
     "scripted:reference",
     "scripted:injection_follower",
@@ -412,8 +624,19 @@ PlannerName = Literal[
     "hostile:false_claim",
     "hostile:paraphrase_claim",
     "hostile:cross_service_cite",
+    "hostile:matching_quote",
+    "hostile:no_evidence",
+    "hostile:no_day_part",
+    "hostile:reask",
 ]
 ReaderName = Literal["keyword", "blind", "hostile", "skipper", "timeout", "refusal", "max_tokens"]
+
+
+class ReplaySpec(_Strict):
+    """`replay: {cassette: S01}` asks the collector for a second case with the same steps
+    and expectations, served from `evals/cassettes/<cassette>.jsonl` (18.2, 18.6)."""
+
+    cassette: str = Field(pattern=r"^[A-Za-z0-9_]+$")
 
 
 class Scenario(_Strict):
@@ -424,11 +647,65 @@ class Scenario(_Strict):
     model: PlannerName = "scripted:reference"
     # The scripted quarantined reader (evals/policies/reader.py).
     reader: ReaderName = "keyword"
+    # Run against real processes and kill the API at this fault point on its first start
+    # (ERRAND_FAULT); the steps then use `restart` (architecture 18.1, N1).
+    crash_at: CrashPoint | None = None
     world: WorldConfig = Field(default_factory=WorldConfig)
     faults: FaultsConfig = Field(default_factory=FaultsConfig)
     user: UserSpec
     steps: list[Annotated[Step, BeforeValidator(parse_step)]]
     expect: FinalExpect = Field(default_factory=FinalExpect)
+    replay: ReplaySpec | None = None
+    # M5: the world's dedupe modes this scenario runs in. Default: both for a scenario
+    # that can reach `book`, else just the one `world.enforce_idempotency` says. A single
+    # mode that is not forced by `world.enforce_idempotency` needs a reason (one line).
+    dedupe: Annotated[list[Dedupe] | None, BeforeValidator(_yaml_bool_modes)] = None
+    dedupe_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _dedupe_is_consistent(self) -> Scenario:
+        if self.dedupe is None:
+            return self
+        if len(set(self.dedupe)) != len(self.dedupe) or not self.dedupe:
+            raise ValueError("dedupe lists each mode once")
+        if len(self.dedupe) == 1 and not self.dedupe_reason:
+            raise ValueError(f"dedupe: {self.dedupe} runs one mode only; say why in dedupe_reason")
+        if len(self.dedupe) == 2 and self.dedupe_reason:
+            raise ValueError("dedupe_reason explains a single mode; this scenario runs both")
+        if "off" not in self.dedupe and not self.world.enforce_idempotency:
+            raise ValueError("world.enforce_idempotency: false contradicts dedupe: [on]")
+        return self
+
+    @property
+    def reaches_book(self) -> bool:
+        def grants(steps: list[Any]) -> bool:
+            for s in steps:
+                if isinstance(s, IfDedupe):
+                    if any(grants(branch) for branch in s.if_dedupe.values()):
+                        return True
+                elif any(type(s) is STEP_TYPES[v] for v in GRANTING):
+                    return True
+            return False
+
+        return grants(self.steps)
+
+    def modes(self) -> list[Dedupe]:
+        """The dedupe modes to run, in order."""
+        if self.dedupe is not None:
+            return list(self.dedupe)
+        if not self.world.enforce_idempotency:
+            return ["off"]
+        return ["on", "off"] if self.reaches_book else ["on"]
+
+    def label(self, mode: Dedupe) -> str:
+        """The row and test id: plain for a scenario that never reaches `book`."""
+        if not self.reaches_book and self.dedupe is None:
+            return self.id
+        return f"{self.id}[dedupe={mode}]"
+
+    def for_mode(self, mode: Dedupe) -> Scenario:
+        world = self.world.model_copy(update={"enforce_idempotency": mode == "on"})
+        return self.model_copy(update={"world": world})
 
     def world_config(self) -> ScenarioConfig:
         return ScenarioConfig(id=self.id, seed=self.seed, world=self.world, faults=self.faults)
@@ -439,6 +716,8 @@ class Scenario(_Strict):
 
     def world_label(self) -> str:
         names = self.faults.fault_names()
+        if not self.world.enforce_idempotency:
+            names = [*names, "dedupe off"]
         return ", ".join(names) if names else "default"
 
 

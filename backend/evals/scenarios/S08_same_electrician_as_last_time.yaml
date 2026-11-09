@@ -1,0 +1,26 @@
+id: S08_same_electrician_as_last_time
+title: Example 3, "the same electrician as last time, not before 10" with no memory; E4 never appears in a search but is admitted as pinned through its own booking and get_provider, the only question is the day (budget is not asked), no slot before 10:00 is proposed, and the card shows the held quote beside the earlier visit
+category: [history, booking_correctness]
+seed: 8
+world:
+  book: {forced: [success]}
+  quote_drift: {mode: on_hold, providers: {E4: 50}}
+user:
+  persona: cooperative
+  goal: {window: "tomorrow"}
+steps:
+  - say: "Book the same electrician as last time, but not before 10 a.m."
+    gives: [provider_pref]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [window]
+  - expect_world: {search_providers: 0, hold_slot: 0}
+  - answer: {}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending, price_is_held_quote: true, slot_not_before_hour: 10, price_delta_inr: 50, lines_include: ["Last visit", "search price"]}
+  - expect_world: {search_providers: 0, hold_slot: 1}
+  - expect_planner: {called: ["get_provider:E4", "propose_booking:E4"]}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_booking: {count: 1, price_is_held_quote: true}
+expect:
+  invariants: [default]

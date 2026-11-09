@@ -13,7 +13,7 @@ from typing import Protocol
 
 from errand.approvals.service import ApprovalPolicy
 from errand.clock import Clock
-from errand.config import ApprovalSettings, LimitSettings
+from errand.config import ApprovalSettings, BookingSettings, LimitSettings
 from errand.domain.counters import RunCounters
 from errand.llm.gateway import LLMGateway
 from errand.quarantine.reader import ReviewReader
@@ -55,11 +55,15 @@ class RunDeps:
     reader: ReviewReader
     on_token: TokenSink | None = None
     approval_settings: ApprovalSettings = field(default_factory=ApprovalSettings)
+    booking_settings: BookingSettings = field(default_factory=BookingSettings)
     timeouts: ToolTimeouts = field(default_factory=ToolTimeouts)
     consequential: ConsequentialLocks | None = None
     # The consequential lock this run holds, if any: taken in execute, released after
     # verify (or by the RunManager when the run ends, whatever happened).
     held: list[HeldLock] = field(default_factory=list)
+    # The intents this run wrote (execute) or took over (a recovery run): the critical
+    # section's exit (agent/critical.py) settles these and no other run's.
+    intents: set[str] = field(default_factory=set)
 
     @property
     def approval_policy(self) -> ApprovalPolicy:

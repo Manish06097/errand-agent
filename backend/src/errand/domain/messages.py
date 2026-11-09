@@ -21,7 +21,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from errand.domain.brief import BriefField
+from errand.domain.brief import BriefField, ProvenanceSource
 from errand.domain.material import Material
 from errand.domain.outcomes import RunOutcome
 from errand.domain.slots import Badge
@@ -37,6 +37,21 @@ class TextBody(_Body):
     status_line: str | None = None
 
 
+class BriefChip(_Body):
+    """One filled brief field, as a chip with where it came from (M8).
+
+    `source` is the provenance source ("user_msg", later "memory"), `evidence` the user's
+    words cut to 60 characters, and `window_label` the resolved window on the window chip
+    so the user can catch a wrong reading ("Thu 12 Nov - Fri 13 Nov, 10:00-12:00").
+    """
+
+    field: BriefField
+    value: str
+    source: ProvenanceSource
+    evidence: str | None = None
+    window_label: str | None = None
+
+
 class ClarifyCard(_Body):
     """A question for the fields the brief still lacks, with quick replies."""
 
@@ -46,6 +61,7 @@ class ClarifyCard(_Body):
     question: str
     options: list[str] = Field(default_factory=list)
     status_line: str | None = None
+    brief: list[BriefChip] = Field(default_factory=list)
 
 
 class SlotOption(_Body):
@@ -68,6 +84,20 @@ class CandidateOption(_Body):
     injection_flags: int = 0
     # "1 review hidden: it contained instructions to the assistant"
     notice: str | None = None
+    # The final score and its parts (10.6, rounded to 4 places in ranking): the data behind
+    # "Why this order". The parts are rating, price_headroom, slot_fit, review_signal and
+    # pref_match, each in [0, 1].
+    score: float = 0.0
+    score_parts: dict[str, float] = Field(default_factory=dict)
+
+
+class ExcludedOption(_Body):
+    """A provider left off the shortlist, with a code-written reason."""
+
+    provider_id: str
+    name: str
+    reason: str  # over_budget, no_slot_in_window, over_cap, avoided
+    reason_text: str
 
 
 class ShortlistCard(_Body):
@@ -81,15 +111,49 @@ class ShortlistCard(_Body):
     excluded_count: int = 0
     recommendation: str | None = None
     status_line: str | None = None
+    excluded: list[ExcludedOption] = Field(default_factory=list)
+    brief: list[BriefChip] = Field(default_factory=list)
 
 
 class NoticeAction(_Body):
     kind: Literal[
-        "retry", "narrow_search", "shorten", "answer", "refresh_hold", "raise_budget", "options"
+        "retry",
+        "narrow_search",
+        "shorten",
+        "answer",
+        "refresh_hold",
+        "raise_budget",
+        "options",
+        "check_now",
+        "cancel",
+        "quick_reply",
     ]
     label: str
     # For refresh_hold: the approval whose slot gets a fresh hold and a new card.
     approval_id: str | None = None
+    # For quick_reply: the message the button sends as if the user had typed it.
+    reply: str | None = None
+
+
+class PendingFacts(_Body):
+    """The facts behind a PENDING_VERIFICATION notice (M5), for the card M7 builds on it.
+
+    The text is the whole message; these fields let a card show the same facts in its own
+    layout without parsing it. No "Check now" or "Never mind" button exists yet: M6 adds
+    the actions and their routes, and the notice carries facts only until then.
+    """
+
+    reason: Literal[
+        "hold_live", "status_unavailable", "material_mismatch", "check_incomplete", "fenced_off"
+    ]
+    intent_id: str
+    # hold_live (the wait rule): when the hold lapses by the world clock, ISO with +05:30,
+    # and the same time as the user reads it ("09:12", IST).
+    lapse_at: str | None = None
+    lapse_label: str | None = None
+    # material_mismatch: the provider's booking, and what it recorded that was not approved.
+    booking_id: str | None = None
+    recorded: str | None = None
 
 
 class OutcomeNotice(_Body):
@@ -100,6 +164,10 @@ class OutcomeNotice(_Body):
     text: str
     actions: list[NoticeAction] = Field(default_factory=list)
     still_needed: list[BriefField] = Field(default_factory=list)
+    # Set on PENDING_VERIFICATION notices (M5).
+    pending: PendingFacts | None = None
+    # select_slot buttons a failed reschedule offers: the next free slots that day (N1).
+    alternatives: list[SlotOption] = Field(default_factory=list)
     status_line: str | None = None
 
 
@@ -136,13 +204,20 @@ class ActionCard(_Body):
     search_price_inr: int
     quoted_price_inr: int  # the held quote: this is the price approved
     price_delta_inr: int  # quoted minus search price
+    # The hold the card was issued on; approvals.card_json is never rewritten, so this is the
+    # record the one automatic re-hold is measured against. Absent on pre-M5 cards.
+    hold_id: str | None = None
     hold_expires_at: str  # world clock
     expires_at: str  # the approval's own expiry, agent clock
     button_label: str  # "Book for ₹1,350"
     decline_label: str = "Decline"
     nearby: list[NearbyBooking] = Field(default_factory=list)
     material: Material
+    # A reschedule's other eligible slots (N1): each is a select_slot button that cards
+    # that slot instead. Empty on a booking or a cancel.
+    alternatives: list[SlotOption] = Field(default_factory=list)
     status_line: str | None = None
+    brief: list[BriefChip] = Field(default_factory=list)
 
 
 class CardReminder(_Body):

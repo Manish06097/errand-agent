@@ -31,12 +31,24 @@ async def test_health(app: FastAPI, path: str, service: str, extra: dict[str, ob
 
 
 def routes(app: FastAPI) -> set[str]:
-    return {r.path for r in app.routes if isinstance(r, APIRoute)}
+    found: set[str] = set()
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            found.add(route.path)
+        # FastAPI 0.162 wraps an included router; its routes carry the full path.
+        for inner in getattr(getattr(route, "original_router", None), "routes", []):
+            if isinstance(inner, APIRoute):
+                found.add(inner.path)
+    return found
 
 
-def test_api_has_exactly_the_m4_routes() -> None:
+def test_api_has_exactly_the_m7_routes() -> None:
     assert routes(api_app) == {
         "/api/health",
+        # M7: the web app's additions (api/web_routes.py); /api/dev/* only with ERRAND_DEV
+        "/api/meta",
+        "/api/runs/{run_id}/trace",
+        "/api/runs/{run_id}/trace.jsonl",
         "/api/conversations",
         "/api/conversations/{conversation_id}",
         "/api/conversations/{conversation_id}/messages",
@@ -65,6 +77,7 @@ def test_world_dev_routes_only_with_the_dev_flag() -> None:
         "/dev/clock/advance",
         "/dev/world/events",
         "/dev/world/tick",
+        "/dev/world/force_book",
         "/dev/scenario",
         "/dev/op_log",
         "/dev/bookings",

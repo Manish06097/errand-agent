@@ -9,15 +9,19 @@ from __future__ import annotations
 
 from datetime import datetime, tzinfo
 
+from errand.agent.brief_ops import render_value
 from errand.approvals.confirm_grammar import suggestion
+from errand.domain.brief import Brief, BriefField, ErrandKind
 from errand.domain.errand import Phase
-from errand.domain.material import BookMaterial
+from errand.domain.material import BookMaterial, CancelMaterial, RescheduleMaterial
 from errand.domain.messages import (
     ActionCard,
+    BriefChip,
     CardReminder,
     MaterialLine,
     NearbyBooking,
     OutcomeCard,
+    SlotOption,
 )
 from errand.domain.outcomes import RunOutcome
 from errand.domain.slots import Candidate
@@ -37,8 +41,58 @@ STATUS_LINES: dict[Phase, str] = {
 }
 
 
-def status_line(phase: Phase) -> str | None:
-    return STATUS_LINES.get(phase)
+# What "not done yet" reads for a cancel or a reschedule, so a cancel card never says
+# "Not booked" (N1).
+CHANGE_LINES: dict[ErrandKind, dict[Phase, str]] = {
+    ErrandKind.CANCEL: {
+        Phase.GATHERING: "Nothing cancelled yet.",
+        Phase.COMPARING: "Nothing cancelled yet.",
+        Phase.QUOTING: "Not cancelled yet: preparing the card.",
+        Phase.AWAITING_APPROVAL: "Not cancelled yet: waiting for your approval.",
+        Phase.FAILED: "Not cancelled.",
+        Phase.ABANDONED: "Nothing was cancelled.",
+    },
+    ErrandKind.RESCHEDULE: {
+        Phase.GATHERING: "Nothing moved yet.",
+        Phase.COMPARING: "Nothing moved yet.",
+        Phase.QUOTING: "Not moved yet: preparing the card.",
+        Phase.AWAITING_APPROVAL: "Not moved yet: waiting for your approval.",
+        Phase.FAILED: "Not moved.",
+        Phase.ABANDONED: "Nothing was moved.",
+    },
+}
+
+
+def status_line(phase: Phase, kind: ErrandKind = ErrandKind.BOOK) -> str | None:
+    return CHANGE_LINES.get(kind, {}).get(phase) or STATUS_LINES.get(phase)
+
+
+_CHIP_EVIDENCE_CHARS = 60
+_WINDOW_FIELDS = (BriefField.WINDOW, BriefField.NEW_WINDOW)
+
+
+def brief_chips(brief: Brief) -> list[BriefChip]:
+    """Every filled field of the brief as a chip, in field order (M8)."""
+    chips: list[BriefChip] = []
+    for name in BriefField:
+        fact = getattr(brief, name.value)
+        if fact is None:
+            continue
+        evidence = fact.prov.evidence
+        if evidence is not None and len(evidence) > _CHIP_EVIDENCE_CHARS:
+            evidence = evidence[: _CHIP_EVIDENCE_CHARS - 3] + "..."
+        chips.append(
+            BriefChip(
+                field=name,
+                value=render_value(fact),
+                source=fact.prov.source,
+                evidence=evidence,
+                window_label=fact.value.label
+                if name in (BriefField.WINDOW, BriefField.NEW_WINDOW)
+                else None,
+            )
+        )
+    return chips
 
 
 def rupees(amount: int) -> str:
@@ -62,10 +116,13 @@ def book_card(
     candidate: Candidate,
     slot: Slot,
     search_price_inr: int,
+    hold_id: str,
     hold_expires_at: datetime,
     expires_at: datetime,
     nearby: list[BookingItem],
     tz: tzinfo,
+    brief: Brief | None = None,
+    last_visit: BookingItem | None = None,
 ) -> ActionCard:
     quote = material.quoted_price_inr
     delta = quote - search_price_inr
@@ -83,6 +140,16 @@ def book_card(
         MaterialLine(label="When", value=label),
         MaterialLine(label="Price", value=price),
     ]
+    if last_visit is not None:
+        # A provider chosen by history (7.3): the click approves this held quote, and the
+        # card says where it comes from. The contract gives no price paid before, so the
+        # earlier visit is shown instead of an invented amount.
+        lines.append(
+            MaterialLine(
+                label="Last visit",
+                value=f"{slot_label(last_visit.slot, tz)} ({last_visit.booking_id})",
+            )
+        )
     near = [
         NearbyBooking(
             booking_id=b.booking_id, provider_name=b.provider_name, label=slot_label(b.slot, tz)
@@ -108,13 +175,20 @@ def book_card(
         search_price_inr=search_price_inr,
         quoted_price_inr=quote,
         price_delta_inr=delta,
+        hold_id=hold_id,
         hold_expires_at=hold_expires_at.isoformat(),
         expires_at=expires_at.isoformat(),
         button_label=button_label(quote),
         nearby=near,
         material=material,
         status_line=STATUS_LINES[Phase.AWAITING_APPROVAL],
+        brief=brief_chips(brief) if brief is not None else [],
     )
+
+
+def _approval_line(action: str) -> str:
+    kind = ErrandKind(action) if action != "book" else ErrandKind.BOOK
+    return status_line(Phase.AWAITING_APPROVAL, kind) or STATUS_LINES[Phase.AWAITING_APPROVAL]
 
 
 def reminder(card: ActionCard, *, typed_grant_ok: bool) -> CardReminder:
@@ -129,11 +203,13 @@ def reminder(card: ActionCard, *, typed_grant_ok: bool) -> CardReminder:
         fingerprint=card.fingerprint,
         text=(
             f"Still waiting on: {card.title}, {card.slot_label}, {rupees(card.quoted_price_inr)}"
+            if card.action == "book"
+            else f"Still waiting on: {card.title}, {card.slot_label}"
         ),
         button_label=card.button_label,
         typed_grant_ok=typed_grant_ok,
         hint=hint,
-        status_line=STATUS_LINES[Phase.AWAITING_APPROVAL],
+        status_line=_approval_line(card.action),
     )
 
 
@@ -141,14 +217,15 @@ def confirm_hint(card: ActionCard) -> str:
     return f"To confirm, tap '{card.button_label}' or type '{suggestion(card.action)}'."
 
 
-def booked_card(card: ActionCard, booking_id: str) -> OutcomeCard:
+def booked_card(card: ActionCard, booking_id: str, *, after_restart: bool = False) -> OutcomeCard:
+    suffix = " I checked after a restart." if after_restart else ""
     return OutcomeCard(
         outcome=RunOutcome.BOOKED_VERIFIED,
         verified=True,
         title=f"Booked: {card.provider_name}",
         text=(
             f"Booked {card.provider_name} for {card.slot_label} at "
-            f"{rupees(card.quoted_price_inr)} ({booking_id}). Confirmed with the provider."
+            f"{rupees(card.quoted_price_inr)} ({booking_id}). Confirmed with the provider.{suffix}"
         ),
         lines=[
             MaterialLine(label="Booking", value=booking_id),
@@ -157,4 +234,153 @@ def booked_card(card: ActionCard, booking_id: str) -> OutcomeCard:
         ],
         booking_id=booking_id,
         approval_id=card.approval_id,
+    )
+
+
+# ---------------------------------------------------------------- cancel and reschedule (N1)
+
+
+def cancel_card(
+    *,
+    approval_id: str,
+    errand_id: str,
+    fingerprint: str,
+    material: CancelMaterial,
+    booking: BookingItem,
+    expires_at: datetime,
+    tz: tzinfo,
+) -> ActionCard:
+    """The approval card for cancelling one booking. Every line comes from the fresh
+    `list_bookings` record the fingerprint was computed from. There is no hold and no
+    price to approve, so the price fields are zero and the card's lines say what matters;
+    `hold_expires_at` repeats the approval's own expiry (nothing is held)."""
+    label = slot_label(booking.slot, tz)
+    lines = [
+        MaterialLine(label="Provider", value=booking.provider_name),
+        MaterialLine(label="Service", value=service_words(booking.service.value)),
+        MaterialLine(label="When", value=label),
+        MaterialLine(label="Booking", value=f"{booking.booking_id}, confirmed"),
+    ]
+    return ActionCard(
+        approval_id=approval_id,
+        errand_id=errand_id,
+        action="cancel",
+        fingerprint=fingerprint,
+        title=f"Cancel {booking.provider_name}",
+        lines=lines,
+        provider_id=booking.provider_id,
+        provider_name=booking.provider_name,
+        service=booking.service.value,
+        slot_start=booking.slot.start.isoformat(),
+        slot_end=booking.slot.end.isoformat(),
+        slot_label=label,
+        search_price_inr=0,
+        quoted_price_inr=0,
+        price_delta_inr=0,
+        hold_expires_at=expires_at.isoformat(),
+        expires_at=expires_at.isoformat(),
+        button_label="Cancel booking",
+        material=material,
+        status_line=CHANGE_LINES[ErrandKind.CANCEL][Phase.AWAITING_APPROVAL],
+    )
+
+
+def cancelled_card(
+    card: ActionCard, booking_id: str, *, by_provider: bool = False, after_restart: bool = False
+) -> OutcomeCard:
+    suffix = " I checked after a restart." if after_restart else ""
+    if by_provider:
+        text = (
+            f"{card.provider_name} had already cancelled {booking_id} ({card.slot_label}), "
+            f"so there was nothing for me to cancel.{suffix}"
+        )
+        title = f"Already cancelled by the provider: {card.provider_name}"
+    else:
+        text = (
+            f"Cancelled {card.provider_name} for {card.slot_label} ({booking_id}). "
+            f"Confirmed with the provider.{suffix}"
+        )
+        title = f"Cancelled: {card.provider_name}"
+    return OutcomeCard(
+        outcome=RunOutcome.CANCELLED_VERIFIED,
+        verified=True,
+        title=title,
+        text=text,
+        lines=[
+            MaterialLine(label="Booking", value=booking_id),
+            MaterialLine(label="When", value=card.slot_label),
+            MaterialLine(label="Status", value="cancelled"),
+        ],
+        booking_id=booking_id,
+        approval_id=card.approval_id,
+    )
+
+
+def rescheduled_card(
+    card: ActionCard, booking_id: str, *, after_restart: bool = False
+) -> OutcomeCard:
+    suffix = " I checked after a restart." if after_restart else ""
+    return OutcomeCard(
+        outcome=RunOutcome.RESCHEDULED_VERIFIED,
+        verified=True,
+        title=f"Moved: {card.provider_name}",
+        text=(
+            f"Moved {card.provider_name} to {card.slot_label} ({booking_id}). "
+            f"Confirmed with the provider.{suffix}"
+        ),
+        lines=[
+            MaterialLine(label="Booking", value=booking_id),
+            MaterialLine(label="New time", value=card.slot_label),
+        ],
+        booking_id=booking_id,
+        approval_id=card.approval_id,
+    )
+
+
+def reschedule_card(
+    *,
+    approval_id: str,
+    errand_id: str,
+    fingerprint: str,
+    material: RescheduleMaterial,
+    booking: BookingItem,
+    new_slot: Slot,
+    alternatives: list[SlotOption],
+    expires_at: datetime,
+    tz: tzinfo,
+) -> ActionCard:
+    """The approval card for moving one booking to one new slot. The lines are the fresh
+    `list_bookings` record and the provider's own slot; the other eligible slots ride along
+    as `alternatives`. No hold exists and no price is approved (the booking keeps its)."""
+    old = slot_label(booking.slot, tz)
+    new = slot_label(new_slot, tz)
+    lines = [
+        MaterialLine(label="Provider", value=booking.provider_name),
+        MaterialLine(label="Service", value=service_words(booking.service.value)),
+        MaterialLine(label="From", value=old),
+        MaterialLine(label="To", value=new),
+        MaterialLine(label="Booking", value=f"{booking.booking_id}, confirmed"),
+    ]
+    return ActionCard(
+        approval_id=approval_id,
+        errand_id=errand_id,
+        action="reschedule",
+        fingerprint=fingerprint,
+        title=f"Move {booking.provider_name}",
+        lines=lines,
+        provider_id=booking.provider_id,
+        provider_name=booking.provider_name,
+        service=booking.service.value,
+        slot_start=new_slot.start.isoformat(),
+        slot_end=new_slot.end.isoformat(),
+        slot_label=new,
+        search_price_inr=0,
+        quoted_price_inr=0,
+        price_delta_inr=0,
+        hold_expires_at=expires_at.isoformat(),
+        expires_at=expires_at.isoformat(),
+        button_label="Move booking",
+        material=material,
+        alternatives=alternatives,
+        status_line=CHANGE_LINES[ErrandKind.RESCHEDULE][Phase.AWAITING_APPROVAL],
     )

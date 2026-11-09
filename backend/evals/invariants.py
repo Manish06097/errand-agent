@@ -7,7 +7,8 @@ invariant fail instead of vouching for itself. `tests/evals/test_invariants.py` 
 each one failing on a doctored copy of a real scenario's records.
 
 Wired in M3: INV-07, INV-08, INV-10, INV-11, INV-13; M10 hardens INV-10. M4: INV-01,
-INV-02, INV-04, INV-12, INV-15, INV-16.
+INV-02, INV-04, INV-12, INV-15, INV-16. M5: INV-03 and INV-18 (the lead's ruling brings
+INV-18 forward from M6, because M5 is the first milestone that leaves attempts unknown).
 
 The M4 ones must not vouch for the code they check either. INV-01 rebuilds each booking's
 material from the world's own rows (the hold the `book` named, the provider's service,
@@ -32,6 +33,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +41,12 @@ from errand.agent.transitions import ALLOWED, INITIAL_PHASE
 from errand.approvals.fingerprint import fingerprint
 from errand.clock import from_ms, to_ms
 from errand.domain.errand import Phase
-from errand.domain.material import BookMaterial, ist_seconds
+from errand.domain.material import (
+    BookMaterial,
+    CancelMaterial,
+    RescheduleMaterial,
+    ist_seconds,
+)
 from errand.domain.outcomes import RunOutcome
 from errand.trace.reader import read_trace
 from errand.world.contracts import Service
@@ -76,6 +83,11 @@ class Records:
     redactions: list[dict[str, Any]] = field(default_factory=list)
     known_booking_ids: list[str] = field(default_factory=list)
     client_action_ids: list[str] = field(default_factory=list)
+    # M5: agent.sqlite intent_attempts, whether the world dedupes keys (world.sqlite), and
+    # the agent's retry budget (the harness sets it; it is configuration, not a record).
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+    world_dedupes: bool = True
+    booking: dict[str, Any] | None = None
 
     def run_records(self) -> Iterable[tuple[dict[str, Any], list[dict[str, Any]]]]:
         for run in self.runs:
@@ -115,12 +127,13 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
         client_action_ids = [
             r[0] for r in conn.execute("SELECT client_action_id FROM client_requests")
         ]
+        attempts = table("SELECT * FROM intent_attempts ORDER BY intent_id, n")
     finally:
         conn.close()
     traces: dict[str, list[dict[str, Any]]] = {}
     for path in sorted((root / "traces").glob("*/*.jsonl")):
         traces[path.stem] = read_trace(path).records
-    bookings, holds, services, user = _world_rows(root / "world.sqlite")
+    bookings, holds, services, user, dedupes = _world_rows(root / "world.sqlite")
     return Records(
         traces=traces,
         runs=runs,
@@ -141,12 +154,14 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
         redactions=redactions,
         known_booking_ids=known_booking_ids,
         client_action_ids=client_action_ids,
+        attempts=attempts,
+        world_dedupes=dedupes,
     )
 
 
 def _world_rows(
     world_db: Path,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, str], str]:
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, str], str, bool]:
     conn = sqlite3.connect(f"file:{world_db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
@@ -157,10 +172,12 @@ def _world_rows(
             for r in conn.execute("SELECT provider_id, service FROM providers")
         }
         row = conn.execute("SELECT value FROM meta WHERE key = 'scenario_json'").fetchone()
-        user = json.loads(row[0]).get("user", {}).get("user_id", "u_demo") if row else "u_demo"
+        scenario = json.loads(row[0]) if row else {}
+        user = scenario.get("user", {}).get("user_id", "u_demo")
+        dedupes = bool(scenario.get("world", {}).get("enforce_idempotency", True))
     finally:
         conn.close()
-    return bookings, holds, services, str(user)
+    return bookings, holds, services, str(user), dedupes
 
 
 def _provider_names(world_db: Path) -> dict[str, str]:
@@ -207,7 +224,11 @@ def inv07_one_end_per_run(rec: Records) -> Violations:
         outcome = ends[0].get("outcome")
         if outcome not in RunOutcome.__members__:
             out.append(f"{rid}: run.end outcome {outcome!r} is not a RunOutcome")
-        if run["status"] != "ended" or run["outcome"] != outcome:
+        # A run the process died in is ended by the reconciler: `recovered`, RUN_INTERRUPTED.
+        status_ok = run["status"] == "ended" or (
+            run["status"] == "recovered" and outcome == "RUN_INTERRUPTED"
+        )
+        if not status_ok or run["outcome"] != outcome:
             out.append(f"{rid}: runs row says {run['status']}/{run['outcome']}, trace {outcome}")
         shown = [
             m
@@ -231,28 +252,47 @@ def _visible_text(body: dict[str, Any]) -> str:
 
 
 def inv08_transitions_allowed(rec: Records) -> Violations:
-    """Every state.transition is in ALLOWED and starts where the errand last was."""
+    """Every state.transition is in ALLOWED and starts where the errand last was.
+
+    A run the process died in (ended RUN_INTERRUPTED by the reconciler) only keeps the
+    transitions of nodes that finished: LangGraph checkpoints at the end of a node, so a
+    transition recorded inside the node that was running never reached the errand's
+    state, and the recovery run starts from the phase before it (N1).
+    """
     out: Violations = []
     phase: dict[str, Phase] = defaultdict(lambda: INITIAL_PHASE)
-    for record in rec.all_records():
-        if record["type"] != "state.transition":
-            continue
-        errand = str(record.get("errand_id"))
-        try:
-            frm, to = Phase(record["from"]), Phase(record["to"])
-        except ValueError:
-            out.append(f"seq {record['seq']}: unknown phase {record['from']}->{record['to']}")
-            continue
-        if to not in ALLOWED[frm]:
-            out.append(
-                f"{record['run_id']} seq {record['seq']}: {frm.value}->{to.value} not allowed"
-            )
-        if frm != phase[errand]:
-            out.append(
-                f"{record['run_id']} seq {record['seq']}: from {frm.value}, "
-                f"but the errand was {phase[errand].value}"
-            )
-        phase[errand] = to
+    for _run, records in rec.run_records():
+        finished = {r["span_id"] for r in records if r["type"] == "node.end"}
+        interrupted = any(
+            r["type"] == "run.end" and r.get("outcome") == "RUN_INTERRUPTED" for r in records
+        )
+        before = dict(phase)
+        kept: dict[str, Phase] = {}
+        for record in records:
+            if record["type"] != "state.transition":
+                continue
+            errand = str(record.get("errand_id"))
+            try:
+                frm, to = Phase(record["from"]), Phase(record["to"])
+            except ValueError:
+                out.append(f"seq {record['seq']}: unknown phase {record['from']}->{record['to']}")
+                continue
+            if to not in ALLOWED[frm]:
+                out.append(
+                    f"{record['run_id']} seq {record['seq']}: {frm.value}->{to.value} not allowed"
+                )
+            if frm != phase[errand]:
+                out.append(
+                    f"{record['run_id']} seq {record['seq']}: from {frm.value}, "
+                    f"but the errand was {phase[errand].value}"
+                )
+            phase[errand] = to
+            if record.get("parent_span_id") in finished:
+                kept[errand] = to
+        if interrupted:
+            for errand in {str(r.get("errand_id")) for r in records}:
+                if errand in before or errand in phase:
+                    phase[errand] = kept.get(errand, before.get(errand, INITIAL_PHASE))
     return out
 
 
@@ -494,6 +534,17 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
     the world's own records, and the booking it made is exactly that material."""
     out: Violations = []
     consumed, intent_of_key = _consumptions(rec)
+    # A booking that differs from the approved material is the world's doing, not the
+    # agent's, when the agent caught it: its status check recorded the mismatch and the
+    # intent is left for a person (S65). Without both, the difference is a violation.
+    open_intents = {i["intent_id"] for i in rec.intents if i["state"] == "needs_attention"}
+    caught = {
+        str(r["idempotency_key"])
+        for r in rec.all_records()
+        if r["type"] == "status.check"
+        and r.get("mismatch")
+        and intent_of_key.get(str(r["idempotency_key"])) in open_intents
+    }
     checked = 0
     for row in rec.op_log:
         if row["op"] not in ("book", "cancel", "reschedule"):
@@ -508,7 +559,8 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
             out.append(f"{where}: no approval.consumed for key {key}")
             continue
         if row["op"] != "book":
-            continue  # cancel and reschedule material lands with M9
+            out += _change_violations(rec, row, args, record, where)
+            continue
         material = _world_material(rec, str(args.get("hold_id")), int(row["sim_ts"]))
         if material is None:
             out.append(f"{where}: the world has no hold {args.get('hold_id')}")
@@ -522,6 +574,8 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
         for b in rec.world_bookings:
             if b["created_by_key"] != key:
                 continue
+            if key in caught:
+                continue  # the provider booked something else and the agent said so (M5)
             same = (
                 b["provider_id"] == material.provider_id
                 and ist_seconds(from_ms(int(b["slot_start"]))) == material.slot_start
@@ -530,6 +584,64 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
             if not same:
                 out.append(f"{where}: booking {b['booking_id']} differs from the approved material")
     rec.notes["book_ops_checked"] = checked
+    return out
+
+
+def _slot_before(rec: Records, booking_id: str, seq: int) -> int | None:
+    """The booking's slot start (epoch ms) in the world's own latest `list_bookings` answer
+    before op `seq`: what the booking looked like when the change was made."""
+    for row in sorted(rec.op_log, key=lambda r: int(r["seq"]), reverse=True):
+        if row["op"] != "list_bookings" or int(row["seq"]) >= seq or not row.get("response_json"):
+            continue
+        for item in json.loads(row["response_json"]).get("bookings") or []:
+            if item.get("booking_id") == booking_id:
+                return _ms(str(item["slot"]["start"]))
+    return None
+
+
+def _change_violations(
+    rec: Records,
+    row: dict[str, Any],
+    args: dict[str, Any],
+    consumed: dict[str, Any],
+    where: str,
+) -> list[str]:
+    """A cancel or reschedule's material rebuilt from the world's own records (the booking
+    row, the list it last answered, the slot the call carried), against the fingerprint the
+    approval was consumed at (N1)."""
+    out: list[str] = []
+    booking_id = str(args.get("booking_id"))
+    booking = next((b for b in rec.world_bookings if b["booking_id"] == booking_id), None)
+    if booking is None:
+        return [f"{where}: the world has no booking {booking_id}"]
+    provider = str(booking["provider_id"])
+    before = _slot_before(rec, booking_id, int(row["seq"]))
+    if row["op"] == "cancel":
+        start = before if before is not None else int(booking["slot_start"])
+        rebuilt: CancelMaterial | RescheduleMaterial = CancelMaterial(
+            user_id=rec.world_user,
+            booking_id=booking_id,
+            provider_id=provider,
+            slot_start=ist_seconds(from_ms(start)),
+        )
+    else:
+        slot = args.get("slot") or {}
+        if before is None or "start" not in slot or "end" not in slot:
+            return [f"{where}: no earlier list or no slot to rebuild the reschedule from"]
+        rebuilt = RescheduleMaterial(
+            user_id=rec.world_user,
+            booking_id=booking_id,
+            provider_id=provider,
+            from_start=ist_seconds(from_ms(before)),
+            to_start=ist_seconds(slot["start"]),
+            to_end=ist_seconds(slot["end"]),
+        )
+    if fingerprint(rebuilt) != consumed.get("fingerprint"):
+        out.append(
+            f"{where}: consumed fingerprint {consumed.get('fingerprint')} is not the one "
+            f"rebuilt from the world's records ({row['op']} {booking_id}, "
+            f"{getattr(rebuilt, 'slot_start', None) or getattr(rebuilt, 'to_start', None)})"
+        )
     return out
 
 
@@ -562,6 +674,27 @@ def inv02_one_side_effect_per_approval(rec: Records) -> Violations:
         replaced = row.get("replaces_booking_id")
         if replaced and row["state"] in ("open", "needs_attention", "succeeded"):
             replacements[str(replaced)] += 1
+    # A cancel or reschedule is effect-idempotent, so the same call may be applied twice at
+    # the world; what must never happen is one approval's key touching two effects.
+    effects: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+    for row in rec.op_log:
+        if row["op"] not in ("cancel", "reschedule") or row["outcome"] != "ok":
+            continue
+        args = json.loads(row["args_json"])
+        key = str(args.get("idempotency_key"))
+        slot = (args.get("slot") or {}).get("start", "")
+        effects[key].add((row["op"], str(args.get("booking_id")), str(slot)))
+    for key, made in sorted(effects.items()):
+        approval = consumed.get(intent_of_key.get(key, ""), {}).get("approval_id")
+        if len(made) > 1:
+            out.append(f"approval {approval} (key {key}) applied {len(made)} different changes")
+    # An intent exists only because an approval was consumed for it (8.4, N1: a proposal
+    # never writes one).
+    consumed_by = {str(a["approval_id"]): a for a in rec.approvals if a["status"] == "consumed"}
+    for row in rec.intents:
+        approval = consumed_by.get(str(row["approval_id"]))
+        if approval is None or approval.get("consumed_by_intent") != row["intent_id"]:
+            out.append(f"intent {row['intent_id']} has no approval consumed for it")
     out += [f"{n} live intents on booking {t}" for t, n in live_targets.items() if n > 1]
     out += [f"{n} replacements for booking {t}" for t, n in replacements.items() if n > 1]
     material_of = {a["approval_id"]: json.loads(a["material_json"]) for a in rec.approvals}
@@ -783,6 +916,30 @@ def _confirmed_by_world(rec: Records, record: dict[str, Any]) -> str | None:
     return str(result.get("booking_id"))
 
 
+def _changed_by_world(rec: Records, record: dict[str, Any]) -> set[str]:
+    """Booking ids a `list_bookings` record shows cancelled, or confirmed at the slot the
+    world's own row has, where the world's row agrees (N1): what verifies a cancel or a
+    reschedule, since those are checked through the list, not a status."""
+    if record["type"] != "tool.call" or record.get("tool") != "list_bookings":
+        return set()
+    seq = record.get("world_seq")
+    if next((r for r in rec.op_log if r["seq"] == seq), None) is None:
+        return set()
+    rows = {str(b["booking_id"]): b for b in rec.world_bookings}
+    out: set[str] = set()
+    for item in (record.get("result") or {}).get("bookings") or []:
+        row = rows.get(str(item.get("booking_id")))
+        if row is None or row["status"] != item.get("status"):
+            continue
+        if item.get("status") in ("cancelled", "cancelled_by_provider"):
+            out.add(str(item["booking_id"]))
+        elif item.get("status") == "confirmed":
+            slot = (item.get("slot") or {}).get("start")
+            if slot and ist_seconds(slot) == ist_seconds(from_ms(int(row["slot_start"]))):
+                out.add(str(item["booking_id"]))
+    return out
+
+
 def _final_phases(rec: Records) -> dict[str, str]:
     """The errand phase at the end of each run, from the transition records."""
     phase: dict[str, str] = defaultdict(lambda: INITIAL_PHASE.value)
@@ -815,10 +972,21 @@ def inv04_success_only_after_the_source_of_truth(rec: Records) -> Violations:
     for run, records in rec.run_records():
         rid = run["run_id"]
         checked_here = False
+        via_list = any(
+            r["type"] == "run.end"
+            and r.get("outcome") in ("CANCELLED_VERIFIED", "RESCHEDULED_VERIFIED")
+            for r in records
+        )
         for record in records:
             if record["type"] == "tool.call" and record.get("tool") == "search_providers":
                 found_in = (record.get("result") or {}).get("providers") or []
                 known.update(str(p["name"]) for p in found_in if p.get("name"))
+            # A cancel or a reschedule is verified through list_bookings (9.5); a booking
+            # never is, so only those two outcomes may use the list as their check.
+            changed = _changed_by_world(rec, record) if via_list else set()
+            if changed:
+                confirmed |= changed
+                checked_here = True
             booking = _confirmed_by_world(rec, record)
             if booking is not None:
                 confirmed.add(booking)
@@ -1392,6 +1560,230 @@ def _check_recent(
     return out
 
 
+# ---------------------------------------------------------------- INV-03 (M5)
+
+
+@dataclass
+class _Call:
+    """One agent tool call, from a `tool.call` trace record, in global trace order."""
+
+    idx: int
+    run_id: str
+    thread: str
+    tool: str
+    key: str | None
+    hold: str | None
+    error: str | None
+    result: dict[str, Any]
+    world_seq: int | None
+
+    @property
+    def status(self) -> str | None:
+        status = self.result.get("status") if isinstance(self.result, dict) else None
+        return str(status) if status else None
+
+    @property
+    def refused(self) -> bool:
+        """A `book` the world answered with an error (`slot_taken`, `hold_expired`, ...)."""
+        return self.error is None and isinstance(self.result, dict) and "error" in self.result
+
+
+def _calls(rec: Records) -> tuple[list[_Call], list[tuple[int, str, dict[str, Any]]]]:
+    calls: list[_Call] = []
+    marks: list[tuple[int, str, dict[str, Any]]] = []  # (idx, record type, record)
+    idx = 0
+    for run, records in rec.run_records():
+        for record in records:
+            idx += 1
+            marks.append((idx, str(record["type"]), record))
+            if record["type"] != "tool.call":
+                continue
+            args = record.get("args") or {}
+            calls.append(
+                _Call(
+                    idx=idx,
+                    run_id=run["run_id"],
+                    thread=str(record["thread_id"]),
+                    tool=str(record["tool"]),
+                    key=args.get("idempotency_key") or record.get("idempotency_key"),
+                    hold=args.get("hold_id"),
+                    error=record.get("error"),
+                    result=dict(record["result"]) if isinstance(record.get("result"), dict) else {},
+                    world_seq=record.get("world_seq"),
+                )
+            )
+    return calls, marks
+
+
+def _key_of(row: dict[str, Any]) -> str | None:
+    try:
+        key = json.loads(row["args_json"]).get("idempotency_key")
+    except (ValueError, AttributeError):
+        return None
+    return str(key) if key else None
+
+
+def inv03_a_resend_follows_the_status_first_rule(rec: Records) -> Violations:
+    """After a `book` timeout, 5xx or malformed answer the next world op on that key is
+    `get_booking_status`; every later `book` on that hold uses the same key, follows a
+    `not_found` for that key while the hold was live, and is followed by a status check
+    before any outcome is shown; `book` calls per key are at most 1 + max_same_key_retries
+    with dedupe on and exactly 1 with dedupe off; no `book` after "Never mind"; each key
+    produces at most one world booking. Read from the trace and the world op_log, both."""
+    out: Violations = []
+    calls, marks = _calls(rec)
+    books = [c for c in calls if c.tool == "book"]
+    statuses = [c for c in calls if c.tool == "get_booking_status"]
+    rows = {int(r["seq"]): r for r in rec.op_log}
+
+    # 1. After an ambiguous book the next op on that key is a status check, in the agent's
+    # own calls and in the world's op_log.
+    keyed = [c for c in calls if c.key]
+    for call in books:
+        row = rows.get(call.world_seq) if call.world_seq is not None else None
+        ambiguous = call.error is not None
+        if row is not None:
+            ambiguous = (
+                ambiguous
+                or row["outcome"] in ("timeout_booked", "timeout_not_booked")
+                or (row.get("http_status") or 0) >= 500
+            )
+        if not ambiguous:
+            continue
+        after = [c for c in keyed if c.key == call.key and c.idx > call.idx]
+        if after and after[0].tool != "get_booking_status":
+            out.append(f"{call.key}: after an ambiguous book the agent called {after[0].tool}")
+        if call.world_seq is not None:
+            later = [
+                r for r in rec.op_log if int(r["seq"]) > call.world_seq and _key_of(r) == call.key
+            ]
+            if later and later[0]["op"] != "get_booking_status":
+                out.append(
+                    f"{call.key}: the world's next op on the key after an ambiguous book "
+                    f"is {later[0]['op']}, not get_booking_status"
+                )
+
+    # 2. One key per hold; every re-send follows a not_found while the hold was live.
+    liveness_checked = unreadable = 0
+    by_hold: dict[str, list[_Call]] = defaultdict(list)
+    for call in books:
+        by_hold[str(call.hold)].append(call)
+    for hold, group in by_hold.items():
+        keys = sorted({str(c.key) for c in group})
+        if len(keys) > 1:
+            out.append(f"hold {hold} was booked under {len(keys)} keys: {keys}")
+        for prev, nxt in pairwise(group):
+            between = [s for s in statuses if s.key == nxt.key and prev.idx < s.idx < nxt.idx]
+            if not between or between[-1].status != "not_found":
+                found = between[-1].status if between else "no status check"
+                out.append(f"{nxt.key}: re-sent on {hold} after {found}, not a not_found")
+                continue
+            seen = rows.get(between[-1].world_seq) if between[-1].world_seq else None
+            expires = rec.world_holds.get(hold, {}).get("expires_at")
+            at = None if seen is None else seen.get("done_ts") or seen.get("sim_ts")
+            if expires is None or at is None:
+                # An invariant that cannot check says so; it never passes quietly.
+                unreadable += 1
+                out.append(
+                    f"{nxt.key}: re-sent on {hold}, but could not check that the hold was "
+                    f"live (status call {'unseen' if seen is None else 'seen'} by the world, "
+                    f"hold {'missing' if expires is None else 'present'} in world_holds)"
+                )
+            else:
+                liveness_checked += 1
+                if int(at) >= int(expires):
+                    out.append(f"{nxt.key}: re-sent on {hold} after the hold had lapsed")
+
+    # 3. A book that was not refused is followed by a status check on its key before any
+    # card or the end of the run: the user hears only what get_booking_status says.
+    for call in books:
+        if call.refused:
+            continue
+        for _, kind, record in (m for m in marks if m[0] > call.idx):
+            args = record.get("args") or {}
+            if (
+                kind == "tool.call"
+                and record.get("tool") == "get_booking_status"
+                and args.get("idempotency_key") == call.key
+            ):
+                break
+            # A run the process died in ends RUN_INTERRUPTED (N1): "I was interrupted"
+            # says nothing about the booking, and the recovery run checks the key.
+            cut = kind == "run.end" and record.get("outcome") == "RUN_INTERRUPTED"
+            if kind in ("card", "run.end") and record.get("run_id") == call.run_id and not cut:
+                out.append(f"{call.key}: an outcome was shown before a status check")
+                break
+
+    # 4. The count bound per mode, and one world booking per key.
+    per_key: dict[str, int] = defaultdict(int)
+    for call in books:
+        per_key[str(call.key)] += 1
+    # A record that lacks the budget is held to the default (1), not excused from the bound.
+    recorded = (rec.booking or {}).get("max_same_key_retries")
+    budget = int(recorded) if recorded is not None else 1
+    for key, n in sorted(per_key.items()):
+        if not rec.world_dedupes and n != 1:
+            out.append(f"{key}: {n} book calls with dedupe off, exactly 1 allowed")
+        elif rec.world_dedupes and n > 1 + budget:
+            out.append(f"{key}: {n} book calls, at most {1 + budget} allowed")
+    made: dict[str, list[str]] = defaultdict(list)
+    for b in rec.world_bookings:
+        if b["created_by_key"]:
+            made[str(b["created_by_key"])].append(str(b["booking_id"]))
+    out += [f"{k}: {len(v)} world bookings for one key: {v}" for k, v in made.items() if len(v) > 1]
+
+    # 5. No book after "Never mind" (the action is M6's; the check is ready for it).
+    gone = {
+        str(r["thread_id"]): i
+        for i, kind, r in marks
+        if kind == "state.transition" and r.get("to") == Phase.ABANDONED.value
+    }
+    for call in books:
+        if call.thread in gone and call.idx > gone[call.thread]:
+            out.append(f"{call.key}: a book after the errand was abandoned")
+    rec.notes["inv03_books_checked"] = len(books)
+    rec.notes["inv03_resends_checked"] = sum(max(0, len(g) - 1) for g in by_hold.values())
+    rec.notes["inv03_abandoned_threads"] = len(gone)
+    rec.notes["inv03_liveness_checked"] = liveness_checked
+    rec.notes["inv03_liveness_unreadable"] = unreadable
+    rec.notes["inv03_count_bounds_checked"] = len(per_key)
+    rec.notes["inv03_budget_defaulted"] = recorded is None
+    return out
+
+
+# ---------------------------------------------------------------- INV-18 (M5)
+
+
+def inv18_no_attempt_left_unsettled(rec: Records) -> Violations:
+    """No attempt is left `prepared`, `in_flight` or `unknown` at the end unless its intent
+    is `needs_attention` and the user saw PENDING_VERIFICATION."""
+    out: Violations = []
+    intents = {i["intent_id"]: i for i in rec.intents}
+    pending_seen = {
+        m["conversation_id"]
+        for m in rec.messages
+        if m["role"] == "assistant" and m["body"].get("outcome") == "PENDING_VERIFICATION"
+    }
+    ended_pending = {
+        r["conversation_id"] for r in rec.runs if r.get("outcome") == "PENDING_VERIFICATION"
+    }
+    unsettled = [a for a in rec.attempts if a["state"] in ("prepared", "in_flight", "unknown")]
+    for a in unsettled:
+        intent = intents.get(a["intent_id"])
+        where = f"attempt {a['attempt_id']} ({a['state']})"
+        if intent is None:
+            out.append(f"{where}: no intent row")
+        elif intent["state"] != "needs_attention":
+            out.append(f"{where}: its intent is {intent['state']}, not needs_attention")
+        elif not (
+            intent["conversation_id"] in pending_seen and intent["conversation_id"] in ended_pending
+        ):
+            out.append(f"{where}: the user never saw PENDING_VERIFICATION")
+    rec.notes["attempts_checked"] = len(rec.attempts)
+    rec.notes["attempts_unsettled"] = len(unsettled)
+    return out
+
+
 INVARIANTS: dict[str, Callable[[Records], Violations]] = {
     "INV-01": inv01_side_effects_match_a_consumed_approval,
     "INV-02": inv02_one_side_effect_per_approval,
@@ -1408,6 +1800,8 @@ INVARIANTS: dict[str, Callable[[Records], Violations]] = {
     "INV-06": inv06_every_request_within_the_budget,
     "INV-19": inv19_memory_authority,
     "INV-20": inv20_the_manifest_tells_the_truth,
+    "INV-03": inv03_a_resend_follows_the_status_first_rule,
+    "INV-18": inv18_no_attempt_left_unsettled,
 }
 DEFAULT = tuple(INVARIANTS)
 

@@ -19,7 +19,7 @@ from errand.config import ModelSettings
 from errand.context.builder import CAPS
 from errand.llm.gateway import LLMGateway
 from errand.llm.scripted import ScriptedChatModel
-from errand.llm.tokens import est_tokens
+from errand.llm.tokens import TOOLS_PREAMBLE_TOKENS, est_tokens
 from errand.tools.gateway import CONSEQUENTIAL_TOOLS
 from errand.trace.sinks.null import NullSink
 from errand.trace.tracer import Tracer
@@ -112,6 +112,8 @@ def test_the_tools_are_the_read_brief_and_propose_tools_in_order() -> None:
         "update_brief",
         "ask_user",
         "propose_booking",
+        "propose_cancel",
+        "propose_reschedule",
     )
     assert not set(PLANNER_TOOL_NAMES) & CONSEQUENTIAL_TOOLS
 
@@ -131,6 +133,21 @@ def test_what_reaches_the_api_is_strict_and_in_the_same_order() -> None:
 
 
 def test_the_tool_list_fits_its_context_section() -> None:
-    # 1,996 of 2,000 with propose_booking (M4); M9 and M11 add tools and need room made.
-    size = est_tokens(json.dumps(list(PLANNER_TOOLS), ensure_ascii=False, separators=(",", ":")))
-    assert size <= CAPS["tools"]
+    """S2 is 3,800 tokens with the 400-token tools preamble inside it (gate 2, 13.1).
+
+    Rendered the way the gateway sends it (with `strict`), not as the Python literals.
+    Measured in M8: 2,318 estimated tokens, 2,718 with the preamble. N1 adds
+    `propose_cancel` and `propose_reschedule` (328 together) and `update_brief`'s
+    `provider_pref` (98, with its evidence entry): 2,744, or 3,144 with the preamble, so
+    656 are left for M11's three memory tools. `update_brief` is 1,379 of the list.
+    """
+    tracer = Tracer(run_id="r_t", thread_id="c_t", sinks=[NullSink()])
+    gateway = LLMGateway(
+        tracer=tracer,
+        tools=PLANNER_TOOLS,
+        settings=ModelSettings(model_mode="scripted"),
+        transport=ScriptedChatModel(script=[]),
+    )
+    sent = gateway.canonical([HumanMessage(content="hi")])["tools"]
+    size = est_tokens(json.dumps(sent, ensure_ascii=False, separators=(",", ":")))
+    assert TOOLS_PREAMBLE_TOKENS + size <= CAPS["tools"] == 3_800

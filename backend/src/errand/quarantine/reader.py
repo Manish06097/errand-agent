@@ -74,6 +74,7 @@ from errand.llm.anthropic import (
     structured_bind_kwargs,
 )
 from errand.llm.cassette import CassetteRecorder, CassetteReplayModel
+from errand.llm.errors import CassetteMiss
 from errand.llm.pricing import cost_decimal, usage_from_metadata
 from errand.llm.scripted import ScriptedChatModel
 from errand.store.agent_db import AgentDB
@@ -589,6 +590,10 @@ class ReviewReader:
                 message = await self._bound.ainvoke(request_messages(inp))
         except (TimeoutError, anthropic.APITimeoutError):
             return _Raw(None, "timeout", (perf() - started) * 1000)
+        except CassetteMiss:
+            # Not a failure of the reader: the recording is missing a request. Failing
+            # closed would let a replay row pass with no digests at all (BUG-M7-1).
+            raise
         except Exception:
             return _Raw(None, "transport_error", (perf() - started) * 1000)
         if not isinstance(message, AIMessage):

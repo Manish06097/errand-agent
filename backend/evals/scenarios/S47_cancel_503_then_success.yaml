@@ -1,0 +1,21 @@
+id: S47_cancel_503_then_success
+title: Cancel my AC servicing; the provider's first cancel answers 503 and the retry with the same key works; the cancellation is verified through list_bookings, and only the approval click sent it
+category: [cancel, idempotency]
+seed: 47
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: a cancel or a reschedule never reaches `book`, so the provider's key dedupe does not apply
+steps:
+  - say: "Please cancel my AC servicing."
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - expect_world: {cancel: 0}
+  - approve: {}
+  - expect_outcome: CANCELLED_VERIFIED
+  - expect_world: {cancel: 2}
+  - expect_cancel: {calls: 2, same_key: true, booking_status: cancelled}
+  - expect_booking: {count: 0}
+expect:
+  invariants: [default]

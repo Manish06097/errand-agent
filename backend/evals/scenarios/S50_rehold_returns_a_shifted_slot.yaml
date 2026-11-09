@@ -1,0 +1,34 @@
+id: S50_rehold_returns_a_shifted_slot
+title: The hold lapses after the grant and the re-hold returns a window an hour later; the approval is invalidated as slot_changed, a new card shows the new window, and nothing is booked until a new grant
+category: [changed_slot_after_approval]
+seed: 50
+world:
+  book: {forced: [success]}
+faults:
+  rehold_slot_shift: {P1: +1h, P2: +1h, P3: +1h, P4: +1h, P5: +1h, P6: +1h, P7: +1h, P8: +1h, P9: +1h, P10: +1h, P11: +1h, P12: +1h, P13: +1h, P14: +1h, P15: +1h, P16: +1h, P17: +1h, P18: +1h, P19: +1h, P20: +1h}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - advance: 11m
+  - approve: {}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_trace: {approval.invalidated: 1, approval.hold_rebound: 0, approval.consumed: 0, approval.requested: 1}
+  - expect_transcript: {includes: ["changed the slot", "nothing was booked"]}
+  - expect_card: {kind: action, status: pending}
+  - expect_world: {hold_slot: 2, book: 0}
+  - expect_booking: {count: 0}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_world: {book: 1}
+  - expect_booking: {count: 1, price_is_held_quote: true}
+expect:
+  invariants: [default]

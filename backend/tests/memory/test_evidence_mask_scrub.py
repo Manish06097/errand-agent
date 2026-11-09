@@ -276,3 +276,21 @@ def test_the_model_view_hides_a_superseded_span() -> None:
         redaction.apply_model_view(text, [(10, 21, "superseded")])
         == "I live in [updated preference], book a plumber"
     )
+
+
+def test_redact_body_overwrites_a_brief_chip_value_and_evidence() -> None:
+    """M8 chips on a card restate the brief, so a forgotten area must leave them."""
+    body = {
+        "type": "clarify",
+        "question": "Which day?",
+        "brief": [
+            {"field": "area", "value": "indiranagar", "source": "memory", "evidence": None},
+            {"field": "service", "value": "plumber", "source": "user_msg",
+             "evidence": "I live in Indiranagar, need a plumber"},
+        ],
+    }  # fmt: skip
+    new, _ = redaction.redact_body(body, ["indiranagar"])
+    chips = new["brief"]
+    assert chips[0]["value"] == "[removed at your request]"
+    assert chips[1]["evidence"] == "I live in [removed at your request], need a plumber"
+    assert chips[1]["value"] == "plumber"

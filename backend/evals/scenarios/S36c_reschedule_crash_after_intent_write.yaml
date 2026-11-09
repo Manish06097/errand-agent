@@ -1,0 +1,23 @@
+id: S36c_reschedule_crash_after_intent_write
+title: The agent dies after a reschedule's intent and its prepared attempt were written and before anything was sent; after the restart the list still shows the old time, the move is sent once with its own key and verified through list_bookings, and the user is told after a restart
+category: [restart, reschedule, idempotency]
+seed: 7
+crash_at: after_intent_write
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: a cancel or a reschedule never reaches `book`, so the provider's key dedupe does not apply
+steps:
+  - say: "Move my AC servicing to Saturday."
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - approve: {}
+  - expect_world: {reschedule: 0}
+  - restart: {}
+  - expect_outcome: RESCHEDULED_VERIFIED
+  - expect_transcript:
+      last_includes: ["I checked after a restart"]
+  - expect_move: {calls: 1, applied: 1, weekday: 6}
+expect:
+  invariants: [default]

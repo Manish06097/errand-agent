@@ -142,7 +142,8 @@ def redact_body(
 
     Returns the new body and the primary-text spans that were edited, in the old text's
     coordinates. A clarify card's options are replaced without a row: the redaction table
-    has no coordinates for them. Code-rendered fields are never touched.
+    has no coordinates for them. Brief chips on a card are redacted in `value` and `evidence`;
+    other code-rendered fields are never touched.
     """
     forms = tuple(forms)
     new = dict(body)
@@ -159,4 +160,20 @@ def redact_body(
             overwrite(o, find_spans(o, forms), FORGOTTEN_MARKER) if isinstance(o, str) else o
             for o in options
         ]
+    chips = body.get("brief")
+    if isinstance(chips, list):
+        # M8 brief chips on a card restate the brief: a memory-sourced value and the
+        # user's cut evidence. The window_label is the resolved search window, left alone.
+        new["brief"] = [_redact_chip(c, forms) for c in chips]
     return new, edited
+
+
+def _redact_chip(chip: Any, forms: Sequence[str]) -> Any:
+    if not isinstance(chip, dict):
+        return chip
+    out = dict(chip)
+    for name in ("value", "evidence"):
+        text = chip.get(name)
+        if isinstance(text, str):
+            out[name] = overwrite(text, find_spans(text, forms), FORGOTTEN_MARKER)
+    return out

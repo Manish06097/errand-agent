@@ -13,13 +13,16 @@ and the fields it asks for are code-checked by the ask guard.
 
 from __future__ import annotations
 
-from datetime import tzinfo
+from datetime import datetime, tzinfo
 
+from errand.agent.cards import brief_chips
+from errand.agent.templates_conversation import no_fit_body, out_of_coverage_body
 from errand.domain.brief import BriefField
 from errand.domain.errand import Errand
 from errand.domain.messages import (
     CandidateOption,
     ClarifyCard,
+    ExcludedOption,
     MessageBody,
     NoticeAction,
     OutcomeNotice,
@@ -32,7 +35,10 @@ from errand.domain.outcomes import (
     AskExhausted,
     Failure,
     Limit,
+    NoFit,
     Options,
+    OutOfCoverage,
+    PendingCheck,
     PlanResult,
     Proposal,
     Reply,
@@ -66,7 +72,7 @@ def _join(words: list[str]) -> str:
     return ", ".join(words[:-1]) + " and " + words[-1]
 
 
-def _so_far(errand: Errand | None) -> str:
+def so_far(errand: Errand | None) -> str:
     """The brief's filled search fields in plain words, for a notice that stops early."""
     if errand is None:
         return ""
@@ -95,6 +101,15 @@ def internal_error(run_id: str) -> OutcomeNotice:
     )
 
 
+def run_interrupted() -> OutcomeNotice:
+    """The message of a run the process died in (15.2); the verified or failed result, if
+    there is one, comes from the recovery run that follows it."""
+    return OutcomeNotice(
+        outcome=RunOutcome.RUN_INTERRUPTED,
+        text="I was interrupted; here is where things stand.",
+    )
+
+
 def recommendation_line(text: str) -> str | None:
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
     if not line:
@@ -102,6 +117,15 @@ def recommendation_line(text: str) -> str | None:
     if len(line) > RECOMMENDATION_MAX_CHARS:
         line = line[: RECOMMENDATION_MAX_CHARS - 3].rstrip() + "..."
     return line
+
+
+# Why a provider is not on the shortlist, in words the card can show (code-written).
+EXCLUSION_WORDS: dict[str, str] = {
+    "over_budget": "Over your budget",
+    "no_slot_in_window": "No free slot in your window",
+    "over_cap": "Not shown: only the top 8 fit on the list",
+    "avoided": "You asked to avoid this provider",
+}
 
 
 def hidden_reviews_notice(flags: int) -> str | None:
@@ -139,11 +163,23 @@ def shortlist_card(errand: Errand, recommendation: str | None, tz: tzinfo) -> Sh
                 badges=list(c.badges),
                 injection_flags=c.digest.injection_flags if c.digest else 0,
                 notice=hidden_reviews_notice(c.digest.injection_flags if c.digest else 0),
+                score=c.score,
+                score_parts=dict(c.score_parts),
             )
             for c in shortlist.candidates
         ],
         excluded_count=len(shortlist.excluded),
         recommendation=recommendation,
+        excluded=[
+            ExcludedOption(
+                provider_id=x.provider_id,
+                name=x.name,
+                reason=x.reason,
+                reason_text=EXCLUSION_WORDS.get(x.reason, "Left out"),
+            )
+            for x in shortlist.excluded
+        ],
+        brief=brief_chips(errand.brief),
     )
 
 
@@ -159,6 +195,7 @@ def render(
             fields=result.fields,
             question=result.question,
             options=result.options,
+            brief=brief_chips(errand.brief),
         )
     if isinstance(result, AskExhausted):
         needed = _join([_FIELD_WORDS[f] for f in result.still_needed]) or "a few more details"
@@ -171,14 +208,18 @@ def render(
             actions=[NoticeAction(kind="answer", label="Answer")],
             still_needed=result.still_needed,
         )
+    if isinstance(result, OutOfCoverage) and errand is not None:
+        return out_of_coverage_body(result, errand)
+    if isinstance(result, NoFit):
+        return no_fit_body(result)
     if isinstance(result, Options) and errand is not None and errand.shortlist is not None:
         return RunOutcome.PRESENTED_OPTIONS, shortlist_card(errand, result.recommendation, tz)
     if isinstance(result, Limit):
-        known = _so_far(errand)
-        so_far = f" So far I have: {known}." if known else ""
+        known = so_far(errand)
+        have = f" So far I have: {known}." if known else ""
         return RunOutcome.LIMIT_REACHED, OutcomeNotice(
             outcome=RunOutcome.LIMIT_REACHED,
-            text=f"I hit my step limit for this turn, so I stopped.{so_far} Nothing was booked.",
+            text=f"I hit my step limit for this turn, so I stopped.{have} Nothing was booked.",
             actions=[
                 NoticeAction(kind="retry", label="Try again"),
                 NoticeAction(kind="narrow_search", label="Narrow search"),
@@ -200,3 +241,92 @@ def render(
     if isinstance(result, Failure | Proposal) or result is None:
         return RunOutcome.INTERNAL_ERROR, internal_error(run_id)
     return RunOutcome.INTERNAL_ERROR, internal_error(run_id)
+
+
+# ---------------------------------------------------------------- booking failure paths (M5)
+#
+# Every sentence below is code over records. None of them uses a word the claim guard or
+# INV-04 reads as a success claim without a record behind it: "booked twice", "cancelled"
+# and "moved" all trip them, so these say "two bookings", "pulled out" and "changed the
+# slot". A test runs each one through both.
+
+
+def clock_hhmm(iso: str, tz: tzinfo) -> str:
+    """'09:12' in the user's zone, from an ISO time with an offset."""
+    return datetime.fromisoformat(iso).astimezone(tz).strftime("%H:%M")
+
+
+def pending_text(result: PendingCheck, tz: tzinfo) -> str:
+    """PENDING_VERIFICATION: the provider has not settled what `book` did (9.4 step 6)."""
+    if result.reason == "fenced_off":
+        return (
+            "Another request took over before this one was sent, so nothing was sent "
+            "from this request. Please check your bookings, or ask me again."
+        )
+    if result.reason == "material_mismatch":
+        which = f" ({result.booking_id})" if result.booking_id else ""
+        return (
+            f"The provider recorded {result.detail}{which}, so I'm not treating this one as "
+            "final. I'll sort it out with you here."
+        )
+    if result.reason == "check_incomplete":
+        return (
+            "I couldn't finish checking the booking with the provider, so I'm not treating "
+            "this one as final. I'll keep checking and update you here."
+        )
+    safe = "The provider hasn't confirmed yet, and it can't end up as two bookings."
+    if result.reason == "hold_live" and result.lapse_at:
+        when = clock_hhmm(result.lapse_at, tz)
+        return (
+            f"{safe} I'll know for sure by {when}, when the hold lapses, and I'll update you here."
+        )
+    # The status could not be read: no time is promised, because none can be kept.
+    return f"{safe} I'm still checking and will update you here."
+
+
+def requote_text(reason: str | None, detail: str | None) -> str | None:
+    """The line above a new card that replaced one the user had already approved."""
+    if reason == "hold_lapsed":
+        return (
+            "The hold ran out before I could book, so nothing was booked. "
+            "I held the slot again; please check the new card."
+        )
+    if reason == "price_changed":
+        return (
+            f"The hold ran out and the price changed ({detail}), so nothing was booked. "
+            "Please check the new card."
+        )
+    if reason == "slot_changed":
+        return (
+            f"The hold ran out and the provider changed the slot ({detail}), so nothing was "
+            "booked. Please check the new card."
+        )
+    if reason == "material_changed":
+        return (
+            "Something changed since you approved, so nothing was booked. "
+            "Please check the updated card."
+        )
+    if reason == "grant_not_executed":
+        # The reconciler expired a grant no run acted on (a restart, N1).
+        return (
+            "I restarted before I could act on your approval, so nothing was booked. "
+            "Here is a fresh quote."
+        )
+    return None
+
+
+def provider_cancelled_text(provider_name: str, slot_label_: str) -> str:
+    """Decision 12: the booking was taken, then the provider pulled out. Both facts."""
+    return (
+        f"{provider_name} took the request for {slot_label_} and then pulled out on their "
+        "side. You have no visit with them now."
+    )
+
+
+SLOT_TAKEN_TEXT = (
+    "The provider says that slot was just taken by someone else, so nothing was booked."
+)
+NOT_BOOKED_TEXT = (
+    "The booking did not go through, and nothing was booked. The hold has lapsed, so I "
+    "need a fresh quote."
+)

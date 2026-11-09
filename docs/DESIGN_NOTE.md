@@ -17,6 +17,7 @@ The model only proposes. Code holds the slot, prices it, and shows a card whose 
 
 ## Idempotency and recovery
 <!-- budget: 100 words -->
+Consuming an approval writes an intent and an attempt with a derived key before `book` is sent; `verify` asks `get_booking_status(key)` first. A `not_found` on a live hold gets one same-key retry at a provider that declares key dedupe; otherwise the user hears `PENDING_VERIFICATION` with the time the hold lapses. Before serving, and every 30 s, a reconciler reads our tables (never LangGraph's state): it verifies each unsettled attempt by its key, ends dead runs once, and expires a grant nobody acted on with a fresh card, never resuming it. A booking differing from the approval is never called booked.
 
 ## Memory
 <!-- budget: 80 words -->

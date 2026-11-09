@@ -19,7 +19,10 @@ Booking moves (M4), still only from what the request shows:
   that reached it as a message) gets "tap the button", because it cannot approve;
 - an app note that the held quote is over budget makes it propose the next candidate
   within budget, or say none fits;
-- "book it" after a verified booking is answered from the last-booking line.
+- "book it" after a verified booking is answered from the last-booking line;
+- an app note that the slot was just taken (M5, after a refused booking) makes it search
+  again and present the options, never propose on its own: the next booking needs the
+  user's choice and a new approval.
 """
 
 from __future__ import annotations
@@ -30,22 +33,30 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
+from errand.domain import aliases as product_aliases
 from errand.llm.scripted import ScriptedRequest
+from evals.policies import changes
 from evals.policies.common import TurnView, answer, read, tool_calls
 
-SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
-    "plumber": ("plumber", "plumbing"),
-    "electrician": ("electrician", "electrical"),
-    "ac_servicing": ("ac servicing", "ac service", "air conditioner", "aircon"),
-}
-AREA_ALIASES: dict[str, tuple[str, ...]] = {
-    "indiranagar": ("indiranagar", "indira nagar"),
-    "koramangala": ("koramangala",),
-    "whitefield": ("whitefield", "white field"),
-    "jayanagar": ("jayanagar", "jaya nagar"),
-}
+SERVICE_ALIASES = product_aliases.SERVICE_ALIASES
+AREA_ALIASES = product_aliases.AREA_ALIASES
 _PHRASE = re.compile(r"\b(today|tomorrow|this week|next week)\b", re.I)
-_PART = re.compile(r"\b(morning|afternoon|evening)s?\b", re.I)
+_PART = re.compile(r"\b(morning|afternoon|evening)s?\b|\bany ?time\b", re.I)
+_DAY = r"(?:mon|tue|wed|thu|fri|sat|sun)(?:day|sday|nesday|rsday|urday)?"
+# Day phrases the full resolver knows (M8): weekends, this/next <weekday>, a weekday or a
+# list of them. Tried before the plain phrases, so "this week" never shadows "this weekend".
+_DAY_PHRASE = re.compile(
+    rf"\b(?:(?:this|next) weekend|(?:this|next) {_DAY}"
+    rf"|{_DAY}(?:(?:\s*,\s*|\s+(?:or|and)\s+|\s*,\s*(?:or|and)\s+){_DAY})*)\b",
+    re.I,
+)
+_TIME = r"\d{1,2}(?::\d\d)?\s*(?:[ap]\.?m\.?)?"
+_NOT_BEFORE = re.compile(rf"\b(?:not before|after|from|no earlier than)\s+({_TIME})", re.I)
+_NOT_AFTER = re.compile(
+    rf"\b(?:not after|(?<!not )before|until|by|no later than)\s+({_TIME})", re.I
+)
+_CORRECTION = re.compile(r"\b(actually|instead|rather|make it|change (?:it|that)|switch)\b", re.I)
+_PLACE = re.compile(r"\b(?:in|at|near|around)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)")
 _BUDGET = re.compile(
     r"(?:under|below|less than|max(?:imum)?|up ?to|within|budget(?: of| is)?)\s*"
     r"(?:₹|rs\.?\s*|inr\s*)?(\d[\d,]*)|₹\s*(\d[\d,]*)",
@@ -77,6 +88,8 @@ FIELD_OPTIONS = {
 class Patch:
     values: dict[str, Any]
     evidence: list[dict[str, str]]
+    # A place or service we do not cover, said in these exact words (M8)
+    not_covered: dict[str, str] | None = None
 
 
 def _find(text: str, aliases: tuple[str, ...]) -> str | None:
@@ -86,6 +99,82 @@ def _find(text: str, aliases: tuple[str, ...]) -> str | None:
         if at >= 0:
             return text[at : at + len(alias)]
     return None
+
+
+def hhmm(raw: str) -> str:
+    """ "10 a.m." -> "10:00", "5:30pm" -> "17:30". A bare hour below 7 is the afternoon."""
+    match = re.fullmatch(r"(\d{1,2})(?::(\d\d))?\s*(?:([ap])\.?m\.?)?", raw.strip(), re.I)
+    assert match is not None, raw
+    hour, minute = int(match.group(1)), match.group(2) or "00"
+    meridiem = (match.group(3) or "").lower()
+    if meridiem == "p" and hour < 12:
+        hour += 12
+    elif meridiem == "a" and hour == 12:
+        hour = 0
+    elif not meridiem and 0 < hour < 7:
+        hour += 12
+    return f"{hour:02d}:{minute}"
+
+
+def window_value(text: str) -> tuple[dict[str, Any], str] | None:
+    """The window the text asks for, as update_brief's `window` and the quote that backs
+    it: a day phrase (weekday lists included), a part of day, and not_before / not_after."""
+    day = _DAY_PHRASE.search(text) or _PHRASE.search(text)
+    if day is None:
+        return None
+    part = _PART.search(text)
+    before, after = _NOT_BEFORE.search(text), _NOT_AFTER.search(text)
+    spans = [m for m in (day, part, before, after) if m is not None]
+    window: dict[str, Any] = {
+        "phrase": day.group(0).lower(),
+        "part_of_day": ((part.group(1) or "any").lower() if part else None),
+        "not_before": hhmm(before.group(1)) if before else None,
+        "not_after": hhmm(after.group(1)) if after else None,
+    }
+    quote = text[min(m.start() for m in spans) : max(m.end() for m in spans)]
+    return window, quote
+
+
+def _bounds_from_earlier(
+    window: dict[str, Any], evidence: list[dict[str, str]], view: TurnView
+) -> None:
+    """A time bound the user said before the day ("not before 10 a.m.", then "tomorrow",
+    9.9): the day answer sets the window, and the bound is taken from the earlier message
+    of this errand, quoted from there. A bound the answer itself gives wins."""
+    users = [
+        ln.removeprefix("user: ") for ln in view.recent.splitlines() if ln.startswith("user: ")
+    ]
+    for key, pattern in (("not_before", _NOT_BEFORE), ("not_after", _NOT_AFTER)):
+        if window[key] is not None:
+            continue
+        for line in reversed(users):
+            found = pattern.search(line)
+            if found is not None:
+                window[key] = hhmm(found.group(1))
+                evidence.append({"field": "window", "quote": found.group(0)})
+                break
+
+
+def uncovered_place(text: str) -> str | None:
+    """ "HSR Layout" in "a plumber in HSR Layout": a capitalised place that is not a covered
+    area."""
+    for match in _PLACE.finditer(text):
+        words = match.group(1)
+        lowered = words.lower()
+        if not any(a in lowered for names in AREA_ALIASES.values() for a in names):
+            return words
+    return None
+
+
+def correction(text: str, view: TurnView) -> Patch | None:
+    """A changed window: the user took a known value back ("Actually Thursday or Friday")."""
+    if "window" not in view.known or not _CORRECTION.search(text):
+        return None
+    found = window_value(text)
+    if found is None:
+        return None
+    window, quote = found
+    return Patch({"window": window}, [{"field": "window", "quote": quote}])
 
 
 def extract(text: str, view: TurnView) -> Patch:
@@ -108,16 +197,11 @@ def extract(text: str, view: TurnView) -> Patch:
         if span:
             put("area", area, span)
             break
-    phrase = _PHRASE.search(text)
-    if phrase:
-        part = _PART.search(text)
-        window: dict[str, Any] = {
-            "phrase": phrase.group(1).lower(),
-            "part_of_day": part.group(1).lower() if part else None,
-        }
-        start = min(phrase.start(), part.start()) if part else phrase.start()
-        end = max(phrase.end(), part.end()) if part else phrase.end()
-        put("window", window, text[start:end])
+    found = window_value(text)
+    if found is not None:
+        put("window", found[0], found[1])
+        if "window" in values:
+            _bounds_from_earlier(values["window"], evidence, view)
     if _NO_BUDGET.search(text):
         match = _NO_BUDGET.search(text)
         assert match is not None
@@ -136,7 +220,9 @@ def extract(text: str, view: TurnView) -> Patch:
         words = issue.group(1).strip()
         if len(words) >= 4 and words.lower() not in ("plumber", "electrician"):
             put("issue", words, words)
-    return Patch(values, evidence)
+    place = uncovered_place(text) if "area" not in values and "area" not in view.known else None
+    covered = {"field": "area", "words": place} if place else None
+    return Patch(values, evidence, covered)
 
 
 def update_brief_args(patch: Patch) -> dict[str, Any]:
@@ -145,6 +231,7 @@ def update_brief_args(patch: Patch) -> dict[str, Any]:
         "set": {f: patch.values.get(f) for f in fields},
         "clear": [],
         "evidence": patch.evidence,
+        "not_covered": patch.not_covered,
     }
 
 
@@ -250,6 +337,8 @@ def _budget(view: TurnView) -> int | None:
 def booking_move(request: ScriptedRequest, view: TurnView) -> AIMessage | None:
     """What to do first in a turn because of the booking state, if anything."""
     text = view.current
+    if any("was just taken" in n for n in view.notes):
+        return tool_calls(request, "The slot was taken; look again.", ("search_providers", {}))
     over = next((n for n in view.notes if "above the budget" in n), None)
     if over is not None and view.shortlist_current:
         rejected = over.split("held quote for ", 1)[-1].split(" ", 1)[0]
@@ -315,12 +404,16 @@ def after_proposal_error(request: ScriptedRequest, result: Any) -> AIMessage:
 
 def policy(request: ScriptedRequest) -> AIMessage:
     view = read(request)
+    cancel = changes.step(request, view)  # cancel and reschedule moves (N1)
+    if cancel is not None:
+        return cancel
     if not view.loop:
         move = booking_move(request, view)
         if move is not None:
             return move
-        patch = extract(view.current, view)
-        if patch.values:
+        fix = correction(view.current, view)
+        patch = fix if fix is not None else extract(view.current, view)
+        if patch.values or patch.not_covered:
             return tool_calls(
                 request,
                 "Record what the user just told me, with their words as evidence.",
@@ -345,7 +438,7 @@ def policy(request: ScriptedRequest) -> AIMessage:
         )
     if name == "get_provider":
         search = next(r for n, r, err in view.loop if n == "search_providers" and not err)
-        if _BOOK_INTENT.search(view.current):
+        if _BOOK_INTENT.search(view.current) and not any("was just taken" in n for n in view.notes):
             top = search["candidates"][0]
             return propose(
                 request, top["provider_id"], top["slots"][0]["ref"], "The user asked to book."

@@ -492,6 +492,13 @@ class WorldStore:
             (event_id, type_, json.dumps(target, sort_keys=True), fire_at),
         )
 
+    def arm_event(self, event_id: str, target: dict[str, Any], fire_at: int) -> None:
+        """Point a waiting `created:N` event at the booking it was waiting for."""
+        self.conn.execute(
+            "UPDATE world_events SET target_json = ?, fire_at = ? WHERE event_id = ?",
+            (json.dumps(target, sort_keys=True), fire_at, event_id),
+        )
+
     def due_events(self, now: int) -> list[EventRow]:
         rows = self._all(
             "SELECT * FROM world_events WHERE fired_at IS NULL AND fire_at <= ?"

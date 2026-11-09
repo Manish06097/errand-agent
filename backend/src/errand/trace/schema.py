@@ -70,6 +70,9 @@ class RunEnd(Envelope):
     # The approval the run ended parked on, read from the graph's v2 output interrupts,
     # not from agent state (M4). None when the run did not end at an interrupt.
     parked_approval_id: str | None = None
+    # Set by the reconciler when it ends a run the process died in (N1): the recovery
+    # run that took the intent over, or None when no recovery run was needed.
+    recovered_by: str | None = None
 
 
 class NodeRecord(Envelope):
@@ -209,6 +212,8 @@ class ApprovalRecord(Envelope):
     new_fp: str | None = None
     intent_id: str | None = None
     hold_id: str | None = None
+    # approval.hold_rebound: the hold the approval was bound to before the re-hold.
+    old_hold_id: str | None = None
     # approval.requested: when the card lapses (agent clock), and what it replaced.
     expires_at: str | None = None
     superseded: list[str] | None = None
@@ -237,7 +242,13 @@ class StatusCheck(Envelope):
     hold_live: bool | None = None
     decision: (
         Literal[
-            "same_key_retry", "report_success", "report_not_applied", "wait_for_lapse", "escalate"
+            "same_key_retry",
+            "report_success",
+            "report_provider_cancelled",
+            "report_not_applied",
+            "wait_for_lapse",
+            "send_prepared",
+            "escalate",
         ]
         | None
     ) = None
@@ -245,6 +256,8 @@ class StatusCheck(Envelope):
     # because the book answer that carried the price never arrived (a timeout).
     price_unverified: bool | None = None
     mismatch: list[str] | None = None
+    # The comparison could not be finished (list_bookings unavailable). Never a mismatch.
+    check_incomplete: bool | None = None
 
 
 class BudgetRecord(Envelope):
@@ -276,6 +289,7 @@ class GuardRecord(Envelope):
         "guard.evidence_rejected",
         "guard.forgotten_value_masked",
         "guard.planner_tool_rejected",
+        "guard.reprompt",
     ]
     detail: dict[str, Json] = Field(default_factory=dict)
 
@@ -294,6 +308,9 @@ class CardRecord(Envelope):
     body: dict[str, Json] | None = None
     status: str | None = None
     reason: str | None = None
+    # card.update after a brief correction (M8): the brief fields that changed, so the
+    # live UI can say what made the card stale.
+    changed_fields: list[str] | None = None
 
 
 class ErrorRecord(Envelope):

@@ -22,9 +22,10 @@ in the fixed order. The list's measured size is pinned by
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from errand.domain.brief import BriefField, PartOfDay
 from errand.world.contracts import Area, Service
@@ -44,13 +45,14 @@ def _object(properties: dict[str, Any]) -> dict[str, Any]:
 
 
 _PATCHABLE_FIELDS = ["service", "issue", "area", "window", "budget_max_inr"]
+# provider_pref is set from a booking handle and quoted as evidence, never cleared here.
+_EVIDENCE_FIELDS = [*_PATCHABLE_FIELDS, "provider_pref"]
 _ASKABLE_FIELDS = [f.value for f in BriefField]
 
 SEARCH_PROVIDERS: dict[str, Any] = {
     "name": "search_providers",
     "description": (
-        "Search the brief's service, area and dates; no arguments. Fails, naming the gaps, "
-        "if a required field is missing."
+        "Search the brief; no arguments. Fails, naming the gaps, if a required field is missing."
     ),
     "input_schema": _object({}),
 }
@@ -68,8 +70,9 @@ UPDATE_BRIEF: dict[str, Any] = {
     "name": "update_brief",
     "description": (
         "Record what the user said. Each value set or cleared needs an exact quote from "
-        "the current message (4+ chars) as evidence. Never write dates: give the user's "
-        "time phrase and part of day."
+        "the current message (4+ chars) that contains it. Never write dates: give the "
+        "day phrase and part of day; times are HH:MM, 24-hour. A place or service we do "
+        "not cover goes in not_covered. provider_pref: a booking handle (same as last time)."
     ),
     "input_schema": _object(
         {
@@ -88,6 +91,8 @@ UPDATE_BRIEF: dict[str, Any] = {
                                         "enum": ["morning", "afternoon", "evening", "any"],
                                     }
                                 ),
+                                "not_before": _nullable({"type": "string"}),
+                                "not_after": _nullable({"type": "string"}),
                             }
                         )
                     ),
@@ -98,6 +103,7 @@ UPDATE_BRIEF: dict[str, Any] = {
                             {"type": "null"},
                         ],
                     },
+                    "provider_pref": _nullable({"type": "string"}),
                 }
             ),
             "clear": {"type": "array", "items": {"type": "string", "enum": _PATCHABLE_FIELDS}},
@@ -105,19 +111,27 @@ UPDATE_BRIEF: dict[str, Any] = {
                 "type": "array",
                 "items": _object(
                     {
-                        "field": {"type": "string", "enum": _PATCHABLE_FIELDS},
+                        "field": {"type": "string", "enum": _EVIDENCE_FIELDS},
                         "quote": {"type": "string"},
                     }
                 ),
             },
+            "not_covered": _nullable(
+                _object(
+                    {
+                        "field": {"type": "string", "enum": ["area", "service"]},
+                        "words": {"type": "string"},
+                    }
+                )
+            ),
         }
     ),
 }
 ASK_USER: dict[str, Any] = {
     "name": "ask_user",
     "description": (
-        "Ask for every missing field in one question, never a known one. A field may be "
-        "asked again once, with quick-reply options (at most 6, each 40 chars or fewer)."
+        "Ask for every missing field in one question, never a known one. Re-ask a field "
+        "once, with quick-reply options (at most 6, 40 chars each)."
     ),
     "input_schema": _object(
         {
@@ -134,6 +148,21 @@ PROPOSE_BOOKING: dict[str, Any] = {
     "input_schema": _object({"provider_id": {"type": "string"}, "slot_ref": {"type": "string"}}),
 }
 
+# N1: cancel and reschedule name a booking by its handle in this run's list_bookings view
+# (B1, B2, ...); the model never writes a booking id. Bound right after propose_booking
+# (10.3), each as its own constant.
+PROPOSE_CANCEL: dict[str, Any] = {
+    "name": "propose_cancel",
+    "description": "Cancel a booking by its handle; the user approves.",
+    "input_schema": _object({"booking_ref": {"type": "string"}}),
+}
+
+PROPOSE_RESCHEDULE: dict[str, Any] = {
+    "name": "propose_reschedule",
+    "description": "Move a booking by its handle to the brief's window.",
+    "input_schema": _object({"booking_ref": {"type": "string"}}),
+}
+
 PLANNER_TOOLS: tuple[dict[str, Any], ...] = (
     SEARCH_PROVIDERS,
     GET_PROVIDER,
@@ -141,8 +170,12 @@ PLANNER_TOOLS: tuple[dict[str, Any], ...] = (
     UPDATE_BRIEF,
     ASK_USER,
     PROPOSE_BOOKING,
+    PROPOSE_CANCEL,
+    PROPOSE_RESCHEDULE,
 )
-PROPOSE_TOOLS: frozenset[str] = frozenset({"propose_booking"})
+PROPOSE_TOOLS: frozenset[str] = frozenset(
+    {"propose_booking", "propose_cancel", "propose_reschedule"}
+)
 PLANNER_TOOL_NAMES: tuple[str, ...] = tuple(t["name"] for t in PLANNER_TOOLS)
 
 
@@ -157,12 +190,24 @@ class GetProviderArgs(_Args):
     provider_id: str = Field(min_length=1, max_length=40)
 
 
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
 class WindowArg(_Args):
-    """M3's closed set: a phrase and a part of day. `not_before` and `not_after` join the
-    schema with the full resolver in M8 (the domain `TimeWindowExpr` already has them)."""
+    """A day phrase, a part of day and an optional daily time bound. The schema cannot say
+    `format: time` (nothing shows strict mode accepts it), so code checks "HH:MM" here."""
 
     phrase: str = Field(min_length=1, max_length=80)
     part_of_day: PartOfDay | None = None
+    not_before: str | None = None
+    not_after: str | None = None
+
+    @field_validator("not_before", "not_after")
+    @classmethod
+    def _hhmm(cls, value: str | None) -> str | None:
+        if value is not None and not _HHMM.match(value.strip()):
+            raise ValueError(f"{value!r} is not a time; use HH:MM, 24-hour (for example 10:00)")
+        return value.strip() if value is not None else None
 
 
 class BriefSet(_Args):
@@ -171,20 +216,30 @@ class BriefSet(_Args):
     area: Area | None = None
     window: WindowArg | None = None
     budget_max_inr: int | Literal["none"] | None = None
+    # A list_bookings handle (B1, ...) for "the same one as last time"; code resolves it to
+    # the provider (N1, brief_ops.pin_from_history).
+    provider_pref: str | None = Field(default=None, max_length=8)
 
 
 PatchableName = Literal["service", "issue", "area", "window", "budget_max_inr"]
+EvidenceName = Literal["service", "issue", "area", "window", "budget_max_inr", "provider_pref"]
 
 
 class EvidenceArg(_Args):
-    field: PatchableName
+    field: EvidenceName
     quote: str
+
+
+class NotCoveredArg(_Args):
+    field: Literal["area", "service"]
+    words: str = Field(min_length=1, max_length=80)
 
 
 class UpdateBriefArgs(_Args):
     set: BriefSet = Field(default_factory=BriefSet)
     clear: list[PatchableName] = Field(default_factory=list)
     evidence: list[EvidenceArg] = Field(default_factory=list)
+    not_covered: NotCoveredArg | None = None
 
 
 # Bounds on the one piece of model text a ClarifyCard carries. They live here, not in
@@ -200,6 +255,11 @@ class ProposeBookingArgs(_Args):
     # code (agent/validation.py), not here.
     provider_id: str = Field(min_length=1, max_length=40)
     slot_ref: str = Field(min_length=1, max_length=8)
+
+
+class ProposeCancelArgs(_Args):
+    # Strict mode rejects pattern and maxLength; the handle's shape is checked in code.
+    booking_ref: str = Field(min_length=1, max_length=8)
 
 
 class AskUserArgs(_Args):

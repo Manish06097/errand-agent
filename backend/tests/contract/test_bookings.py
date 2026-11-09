@@ -219,3 +219,38 @@ async def test_provider_cancel_on_tick_and_on_demand(env: Env) -> None:
     assert event_row.fired_at is not None
     status = await client.get_booking_status(idempotency_key="k-ev")
     assert isinstance(status, BookingStatusOut) and status.status == "cancelled_by_provider"
+
+
+async def test_event_on_a_created_booking_fires_after_its_creation(env: Env) -> None:
+    """`created:N` (M5): the Nth booking the world creates is cancelled by the provider a
+    duration after it was created. Seeded history does not count towards N, and a second
+    booking is left alone."""
+    event = EventConfig(type="provider_cancelled", booking="created:0", fire_at="+5s")
+    scenario = ScenarioConfig(
+        id="created",
+        seed=7,
+        world=WorldConfig(book=BookConfig(forced=["success", "success"]), events=[event]),
+    )
+    client = await env.load(scenario)
+    (waiting,) = await env.inspector.events()
+    assert waiting.fired_at is None and waiting.target.get("created") == 0
+    await env.inspector.advance(3600)  # an unarmed event never fires, whatever the time
+    assert await env.inspector.tick() == []
+
+    first = await hold_first_free(client, "P3")
+    one = await book_ok(client, first.hold_id, "k-created-1")
+    other = await hold_first_free(client, "P5")
+    two = await book_ok(client, other.hold_id, "k-created-2")
+    (armed,) = await env.inspector.events()
+    assert armed.target == {"booking_id": one.booking_id}
+    await env.inspector.advance(4)
+    status = await client.get_booking_status(idempotency_key="k-created-1")
+    assert isinstance(status, BookingStatusOut) and status.status == "confirmed"
+    await env.inspector.advance(2)
+    status = await client.get_booking_status(idempotency_key="k-created-1")
+    assert isinstance(status, BookingStatusOut) and status.status == "cancelled_by_provider"
+    untouched = await client.get_booking_status(idempotency_key="k-created-2")
+    assert isinstance(untouched, BookingStatusOut) and untouched.booking_id == two.booking_id
+    assert untouched.status == "confirmed"
+    (done,) = await env.inspector.events()
+    assert done.fired_at is not None and done.fired_at >= done.fire_at

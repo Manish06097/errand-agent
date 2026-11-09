@@ -28,6 +28,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from errand.domain.booking_refs import assign
 from errand.domain.brief import TimeWindow
 from errand.domain.slots import Badge, Candidate, Exclusion, ReviewDigest, Shortlist, SlotHandle
 from errand.domain.windows import slot_fits, slot_label
@@ -256,10 +257,13 @@ def provider_view(
 
 
 def bookings_view(result: ListBookingsOut, tz: tzinfo) -> dict[str, Any]:
-    items: Sequence[Any] = result.bookings[:BOOKINGS_MAX]
+    """Each booking with its handle (`B1`, ...) from `domain.booking_refs.assign`, the
+    only way `propose_cancel` names one (N1)."""
+    refs = assign(result.bookings, BOOKINGS_MAX)
     return {
         "bookings": [
             {
+                "ref": ref,
                 "booking_id": b.booking_id,
                 "provider_id": b.provider_id,
                 "provider_name": clean_name(b.provider_name),
@@ -267,7 +271,7 @@ def bookings_view(result: ListBookingsOut, tz: tzinfo) -> dict[str, Any]:
                 "when": slot_label(b.slot, tz),
                 "status": b.status,
             }
-            for b in items
+            for ref, b in refs.items()
         ],
         "more": max(0, len(result.bookings) - BOOKINGS_MAX),
     }

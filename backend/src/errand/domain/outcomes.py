@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from errand.domain.brief import BriefField
+from errand.domain.slots import HoldRef
 
 
 class RunOutcome(StrEnum):
@@ -79,6 +80,35 @@ class Proposal(_Result):
     booking_id: str | None = None
 
 
+class OutOfCoverage(_Result):
+    """update_brief's `not_covered` named a place or service we do not serve (7.3): a code
+    template lists what we do cover, as quick replies."""
+
+    kind: Literal["out_of_coverage"] = "out_of_coverage"
+    field: Literal["area", "service"]
+    words: str
+    covered: list[str]
+    # False when asking would break the ask rules (the field is filled, or its ask budget
+    # is spent): the template is then a notice, not a question card.
+    asked: bool = True
+
+
+class NoFit(_Result):
+    """A search that found nobody (10.2): a code template names what could widen."""
+
+    kind: Literal["no_fit"] = "no_fit"
+    # (kind, label, reply) for the brief's constraints, in the order window, budget, area
+    widen: list[tuple[str, str, str]] = Field(default_factory=list)
+    summary: str = ""
+
+
+class NoAction(_Result):
+    """The loop ended twice with prose that points at a selection but proposes nothing
+    (10.4): MODEL_NO_PROGRESS, and the shortlist card stays on screen."""
+
+    kind: Literal["no_action"] = "no_action"
+
+
 LimitName = Literal["model_calls", "iterations", "tool_calls", "deadline"]
 
 
@@ -106,7 +136,18 @@ class Failure(_Result):
 
 
 PlanResult = Annotated[
-    Reply | Ask | AskExhausted | Options | Proposal | Limit | ToolDown | TooLarge | Failure,
+    Reply
+    | Ask
+    | AskExhausted
+    | Options
+    | Proposal
+    | Limit
+    | ToolDown
+    | TooLarge
+    | Failure
+    | OutOfCoverage
+    | NoFit
+    | NoAction,
     Field(discriminator="kind"),
 ]
 
@@ -125,6 +166,8 @@ class CardReady(_Result):
     # Why a card replaced an earlier one in this run, if it did (a lapsed hold at
     # preflight, a material change at execute time); respond says so above the card.
     replaced_reason: str | None = None
+    # Code-written facts for that sentence (the old and new price, the moved slot).
+    replaced_detail: str | None = None
 
 
 class ProposalRefused(_Result):
@@ -177,14 +220,18 @@ class Requote(_Result):
 
     kind: Literal["requote"] = "requote"
     approval_id: str
-    reason: Literal["hold_lapsed", "material_changed"]
+    reason: Literal["hold_lapsed", "material_changed", "price_changed", "slot_changed"]
+    # M5: the hold execute's re-hold already placed (9.4 step 2). The new card is built
+    # on it rather than on a third hold, because the provider may have moved the slot.
+    hold: HoldRef | None = None
+    detail: str | None = None
 
 
 class Replan(_Result):
     """prepare_proposal sends the run back to plan once, with a SystemNote."""
 
     kind: Literal["replan"] = "replan"
-    note: Literal["hold_failed", "over_budget"]
+    note: Literal["hold_failed", "over_budget", "slot_taken"]
 
 
 class Booked(_Result):
@@ -192,6 +239,10 @@ class Booked(_Result):
     approval_id: str
     intent_id: str
     booking_id: str
+    # M5 (9.4 step 6): the provider booked it and then cancelled it before verify looked.
+    # The intent still succeeded, but the user hears both facts and the outcome is not a
+    # *_VERIFIED one (no status answer said `confirmed`).
+    cancelled_by_provider: bool = False
 
 
 class ActionFailed(_Result):
@@ -203,7 +254,7 @@ class ActionFailed(_Result):
         "provider_refused",
         "not_consumable",
         "duplicate",
-        "never_sent",
+        "not_booked",
     ]
     fresh_quote: bool = False
 
@@ -214,8 +265,19 @@ class PendingCheck(_Result):
     kind: Literal["pending_check"] = "pending_check"
     approval_id: str
     intent_id: str
-    reason: Literal["status_not_confirmed", "material_mismatch", "fenced_off"]
+    reason: Literal[
+        "status_not_confirmed",
+        "material_mismatch",
+        "check_incomplete",
+        "fenced_off",
+        "status_unavailable",
+        "hold_live",
+    ]
     detail: str = ""
+    # hold_live (the wait rule): when the hold lapses by the world clock, ISO with +05:30.
+    lapse_at: str | None = None
+    # material_mismatch: the provider's booking that differs from what was approved.
+    booking_id: str | None = None
 
 
 class BookCalled(_Result):
@@ -228,6 +290,51 @@ class BookCalled(_Result):
     answer: Literal["confirmed", "unknown"]
     booking_id: str | None = None
     price_inr: int | None = None
+
+
+# ---------------------------------------------------------------- cancel and reschedule (N1)
+#
+# The same intent and attempt flow as a booking, with no hold (9.5). `BookCalled` is also
+# what execute hands verify for these (the attempt to check); these are what comes back.
+
+
+class Changed(_Result):
+    """A cancel or reschedule that `list_bookings` shows: CANCELLED_VERIFIED or
+    RESCHEDULED_VERIFIED."""
+
+    kind: Literal["changed"] = "changed"
+    action: Literal["cancel", "reschedule"]
+    approval_id: str
+    intent_id: str
+    booking_id: str
+    # A cancel whose booking the provider had already cancelled: the end state the user
+    # asked for, reported as the provider's doing, never as ours.
+    by_provider: bool = False
+
+
+class SlotAlternative(_Result):
+    ref: str  # the handle a select_slot click names (S1, ...)
+    label: str  # "Sat 14 Nov, 10:00-11:00"
+    start: str  # ISO 8601 with +05:30
+    end: str
+
+
+class ChangeFailed(_Result):
+    """A cancel or reschedule that did not happen, and the plain reason."""
+
+    kind: Literal["change_failed"] = "change_failed"
+    action: Literal["cancel", "reschedule"]
+    approval_id: str
+    reason: Literal[
+        "booking_changed",  # the booking is not what the card showed any more
+        "still_confirmed",  # the provider could not be reached; list_bookings says unchanged
+        "slot_conflict",  # a reschedule onto a slot that is taken (definitive)
+        "provider_cancelled",  # a reschedule of a booking the provider cancelled
+        "rejected",  # the provider refused the request
+        "in_progress",  # another change to the booking got there first
+    ]
+    # Code-rendered buttons for the next free slots that day (slot_conflict), in order.
+    alternatives: list[SlotAlternative] = Field(default_factory=list)
 
 
 StepResult = Annotated[
@@ -243,6 +350,8 @@ StepResult = Annotated[
     | Booked
     | ActionFailed
     | PendingCheck
-    | BookCalled,
+    | BookCalled
+    | Changed
+    | ChangeFailed,
     Field(discriminator="kind"),
 ]
