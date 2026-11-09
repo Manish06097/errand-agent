@@ -244,6 +244,44 @@ def test_inv19_fails_on_a_one_off_cue_and_on_a_tool_message(rec: Records) -> Non
     assert any("not a user message" in v for v in fails("INV-19", rec))
 
 
+def test_inv19_fails_when_the_one_off_is_in_the_sentence_but_not_the_quote(
+    rec: Records,
+) -> None:
+    """The planner quoted less: 'I prefer after 5 pm' out of 'this time I prefer after 5 pm'."""
+    rec = copy.deepcopy(rec)
+    text = "this time I prefer after 5 pm"
+    quote = "I prefer after 5 pm"
+    rec.messages.append(
+        {"message_id": "msg_x", "role": "user", "body": {"type": "text", "text": text}}
+    )
+    row = _row(rec, "m-01")
+    start = text.index(quote)
+    row["evidence_json"] = json.dumps(
+        {
+            "type": "user_msg",
+            "message_id": "msg_x",
+            "start": start,
+            "end": start + len(quote),
+            "quote": quote,
+        }
+    )
+    assert any("one-off" in v for v in fails("INV-19", rec))
+    # a one-off in a different sentence is not a veto
+    text = "Book me a plumber today. I prefer after 5 pm"
+    rec.messages[-1]["body"]["text"] = text
+    start = text.index(quote)
+    row["evidence_json"] = json.dumps(
+        {
+            "type": "user_msg",
+            "message_id": "msg_x",
+            "start": start,
+            "end": start + len(quote),
+            "quote": quote,
+        }
+    )
+    assert not any("one-off" in v for v in fails("INV-19", rec))
+
+
 def test_inv19_fails_on_a_ui_action_that_never_happened(rec: Records) -> None:
     rec = copy.deepcopy(rec)
     _row(rec, "m-01")["evidence_json"] = json.dumps(
