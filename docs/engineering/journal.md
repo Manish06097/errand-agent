@@ -603,6 +603,8 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 
 **Verified.** Live calls, all small: recording the S22 cassette cost $0.0253; the live timeout-after-success conversation `c_01a1bf6918127b07945613980c8a2ab7` cost $0.0331652 (3 runs, 4 planner calls, 1 reader call that missed the cache, 16,252 tokens in, 1,013 out; `conversation.totals` in the export). Everything else ran offline. Gate results for the final commits are in the hand-back; `make check` and `make evals` were read by exit code.
 
+**What review caught.** The excerpt chose its run with `sorted(run_ids)[0]`, which picks by id, not by when the timeout happened; it now takes the first timed-out `book` in file order (`fb65096`). The design note claimed five replay cassettes and a live smoke test, which do not exist; it now says two cassettes (S01, S22) and a few live runs. The export records, the excerpt rule and the admission clock fix were rulings worth writing down, so they went into architecture 16.6 (`e9cd85c`). The lead also re-ran the BUG-N4-1 repro on its own SHA to confirm it was red before the fix, and found the `.env` I had left moved aside (below).
+
 **What broke.** I moved `.env` aside for a keyless `make evals` run and did not restore it; the lead found the key sitting in a shared tmp folder. Restored with `mv` and `chmod 600`, no copy left. Lesson: any move-aside is wrapped in `trap '...' EXIT` so it is restored on any exit, and a keyless run is better done by unsetting the variable in the child environment than by moving the file. The first fix commit also failed because `pre-commit` was not on PATH in my shell; the venv's bin must be on PATH.
 
 **Next (the freeze after N2B).**
