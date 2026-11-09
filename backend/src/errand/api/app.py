@@ -55,6 +55,7 @@ from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
 from errand.api import dev_routes, web_routes
+from errand.api.memory_routes import MEMORY_ACTIONS, memory_chat_action
 from errand.api.memory_routes import mount as mount_memory_routes
 from errand.api.reconciler import Reconciler
 from errand.api.runs import (
@@ -181,7 +182,15 @@ class ActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     client_action_id: str = Field(min_length=1, max_length=100)
-    kind: Literal["select_slot", "refresh_hold", "check_now"]
+    kind: Literal[
+        "select_slot",
+        "refresh_hold",
+        "check_now",
+        "keep_memory",
+        "confirm_forget",
+        "update_memory",
+        "save_memory",
+    ]
     payload: dict[str, str] = Field(default_factory=dict)
 
 
@@ -517,6 +526,10 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     @app.post("/api/conversations/{conversation_id}/actions", response_model=None)
     async def post_action(conversation_id: str, body: ActionIn, request: Request) -> Any:
+        if body.kind in MEMORY_ACTIONS:
+            return await memory_chat_action(
+                request, conversation_id, body.kind, body.client_action_id, body.payload
+            )
         manager = manager_of(request)
         try:
             answer = await manager.submit_action(

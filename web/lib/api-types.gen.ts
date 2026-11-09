@@ -479,7 +479,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "select_slot" | "refresh_hold" | "check_now";
+            kind: "select_slot" | "refresh_hold" | "check_now" | "keep_memory" | "confirm_forget" | "update_memory" | "save_memory";
             /** Payload */
             payload?: {
                 [key: string]: string;

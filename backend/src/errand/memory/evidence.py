@@ -26,6 +26,7 @@ from typing import Any
 
 from errand.domain import aliases
 from errand.domain import evidence as parsers
+from errand.domain.aliases import AREA_ALIASES
 from errand.memory.cues import check_span, normalise, sentence_around
 from errand.memory.registry import WEEKDAYS, surface_forms
 
@@ -143,3 +144,30 @@ def check_explicit(
     if not value_check(key, scope, value, located.quote):
         raise EvidenceRefused("value_not_in_quote", f"{located.quote!r} does not state that value")
     return Checked(located.start, located.end, located.quote, cue.cue)
+
+
+def value_from_span(key: str, text: str) -> Any | None:
+    """The one value a span states for `key`, or None (a click re-reads the user's words).
+
+    Used by the "Remember this?" and "Update your saved ...?" chips: they hold only the span,
+    so a forgotten value cannot survive in a chip. None when the span states no value, or an
+    ambiguous one (a bare "5" is 05:00 or 17:00), or was redacted since.
+    """
+    norm = normalise(text)
+    if key in ("earliest_time", "latest_time"):
+        found = parsers.parse_times(norm)
+        return (
+            f"{next(iter(found)).hour:02d}:{next(iter(found)).minute:02d}"
+            if len(found) == 1
+            else None
+        )
+    if key == "budget_ceiling":
+        amounts = parsers.parse_amounts(norm)
+        return next(iter(amounts)) if len(amounts) == 1 else None
+    if key == "home_area":
+        hits = [a for a in AREA_ALIASES if any(n in norm for n in aliases.aliases_of("area", a))]
+        return hits[0] if len(hits) == 1 else None
+    if key == "avoid_days":
+        days = [d for d in WEEKDAYS if re.search(rf"\b{d}s?\b|\b{d[:3]}\b", norm)]
+        return days or None
+    return None
