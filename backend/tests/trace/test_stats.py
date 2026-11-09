@@ -1,5 +1,5 @@
 """`errand-trace stats` (M7): p50 and p95 latency per planning turn, and the live deadline
-rule ceil(2 x p95) that `LimitSettings.live_run_deadline_s` is set from (15.1)."""
+rule ceil(2 x p95) + reader timeout that `LimitSettings.live_run_deadline_s` is set from (15.1)."""
 
 from __future__ import annotations
 
@@ -63,7 +63,8 @@ def test_a_planning_turn_is_a_run_with_a_model_call_in_a_real_mode(tmp_path: Pat
     assert sorted((t.run_id, t.latency_s) for t in turns) == [("r_1", 10.0), ("r_2", 20.0)]
     lines = stats.report(turns)
     assert lines[0] == "planning turns: 2"
-    assert lines[-1] == "live_run_deadline_s = ceil(2 x p95) = 39"  # p95 = 19.5
+    # p95 = 19.5 -> 39, plus the reader timeout (20 s)
+    assert lines[-1] == "live_run_deadline_s = ceil(2 x p95) + reader timeout 20 s = 59"
 
 
 async def test_stats_over_a_scripted_run_through_the_cli(

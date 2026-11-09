@@ -72,7 +72,11 @@ test("next book times out after success: the world books, the status check finds
   };
   const runEnd = trace.records.find((r) => r.type === "run.end");
   expect(runEnd).toBeTruthy();
-  expect(Date.parse(sent.client_composed_at)).toBeLessThan(Date.parse(runEnd?.ts as string));
+  // The book call hangs about 8 s, so a Send-time stamp is seconds before run.end; a stamp
+  // taken at post time lands within the clock sync lag of it. Require a margin that cannot flip.
+  expect(Date.parse(runEnd?.ts as string) - Date.parse(sent.client_composed_at)).toBeGreaterThan(
+    2_000,
+  );
   if (sent.visible_card !== null) {
     expect(sent.visible_card.approval_id).toBe(card.approval_id);
     expect(sent.visible_card.fingerprint).toBe(card.body.fingerprint);

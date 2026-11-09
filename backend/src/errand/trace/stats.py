@@ -3,7 +3,9 @@
 A planning turn is a run with at least one `model.call` (a run that only resumed an
 approval or clicked a slot makes none). Its latency is `run.start` to `run.end` on the
 records' own timestamps, so it includes the world's tool calls, which is what the live
-run deadline must cover (architecture 15.1). The deadline is ceil(2 x p95).
+run deadline must cover (architecture 15.1). The deadline is ceil(2 x p95) plus the
+review reader's timeout (`ReaderSettings().timeout_s`), so a reader call started late in a
+turn still has its full timeout before the deadline skips the reader.
 
     errand-trace stats [--data-dir DIR] [--mode live]
 
@@ -21,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from errand.config import ReaderSettings
 from errand.trace.reader import TraceFormatError, read_trace
 
 REAL_MODES = ("live", "record")
@@ -88,12 +91,14 @@ def report(turns: Sequence[Turn]) -> list[str]:
     lat = [t.latency_s for t in turns]
     cost = [t.cost_usd for t in turns]
     p95 = percentile(lat, 0.95)
+    reader_timeout = ReaderSettings().timeout_s
     return [
         f"planning turns: {len(turns)}",
         f"latency  p50 {percentile(lat, 0.5):.2f} s  p95 {p95:.2f} s  max {max(lat):.2f} s",
         f"cost     p50 ${percentile(cost, 0.5):.4f}  p95 ${percentile(cost, 0.95):.4f}  "
         f"total ${sum(cost):.4f}",
-        f"live_run_deadline_s = ceil(2 x p95) = {math.ceil(2 * p95)}",
+        f"live_run_deadline_s = ceil(2 x p95) + reader timeout {reader_timeout:g} s = "
+        f"{math.ceil(2 * p95) + math.ceil(reader_timeout)}",
     ]
 
 
