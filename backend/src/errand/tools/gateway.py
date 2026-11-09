@@ -185,7 +185,10 @@ class ToolGateway:
         last: ToolError | None = None
         for attempt in range(1, attempts + 1):
             if attempt > 1:
-                await self._clock.sleep(self.limits.retry_backoff_s)
+                # The backoff never carries a non-critical call past the deadline.
+                wait = self.limits.retry_backoff_s
+                left = None if critical else self.counters.time_left_s(self._clock.now())
+                await self._clock.sleep(wait if left is None else max(0.0, min(wait, left)))
             time_left = None if critical else self._check_budget(tool)
             try:
                 with self._tracer.opening("tool.call", tool):
