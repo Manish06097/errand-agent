@@ -131,6 +131,12 @@ def read(request: ScriptedRequest) -> TurnView:
             found = re.match(r"\[([a-z_]+)\] (<tool_data>.*</tool_data>|.*)$", row)
             if found is not None:
                 data = _tool_data(found.group(2))
+                if (
+                    found.group(1) == "update_brief"
+                    and isinstance(data, dict)
+                    and "missing" in data
+                ):
+                    data["missing"] = list(missing)  # the state is the truth after a rebuild
                 loop.append((found.group(1), data, isinstance(data, dict) and "error" in data))
     for m in request.messages:
         if isinstance(m, AIMessage):

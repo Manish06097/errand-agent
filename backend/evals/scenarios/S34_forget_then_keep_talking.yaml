@@ -1,0 +1,28 @@
+id: S34_forget_then_keep_talking
+title: 'The user saves an access note, forgets it, and keeps talking; the note is absent from every later request, including the redacted history and the next card, and the forget is final in agent.sqlite'
+category: [memory]
+seed: 34
+model: scripted:memory
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "From now on, tell them to use gate code ZEBRA-4417."
+  - expect_outcome: REPLIED
+  - expect_chip: {type: memory_saved, count: 1}
+  - expect_memory: {key: access_note, status: active, kind: explicit, evidence_type: user_msg}
+  - forget_memory: {key: access_note, replay: true, again: true}
+  - expect_memory: {key: access_note, status: forgotten}
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_context: {run: all_since_forget, absent: ["ZEBRA-4417", "gate code"], min_masked: 0}
+  - say: "Thanks. Is there anything about me you still remember?"
+  - expect_context: {run: all_since_forget, absent: ["ZEBRA-4417"]}
+expect:
+  invariants: [default]

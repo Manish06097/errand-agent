@@ -299,7 +299,12 @@ async def expect_memory(runner: Runner, spec: MemorySpec) -> None:
 
 
 def _request_text(record: dict[str, Any]) -> str:
-    return json.dumps(record.get("request"), ensure_ascii=False)
+    """What the model was told: the system block and the messages (not the tool schemas,
+    whose enums name every area)."""
+    request = record.get("request") or {}
+    return json.dumps(
+        {"system": request.get("system"), "messages": request.get("messages")}, ensure_ascii=False
+    )
 
 
 async def expect_context(runner: Runner, spec: ContextSpec) -> None:

@@ -1,0 +1,26 @@
+id: S49b_forget_with_a_card_pending
+title: 'A card is pending on a booking whose area came from memory; the user forgets the home area; the pending card is invalidated with request_changed and a click on it is refused, while no new card is built from the forgotten area'
+category: [memory]
+seed: 492
+model: scripted:memory
+memory_seed: memory_demo
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_approvals: [pending]
+  - forget_memory: {key: home_area}
+  - expect_approvals: ["invalidated:request_changed"]
+  - approve: {expect_status: 409, expect_error: no_longer_valid}
+expect:
+  invariants: [default]
