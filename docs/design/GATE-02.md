@@ -1,6 +1,6 @@
 # Gate 2: memory and context design
 
-Status: proposed on 2026-11-09, not signed off. Main is at 262c12b (M0 to M4, M10, M15). Of this gate's scope only the memory tables (migration 0001) and the M3 builder (S1, S2, S3, S6, S7) exist; M11 and M12 build the rest. M5 waits on question 4.
+Status: signed off on 2026-11-09, all four questions taken as recommended. Main is at 777ffc4 (M0 to M4, M10, M15). Of this gate's scope only the memory tables (migration 0001) and the M3 builder (S1, S2, S3, S6, S7) exist; M11 and M12 build the rest.
 Detail lives in `architecture.md` (section numbers in brackets) and ADRs 0006 and 0007. A bracket means the design already decided it. **New** marks a call the design was silent on, **amends** a change to a written section. A second review checked this against the brief, the design and the code on main; it corrected the budget figures and added the in-flight forget, memory-as-data and canary-placement rules.
 
 ## Decisions
@@ -120,7 +120,10 @@ Detail lives in `architecture.md` (section numbers in brackets) and ADRs 0006 an
 
 ## Decisions taken
 
-Filled at sign-off.
+1. Bookings stay when a memory is forgotten (decision 12). Forget clears the preference, not the provider's record of a booking.
+2. Forgotten values outside `agent.sqlite` are masked on every read (decision 14): traces, older checkpoints and the Langfuse export are not rewritten. The README says plainly that the raw files under `data/` can still hold the value.
+3. S2 goes to 3,800 tokens (preamble included), paid for by S6 1,000, S8 2,300, S4 600 and slack 200, applied in M8.
+4. Gate 1 Q1 is confirmed: after an ambiguous `book` timeout and a `not_found`, one retry with the same idempotency key on the still-valid hold, then verify again. `booking.max_same_key_retries` stays at 1; 0 is the documented alternative.
 
 ## What gets built next
 
@@ -134,4 +137,4 @@ Filled at sign-off.
 
 On sign-off I update `architecture.md` 10.2, 10.3, 10.7, 11, 12.1 to 12.3, 13.1 to 13.5, 17.3, 18.5, 18.6 and 21, ADRs 0006 and 0007, and M8, M9, M11 and M12 in `milestones.md`.
 
-Signed off: (not yet)
+Signed off: 2026-11-09
