@@ -285,7 +285,7 @@ def _claims(text: str) -> list[str]:
         found += [
             sentence
             for m in invariants._CLAIM.finditer(sentence)
-            if not invariants._exempt(sentence, m)
+            if not invariants._exempt(sentence, m, frozenset())
         ]
     return found
 

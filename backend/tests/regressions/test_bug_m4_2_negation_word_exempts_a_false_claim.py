@@ -166,7 +166,42 @@ ROUND4_STILL_EXEMPT = [
 
 
 def test_round4_a_modal_exempts_a_claim_only_when_it_reaches_the_claim_verb() -> None:
+    names = {"P7": "Sharma Plumbing"}  # round 5: a name bridges only from the shortlist
     for text in ROUND4_LEAKS:
-        assert guard(text, [], IST).text == "", text
+        assert guard(text, [], IST, provider_names=names).text == "", text
     for text in ROUND4_STILL_EXEMPT:
-        assert guard(text, [], IST).text == text, text
+        assert guard(text, [], IST, provider_names=names).text == text, text
+
+
+# Fifth fix (round 5): INV-04 flagged "Once you approve it gets booked." that the guard
+# keeps; both layers removed honest "Once you approve, you're all set." lines (a present
+# claim under a present-tense approval takes a subject pronoun and a be-form); and a modal
+# bridged any capitalised word as a provider name ("I can get Saturday booked", and in
+# Title Case "Once You Approve You Can See It Is Booked."). A name now bridges only when it
+# is on the shortlist or among the user's known bookings.
+ROUND5_SHORTLIST = {"P7": "Sharma Plumbing"}
+ROUND5_SURVIVE = [
+    "Once you approve it gets booked.",
+    "Once you approve, you're all set.",
+    "Once you approve, you're booked.",
+    "Once you approve, we're all set.",
+    "If you want, I can get Sharma booked for Saturday.",
+    "Once You Approve, I Can Get Sharma Booked.",
+]
+ROUND5_REMOVED = [
+    "I can get Saturday booked.",
+    "If you want, I can get Ramesh booked for Saturday.",
+    "Once You Approve You Can See It Is Booked.",
+    "Once you approved, you're all set.",
+    "Once you refresh, you're all set.",
+    "Once you approve, you're all set, and I booked Sharma.",
+    "Once you approve, you were booked.",
+    "You're all set.",
+]
+
+
+def test_round5_the_guard_keeps_the_honest_lines_and_removes_the_claims() -> None:
+    for text in ROUND5_SURVIVE:
+        assert guard(text, [], IST, provider_names=ROUND5_SHORTLIST).text == text, text
+    for text in ROUND5_REMOVED:
+        assert guard(text, [], IST, provider_names=ROUND5_SHORTLIST).text == "", text

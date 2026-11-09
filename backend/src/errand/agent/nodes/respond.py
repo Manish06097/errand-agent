@@ -216,6 +216,10 @@ class _Respond:
         shortlist = self.errand.shortlist if self.errand else None
         if shortlist is not None:
             names = {c.provider_id: c.name for c in shortlist.candidates}
+        # The providers of the user's known bookings are names too (a modal may bridge
+        # them); the shortlist's name for a provider wins.
+        for record in records:
+            names.setdefault(record.provider_id, record.provider_name)
         guarded = guard(text, records, deps.tz, provider_names=names)
         if guarded.removed:
             deps.tracer.emit(
