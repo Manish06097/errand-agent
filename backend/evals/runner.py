@@ -27,7 +27,7 @@ from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -515,7 +515,7 @@ def describe(step: Step) -> str | None:
         clears = f", clears {', '.join(f.value for f in p.clear)}" if p.clear else ""
         return f"brief.patch sets {sets}{clears}"
     if isinstance(step, ExpectShortlist):
-        spec = step.expect_shortlist.model_dump(exclude_none=True)
+        spec = step.expect_shortlist.model_dump(exclude_none=True, mode="json")
         return "shortlist " + ", ".join(f"{k}={v}" for k, v in spec.items())
     if isinstance(step, ExpectOptions):
         return "quick replies " + ", ".join(step.expect_options)
@@ -1222,6 +1222,19 @@ class Runner:
             self.expect(
                 bool(days) and days <= set(spec.slot_weekdays),
                 f"shortlist slots fall on weekdays {sorted(days)}, wanted {spec.slot_weekdays}",
+            )
+        if spec.slot_hours is not None:
+            lo, hi = (time.fromisoformat(h) for h in spec.slot_hours)
+            slots = [s for c in card["candidates"] for s in c["slots"]]
+            outside = [
+                s["label"]
+                for s in slots
+                if datetime.fromisoformat(s["start"]).time() < lo
+                or datetime.fromisoformat(s["end"]).time() > hi
+            ]
+            self.expect(
+                bool(slots) and not outside,
+                f"shortlist slots outside {spec.slot_hours[0]}-{spec.slot_hours[1]}: {outside}",
             )
         if spec.chips is not None:
             names = [c["field"] for c in card["brief"]]

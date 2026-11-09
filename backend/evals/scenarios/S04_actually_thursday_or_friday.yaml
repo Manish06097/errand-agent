@@ -20,8 +20,9 @@ steps:
   - expect_patch: {set: [window]}
   - expect_world: {search_providers: 2}
   - expect_shortlist:
-      window_label_includes: "Thu 12 Nov - Fri 13 Nov"
+      window_label_includes: "Thu 12 Nov - Fri 13 Nov, 07:00-12:00"
       slot_weekdays: [4, 5]
+      slot_hours: ["07:00", "12:00"]
       chips: [service, issue, area, window, budget_max_inr]
       score_parts: true
   - expect_brief:

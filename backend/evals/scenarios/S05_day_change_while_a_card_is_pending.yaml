@@ -21,8 +21,9 @@ steps:
       status_line_includes: ["out of date", "day", "Nothing was booked"]
       status_line_excludes: ["Booked:"]
   - expect_shortlist:
-      window_label_includes: "Thu 12 Nov - Fri 13 Nov, 10:00-23:59"
+      window_label_includes: "Thu 12 Nov - Fri 13 Nov, 10:00-12:00"
       slot_weekdays: [4, 5]
+      slot_hours: ["10:00", "12:00"]
   - approve: {card: original, expect_status: 409, expect_error: no_longer_valid}
   - expect_world: {book: 0}
   - click_slot: S1

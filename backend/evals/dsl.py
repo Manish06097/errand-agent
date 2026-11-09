@@ -329,6 +329,9 @@ class ShortlistSpec(_Strict):
     window_label_includes: str | None = None
     # every slot on the card starts on one of these ISO weekdays (1 = Monday)
     slot_weekdays: list[int] | None = None
+    # every slot on the card lies inside these local hours, ["07:00", "12:00"] (the
+    # carried-over day part of a correction, M8 review)
+    slot_hours: list[str] | None = None
     # the brief chips on the card name exactly these fields
     chips: list[BriefField] | None = None
     # every candidate carries its score parts
