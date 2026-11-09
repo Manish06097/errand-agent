@@ -250,3 +250,30 @@ async def test_the_reconciler_resumes_a_detected_job_without_reading_the_provide
         # the card) and no poll of the provider's bookings
         again = await h.app.state.reconciler.tick(wait=True)
         assert again.recovery_runs == []
+
+
+async def test_a_reschedule_card_in_flight_moves_the_search_window_to_where_it_was_going(
+    tmp_path: Path,
+) -> None:
+    """Policy row 4 through a real reschedule card: the seeded AC servicing (Thu 12 Nov) was
+    being moved to Saturday 14 Nov when the provider cancelled it. The card is invalidated,
+    and the replacement window is centred on Saturday, not on the cancelled Thursday. With no
+    area known for a seeded booking the notice asks where to look (decision 8)."""
+    async with harness(tmp_path, ScenarioConfig(id="resched", seed=7)) as h:
+        view = await h.say("Move my AC servicing to Saturday.")
+        assert view.outcome == "AWAITING_APPROVAL"
+        seeded = [b for b in await h.inspector.bookings() if b.created_by_key is None]
+        await h.inspector.fire_provider_cancel(seeded[1].booking_id)
+        result = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        async with h.manager.db.session() as repos:
+            rows = await repos.approvals.invalidated_for_booking(
+                seeded[1].booking_id, "booking_no_longer_active"
+            )
+        assert [r.action for r in rows] == ["reschedule"]
+        h.conversations["f"] = f"cf_{result.delivered[0]}"
+        await h.switch("f")
+        convo = await h.conversation()
+        assert "Where should I look?" in json.dumps(convo["messages"])
+        window = convo["state"]["errand"]["brief"]["window"]["value"]
+        assert window["start"].startswith("2026-11-12") and window["end"].startswith("2026-11-17")

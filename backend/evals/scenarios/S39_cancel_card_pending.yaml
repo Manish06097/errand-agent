@@ -1,0 +1,25 @@
+id: S39_cancel_card_pending
+title: The user is about to cancel the seeded AC servicing when the provider cancels it; the watcher invalidates the cancel card with booking_no_longer_active, and the notice says there is nothing for the user to cancel, with no rebook offer, no search and no hold
+category: [followup]
+seed: 39
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: a cancel never reaches `book`, so the provider's key dedupe does not apply
+steps:
+  - say: "Please cancel my AC servicing."
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - world_event: {type: provider_cancelled, booking: "seeded:1"}
+  - watcher_tick: {}
+  - expect_outcome: NOTIFIED
+  - expect_notification: {count: 1}
+  # the cancel card in the origin chat is dead, for the reason the provider gave it
+  - expect_approvals: ["invalidated:booking_no_longer_active"]
+  - open_followup: {}
+  - expect_transcript: {last_includes: ["nothing for you to cancel"]}
+  - expect_card: {kind: none}
+  - expect_world: {search_providers: 0, hold_slot: 0, cancel: 0}
+expect:
+  invariants: [default]
