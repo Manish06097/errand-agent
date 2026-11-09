@@ -138,10 +138,13 @@ async def open_seed(data_dir: Path) -> Seeded:
     """A fresh data directory: agent.sqlite with the user and the demo conversation."""
     data_dir.mkdir(parents=True, exist_ok=True)
     key_path = data_dir / KEY_FILE
+    if key_path.exists():
+        # The seed hashes under its fixed (public) key. An install key left in place would
+        # disagree with those hashes, and a public key must never become an install's.
+        raise FileExistsError(f"{key_path} already exists; seed into a new directory")
     key = hmac_key.fixed_key(SEED_KEY_LABEL)
-    if not key_path.exists():
-        key_path.write_text(key.hex(), encoding="ascii")
-        key_path.chmod(0o600)
+    key_path.write_text(key.hex(), encoding="ascii")
+    key_path.chmod(0o600)
     db = await AgentDB.open(data_dir / "agent.sqlite")
     clock = SeedClock()
     async with db.session() as repos:
@@ -149,7 +152,7 @@ async def open_seed(data_dir: Path) -> Seeded:
         await repos.conversations.create(
             conversation_id=CONVERSATION_ID, user_id=USER_ID, now_ms=clock.now_ms()
         )
-    service = MemoryService(db, clock.now_ms, bytes.fromhex(key_path.read_text("ascii").strip()))
+    service = MemoryService(db, clock.now_ms, key)
     return Seeded(db, service, clock, key)
 
 

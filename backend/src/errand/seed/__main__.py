@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from errand.config import REPO_ROOT, MemorySettings
-from errand.seed.base import dumps_manifest
+from errand.seed.base import KEY_FILE, dumps_manifest
 from errand.seed.memory_demo import build_demo
 from errand.seed.memory_rich import build_rich
 
@@ -39,12 +39,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, default=None, help="memory_rich_v1 only")
     args = parser.parse_args(argv)
-    if (args.data_dir / "agent.sqlite").exists():
-        print(
-            f"errand.seed: {args.data_dir}/agent.sqlite already exists; use a new directory",
-            file=sys.stderr,
-        )
-        return 2
+    for name in ("agent.sqlite", KEY_FILE):
+        if (args.data_dir / name).exists():
+            print(
+                f"errand.seed: {args.data_dir}/{name} already exists; use a new directory",
+                file=sys.stderr,
+            )
+            return 2
     print(asyncio.run(run(args.name, args.data_dir, args.manifest)))
     return 0
 

@@ -44,6 +44,10 @@ _STRUCTURAL = frozenset(
 )
 
 
+class MaskUnavailable(RuntimeError):
+    """Hashes exist but cannot be applied; the read is refused rather than served raw."""
+
+
 @dataclass
 class Masker:
     key: bytes = b""
