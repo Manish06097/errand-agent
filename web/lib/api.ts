@@ -84,5 +84,6 @@ export const api = {
     bookings: () => getOk<DevBooking[]>("/api/dev/bookings"),
     providerCancel: (bookingId: string) =>
       post<unknown>("/api/dev/provider-cancel", { booking_id: bookingId }),
+    reconcile: () => post<unknown>("/api/dev/reconciler/tick", {}),
   },
 };

@@ -158,6 +158,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dev/reconciler/tick": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Now
+         * @description "Reconcile now": the periodic task's re-check of `needs_attention` intents, run for
+         *     every conversation, answered once the recovery runs it started have ended (N1).
+         */
+        post: operations["reconcile_now_api_dev_reconciler_tick_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dev/scenario": {
         parameters: {
             query?: never;
@@ -305,8 +326,12 @@ export interface components {
              * @enum {string}
              */
             action: "book" | "cancel" | "reschedule";
+            /** Alternatives */
+            alternatives?: components["schemas"]["SlotOption"][];
             /** Approval Id */
             approval_id: string;
+            /** Brief */
+            brief?: components["schemas"]["BriefChip"][];
             /** Button Label */
             button_label: string;
             /**
@@ -322,6 +347,8 @@ export interface components {
             fingerprint: string;
             /** Hold Expires At */
             hold_expires_at: string;
+            /** Hold Id */
+            hold_id?: string | null;
             /** Lines */
             lines: components["schemas"]["MaterialLine"][];
             /** Material */
@@ -364,7 +391,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "select_slot" | "refresh_hold";
+            kind: "select_slot" | "refresh_hold" | "check_now";
             /** Payload */
             payload?: {
                 [key: string]: string;
@@ -415,6 +442,28 @@ export interface components {
              * @constant
              */
             v: 1;
+        };
+        /**
+         * BriefChip
+         * @description One filled brief field, as a chip with where it came from (M8).
+         *
+         *     `source` is the provenance source ("user_msg", later "memory"), `evidence` the user's
+         *     words cut to 60 characters, and `window_label` the resolved window on the window chip
+         *     so the user can catch a wrong reading ("Thu 12 Nov - Fri 13 Nov, 10:00-12:00").
+         */
+        BriefChip: {
+            /** Evidence */
+            evidence?: string | null;
+            field: components["schemas"]["BriefField"];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "user_msg" | "ui_action" | "memory" | "booking_history" | "followup" | "default";
+            /** Value */
+            value: string;
+            /** Window Label */
+            window_label?: string | null;
         };
         /**
          * BriefField
@@ -473,6 +522,15 @@ export interface components {
             provider_id: string;
             /** Rating */
             rating: number;
+            /**
+             * Score
+             * @default 0
+             */
+            score: number;
+            /** Score Parts */
+            score_parts?: {
+                [key: string]: number;
+            };
             /** Slots */
             slots: components["schemas"]["SlotOption"][];
             /** Verified */
@@ -598,6 +656,8 @@ export interface components {
          * @description A question for the fields the brief still lacks, with quick replies.
          */
         ClarifyCard: {
+            /** Brief */
+            brief?: components["schemas"]["BriefChip"][];
             /** Errand Id */
             errand_id: string;
             /** Fields */
@@ -684,6 +744,20 @@ export interface components {
             slot_start: number;
             /** Status */
             status: string;
+        };
+        /**
+         * ExcludedOption
+         * @description A provider left off the shortlist, with a code-written reason.
+         */
+        ExcludedOption: {
+            /** Name */
+            name: string;
+            /** Provider Id */
+            provider_id: string;
+            /** Reason */
+            reason: string;
+            /** Reason Text */
+            reason_text: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -778,9 +852,11 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "retry" | "narrow_search" | "shorten" | "answer" | "refresh_hold" | "raise_budget" | "options";
+            kind: "retry" | "narrow_search" | "shorten" | "answer" | "refresh_hold" | "raise_budget" | "options" | "check_now" | "cancel" | "quick_reply";
             /** Label */
             label: string;
+            /** Reply */
+            reply?: string | null;
         };
         /**
          * OutcomeCard
@@ -815,7 +891,10 @@ export interface components {
         OutcomeNotice: {
             /** Actions */
             actions?: components["schemas"]["NoticeAction"][];
+            /** Alternatives */
+            alternatives?: components["schemas"]["SlotOption"][];
             outcome: components["schemas"]["RunOutcome"];
+            pending?: components["schemas"]["PendingFacts"] | null;
             /** Status Line */
             status_line?: string | null;
             /** Still Needed */
@@ -827,6 +906,38 @@ export interface components {
              * @enum {string}
              */
             type: "notice";
+        };
+        /**
+         * PendingFacts
+         * @description The facts behind a PENDING_VERIFICATION notice (M5), for the card M7 builds on it.
+         *
+         *     The text is the whole message; these fields let a card show the same facts in its own
+         *     layout without parsing it. No "Check now" or "Never mind" button exists yet: M6 adds
+         *     the actions and their routes, and the notice carries facts only until then.
+         */
+        PendingFacts: {
+            /** Booking Id */
+            booking_id?: string | null;
+            /** Intent Id */
+            intent_id: string;
+            /** Lapse At */
+            lapse_at?: string | null;
+            /** Lapse Label */
+            lapse_label?: string | null;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "hold_live" | "status_unavailable" | "material_mismatch" | "check_incomplete" | "fenced_off";
+            /** Recorded */
+            recorded?: string | null;
+        };
+        /** ReconcileOut */
+        ReconcileOut: {
+            /** Recovery Runs */
+            recovery_runs: string[];
+            /** Skipped Busy */
+            skipped_busy: string[];
         };
         /** RenderedIn */
         RenderedIn: {
@@ -932,12 +1043,16 @@ export interface components {
          * @description ProviderComparisonCard data: candidates in code order, slot buttons by handle.
          */
         ShortlistCard: {
+            /** Brief */
+            brief?: components["schemas"]["BriefChip"][];
             /** Brief Version */
             brief_version: number;
             /** Candidates */
             candidates: components["schemas"]["CandidateOption"][];
             /** Errand Id */
             errand_id: string;
+            /** Excluded */
+            excluded?: components["schemas"]["ExcludedOption"][];
             /**
              * Excluded Count
              * @default 0
@@ -1414,6 +1529,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_now_api_dev_reconciler_tick_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileOut"];
                 };
             };
         };
