@@ -5,6 +5,8 @@ seed: 7
 user:
   persona: cooperative
   goal: {}
+dedupe: [on]
+dedupe_reason: a cancel or a reschedule never reaches `book`, so the provider's key dedupe does not apply
 steps:
   - say: "Move my AC servicing to Saturday."
   - expect_outcome: AWAITING_APPROVAL

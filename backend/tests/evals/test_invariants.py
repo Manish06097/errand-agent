@@ -384,6 +384,22 @@ def _cancelled(rec: Records) -> str:
     )
 
 
+def test_inv02_fails_on_an_intent_no_consumed_approval_made(s47: Records) -> None:
+    doctored = copy.deepcopy(s47)
+    for approval in doctored.approvals:
+        approval["status"] = "granted"
+        approval["consumed_by_intent"] = None
+    assert any("has no approval consumed for it" in v for v in fails("INV-02", doctored))
+
+
+def test_inv02_fails_on_a_proposal_that_wrote_an_intent(s47: Records) -> None:
+    doctored = copy.deepcopy(s47)
+    doctored.intents.append(
+        {**doctored.intents[0], "intent_id": "in_proposed", "approval_id": "ap_x"}
+    )
+    assert any("in_proposed has no approval consumed" in v for v in fails("INV-02", doctored))
+
+
 def test_inv02_fails_on_two_live_intents_on_one_booking(s47: Records) -> None:
     doctored = copy.deepcopy(s47)
     live = {**doctored.intents[0], "intent_id": "in_other", "state": "needs_attention"}

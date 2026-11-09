@@ -660,6 +660,13 @@ def inv02_one_side_effect_per_approval(rec: Records) -> Violations:
         approval = consumed.get(intent_of_key.get(key, ""), {}).get("approval_id")
         if len(made) > 1:
             out.append(f"approval {approval} (key {key}) applied {len(made)} different changes")
+    # An intent exists only because an approval was consumed for it (8.4, N1: a proposal
+    # never writes one).
+    consumed_by = {str(a["approval_id"]): a for a in rec.approvals if a["status"] == "consumed"}
+    for row in rec.intents:
+        approval = consumed_by.get(str(row["approval_id"]))
+        if approval is None or approval.get("consumed_by_intent") != row["intent_id"]:
+            out.append(f"intent {row['intent_id']} has no approval consumed for it")
     out += [f"{n} live intents on booking {t}" for t, n in live_targets.items() if n > 1]
     out += [f"{n} replacements for booking {t}" for t, n in replacements.items() if n > 1]
     material_of = {a["approval_id"]: json.loads(a["material_json"]) for a in rec.approvals}

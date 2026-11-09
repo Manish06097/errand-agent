@@ -181,6 +181,10 @@ async def test_a_cancel_card_is_what_the_user_is_asked_to_approve(tmp_path: Path
         assert view.outcome == "AWAITING_APPROVAL"
         card = await card_of(h)
         body = card["body"]
+        # a proposal writes no intent and sends nothing: only a consumed approval does
+        before = await h.records()
+        assert before.intents == [] and not [r for r in before.op_log if r["op"] == "cancel"]
+        assert [a["status"] for a in before.approvals] == ["pending"]
         click = await h.decide(card["approval_id"], "approve", body["fingerprint"])
         done = await h.finish(click.json()["run_id"])
         rec = await h.records()
