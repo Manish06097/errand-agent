@@ -1,0 +1,17 @@
+id: S64_rich_what_do_you_remember
+title: "S64 on memory_rich_v1: 60 rows, 31 active and 9 pending; the card lists references to both groups, and the model sees only the fixed string, so no pending, rejected, forgotten or superseded value reaches a request (INV-05 reads the canaries and the pending pairs)"
+category: [memory]
+seed: 64
+model: scripted:memory
+memory_seed: memory_rich_v1
+user:
+  persona: cooperative
+  goal: {}
+steps:
+  - say: "What do you remember about me?"
+  - expect_outcome: REPLIED
+  - expect_planner: {called: [list_memories]}
+  - expect_chip: {type: memory_list, count: 1, memory_ids: 31, suggestion_ids: 9}
+  - expect_context: {present: ["Shown to the user."], call: 2}
+expect:
+  invariants: [default]
