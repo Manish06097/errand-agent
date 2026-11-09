@@ -1,0 +1,30 @@
+id: S39_typed_grant_past_a_proactive_line
+title: A live Book card sits in the origin chat when a provider cancel writes a proactive line below it; the typed "book it" bound to that card still grants it
+category: [followup, typed_grant]
+seed: 39
+world:
+  book: {forced: [success, success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - say: "Book an electrician in Indiranagar for a socket on Wednesday morning, under ₹1,500."
+    gives: [service, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_card: {kind: action, status: pending}
+  - world_event: {type: provider_cancelled, booking: created:0}
+  - watcher_tick: {}
+  - expect_notification: {count: 1}
+  # back in the origin chat: the proactive line is the last thing in it, below the live card
+  - conversation: main
+  - expect_followup: {origin_line: "cancelled B-"}
+  # the card the user saw, past the proactive line: granted
+  - type_confirm: {text: "book it"}
+  - expect_outcome: BOOKED_VERIFIED
+expect:
+  invariants: [default]

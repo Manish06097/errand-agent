@@ -1,0 +1,29 @@
+id: S39_dismiss_the_follow_up
+title: Pressing I'll sort it myself ends the job done (dismissed) and invalidates the Rebook card with followup_dismissed; nothing is booked and the bell keeps its one entry
+category: [followup]
+seed: 39
+world:
+  book: {forced: [success, success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - world_event: {type: provider_cancelled, booking: last_booked}
+  - watcher_tick: {}
+  - open_followup: {}
+  - expect_approvals: ["consumed", "pending"]
+  - click_action: dismiss
+  - expect_approvals: ["consumed", "invalidated:followup_dismissed"]
+  - expect_transcript: {last_includes: ["stopped looking"]}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: done}, count: 1}
+  - expect_notification: {count: 1}
+  # nothing was booked on the dismissed card
+  - expect_world: {book: 1}
+expect:
+  invariants: [default]

@@ -206,7 +206,12 @@ class Watcher:
                 if before is None and b.slot.end <= now:
                     continue
                 await repos.known_bookings.mirror(known)
-                if b.status != "cancelled_by_provider" or b.slot.start <= now:
+                # A move to cancelled_by_provider starts a job whatever the slot (the policy
+                # ignores one that already started, S41); a booking first seen already
+                # cancelled counts only with a future slot (it happened while we were down).
+                moved = before is not None and before.status != "cancelled_by_provider"
+                first_seen = before is None and b.slot.start > now
+                if b.status != "cancelled_by_provider" or not (moved or first_seen):
                     continue
                 created = await repos.followups.detect(
                     job_id=job_id_for(b.booking_id),

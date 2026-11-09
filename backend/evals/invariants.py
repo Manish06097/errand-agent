@@ -45,6 +45,7 @@ from errand.domain.material import BookMaterial, ist_seconds
 from errand.domain.outcomes import RunOutcome
 from errand.trace.reader import read_trace
 from errand.world.contracts import Service
+from evals.invariants_followup import inv17_follow_up_acts_only_on_a_grant
 from evals.invariants_limits import inv09_counters_within_limits
 
 CONSEQUENTIAL = frozenset({"book", "cancel", "reschedule", "hold_slot", "get_booking_status"})
@@ -76,6 +77,10 @@ class Records:
     attempts: list[dict[str, Any]] = field(default_factory=list)
     world_dedupes: bool = True
     booking: dict[str, Any] | None = None
+    # N3: agent.sqlite follow-up jobs, bell rows and conversations (INV-17)
+    followup_jobs: list[dict[str, Any]] = field(default_factory=list)
+    notifications: list[dict[str, Any]] = field(default_factory=list)
+    conversations: list[dict[str, Any]] = field(default_factory=list)
 
     def run_records(self) -> Iterable[tuple[dict[str, Any], list[dict[str, Any]]]]:
         for run in self.runs:
@@ -103,6 +108,15 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
         attempts = [
             dict(r) for r in conn.execute("SELECT * FROM intent_attempts ORDER BY intent_id, n")
         ]
+        followup_jobs = [
+            dict(r) for r in conn.execute("SELECT * FROM followup_jobs ORDER BY rowid")
+        ]
+        notifications = [
+            dict(r) for r in conn.execute("SELECT * FROM notifications ORDER BY rowid")
+        ]
+        conversations = [
+            dict(r) for r in conn.execute("SELECT * FROM conversations ORDER BY rowid")
+        ]
     finally:
         conn.close()
     traces: dict[str, list[dict[str, Any]]] = {}
@@ -124,6 +138,9 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
         world_user=user,
         attempts=attempts,
         world_dedupes=dedupes,
+        followup_jobs=followup_jobs,
+        notifications=notifications,
+        conversations=conversations,
     )
 
 
@@ -1301,6 +1318,7 @@ INVARIANTS: dict[str, Callable[[Records], Violations]] = {
     "INV-13": inv13_no_ask_for_filled_or_asked,
     "INV-15": inv15_parked_on_every_live_card,
     "INV-16": inv16_no_granted_approval_left,
+    "INV-17": inv17_follow_up_acts_only_on_a_grant,
     "INV-03": inv03_a_resend_follows_the_status_first_rule,
     "INV-18": inv18_no_attempt_left_unsettled,
 }

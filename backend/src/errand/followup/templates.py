@@ -25,6 +25,11 @@ def when(start: datetime, tz: tzinfo, *, now: datetime | None = None) -> str:
     return f"{fmt_day(local.date())} at {clock}"
 
 
+def _on(slot: str) -> str:
+    """ "on Thu 13 Nov at 09:00", but "tomorrow at 09:00" (the urgent wording) takes no "on"."""
+    return slot if slot.startswith(("today", "tomorrow")) else f"on {slot}"
+
+
 def service_word(service: str) -> str:
     return service.replace("_", " ")
 
@@ -34,7 +39,7 @@ def replacement_notice(
 ) -> str:
     held = f", held until {held_until}" if held_until else ""
     return (
-        f"{provider} cancelled your {service_word(service)} visit on {slot} ({booking_id}). "
+        f"{provider} cancelled your {service_word(service)} visit {_on(slot)} ({booking_id}). "
         f"Here is a replacement that fits what you asked for{held}:"
     )
 
@@ -43,7 +48,7 @@ def nothing_fits_notice(
     provider: str, service: str, slot: str, booking_id: str, searched: str
 ) -> str:
     return (
-        f"{provider} cancelled your {service_word(service)} visit on {slot} ({booking_id}). "
+        f"{provider} cancelled your {service_word(service)} visit {_on(slot)} ({booking_id}). "
         f"I looked at {searched} and nothing fits what you asked for, so I haven't held "
         "anything. You can widen the search with one tap:"
     )
@@ -52,7 +57,7 @@ def nothing_fits_notice(
 def nothing_to_cancel(provider: str, service: str, slot: str, booking_id: str) -> str:
     return (
         f"{provider} cancelled on their side, so there is nothing for you to cancel: your "
-        f"{service_word(service)} visit on {slot} ({booking_id}) is off."
+        f"{service_word(service)} visit {_on(slot)} ({booking_id}) is off."
     )
 
 
@@ -65,7 +70,7 @@ def already_have(existing_provider: str, existing_slot: str, existing_id: str) -
 
 def ask_where(provider: str, service: str, slot: str, booking_id: str) -> str:
     return (
-        f"{provider} cancelled your {service_word(service)} visit on {slot} ({booking_id}). "
+        f"{provider} cancelled your {service_word(service)} visit {_on(slot)} ({booking_id}). "
         f"{ask_area()}"
     )
 
@@ -78,11 +83,9 @@ def stale_line() -> str:
     return "That follow-up has already been handled, so there is nothing more to do."
 
 
-def widened_notice(provider: str, booking_id: str, held_until: str | None) -> str:
+def widened_notice(booking_id: str, held_until: str | None) -> str:
     held = f", held until {held_until}" if held_until else ""
-    return (
-        f"With the wider search, here is a replacement for {booking_id} ({provider}'s slot){held}:"
-    )
+    return f"With the wider search, here is a replacement for {booking_id}{held}:"
 
 
 def ask_area() -> str:

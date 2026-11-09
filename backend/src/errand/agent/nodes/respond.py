@@ -411,7 +411,7 @@ class _Respond:
         actions: list[NoticeAction] = []
         if ctx.variant == "replacement":
             if ctx.mode == "widen":
-                text = followup_templates.widened_notice(name, bid, held)
+                text = followup_templates.widened_notice(bid, held)
             else:
                 text = followup_templates.replacement_notice(name, service, slot, bid, held)
         elif ctx.variant == "nothing_fits":

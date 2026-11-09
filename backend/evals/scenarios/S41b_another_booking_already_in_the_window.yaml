@@ -1,0 +1,30 @@
+id: S41b_another_booking_already_in_the_window
+title: The provider cancels, but the user already has a confirmed booking of the same service inside the replacement window; a notice says so, with no search and no hold
+category: [followup]
+seed: 41
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal: {service: ac_servicing, area: Indiranagar, window: Wednesday morning, budget_max_inr: "1500"}
+steps:
+  - say: "Book an AC servicing in Indiranagar on Wednesday morning, under ₹1,500."
+    gives: [service, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - world_event: {type: provider_cancelled, booking: last_booked}
+  - expect_world: {search_providers: 1, hold_slot: 1}
+  - watcher_tick: {}
+  - expect_outcome: NOTIFIED
+  - expect_notification: {count: 1}
+  - open_followup: {}
+  - expect_transcript: {last_includes: ["You already have Praveen Cooling Services", "so I haven't looked for another"]}
+  - expect_card: {kind: none}
+  # no search, no hold: the world saw nothing new but reads
+  - expect_world: {search_providers: 1, hold_slot: 1, book: 1}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: notified}, count: 1}
+      - {table: approvals, where: {status: pending}, count: 0}
+expect:
+  invariants: [default]
