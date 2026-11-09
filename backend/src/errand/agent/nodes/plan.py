@@ -118,9 +118,14 @@ class _End:
 
 async def plan(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     deps = runtime.context
-    assert state.errand is not None and isinstance(state.inbound, UserMessage)
+    assert state.errand is not None
+    inbound = state.inbound
+    if not isinstance(inbound, UserMessage):
+        # A replan after an approval run's slot_taken (9.4 step 5): there is no message
+        # in this run, so the user's last one stands in as the request.
+        inbound = await _last_user_message(deps)
     with deps.tracer.node("plan", phase_before=state.errand.phase.value) as span:
-        loop = PlannerLoop(deps, state.errand, state.inbound, state.system_notes)
+        loop = PlannerLoop(deps, state.errand, inbound, state.system_notes)
         result = await loop.run()
         span.end_fields["phase_after"] = loop.errand.phase.value
     return {
@@ -128,6 +133,20 @@ async def plan(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
         "plan_result": result,
         "counters": deps.counters.model_copy(deep=True),
     }
+
+
+async def _last_user_message(deps: RunDeps) -> UserMessage:
+    async with deps.db.session() as repos:
+        history = await repos.messages.list_for_conversation(deps.conversation_id)
+    last = next((m for m in reversed(history) if m.role == "user"), None)
+    assert last is not None, "a replan needs a user message in the conversation"
+    text = last.body.get("text", "") if isinstance(last.body, dict) else ""
+    return UserMessage(
+        message_id=last.message_id,
+        client_msg_id=last.client_msg_id,
+        text=str(text),
+        turn_no=last.turn_no or 0,
+    )
 
 
 def route_after_plan(state: ThreadState) -> str:

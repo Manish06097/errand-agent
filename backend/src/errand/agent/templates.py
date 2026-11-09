@@ -13,7 +13,7 @@ and the fields it asks for are code-checked by the ask guard.
 
 from __future__ import annotations
 
-from datetime import tzinfo
+from datetime import datetime, tzinfo
 
 from errand.domain.brief import BriefField
 from errand.domain.errand import Errand
@@ -33,6 +33,7 @@ from errand.domain.outcomes import (
     Failure,
     Limit,
     Options,
+    PendingCheck,
     PlanResult,
     Proposal,
     Reply,
@@ -200,3 +201,81 @@ def render(
     if isinstance(result, Failure | Proposal) or result is None:
         return RunOutcome.INTERNAL_ERROR, internal_error(run_id)
     return RunOutcome.INTERNAL_ERROR, internal_error(run_id)
+
+
+# ---------------------------------------------------------------- booking failure paths (M5)
+#
+# Every sentence below is code over records. None of them uses a word the claim guard or
+# INV-04 reads as a success claim without a record behind it ("booked twice" and
+# "cancelled" both trip them, so these say "two bookings" and "pulled out"); a test runs
+# each one through both.
+
+
+def clock_hhmm(iso: str, tz: tzinfo) -> str:
+    """'09:12' in the user's zone, from an ISO time with an offset."""
+    return datetime.fromisoformat(iso).astimezone(tz).strftime("%H:%M")
+
+
+def pending_text(result: PendingCheck, tz: tzinfo) -> str:
+    """PENDING_VERIFICATION: the provider has not settled what `book` did (9.4 step 6)."""
+    if result.reason == "fenced_off":
+        return (
+            "Another request took over before this one was sent, so nothing was sent "
+            "from this request. Please check your bookings, or ask me again."
+        )
+    if result.reason == "material_mismatch":
+        which = f" ({result.booking_id})" if result.booking_id else ""
+        return (
+            f"The provider recorded {result.detail}{which}, so I'm not treating this one as "
+            "final. I'll sort it out with you here."
+        )
+    safe = "The provider hasn't confirmed yet, and it can't end up as two bookings."
+    if result.reason == "hold_live" and result.lapse_at:
+        when = clock_hhmm(result.lapse_at, tz)
+        return (
+            f"{safe} I'll know for sure by {when}, when the hold lapses, and I'll update you here."
+        )
+    # The status could not be read: no time is promised, because none can be kept.
+    return f"{safe} I'm still checking and will update you here."
+
+
+def requote_text(reason: str | None, detail: str | None) -> str | None:
+    """The line above a new card that replaced one the user had already approved."""
+    if reason == "hold_lapsed":
+        return (
+            "The hold ran out before I could book, so nothing was booked. "
+            "I held the slot again; please check the new card."
+        )
+    if reason == "price_changed":
+        return (
+            f"The hold ran out and the price changed ({detail}), so nothing was booked. "
+            "Please check the new card."
+        )
+    if reason == "slot_changed":
+        return (
+            f"The hold ran out and the provider moved the slot ({detail}), so nothing was "
+            "booked. Please check the new card."
+        )
+    if reason == "material_changed":
+        return (
+            "Something changed since you approved, so nothing was booked. "
+            "Please check the updated card."
+        )
+    return None
+
+
+def provider_cancelled_text(provider_name: str, slot_label_: str) -> str:
+    """Decision 12: the booking was taken, then the provider pulled out. Both facts."""
+    return (
+        f"{provider_name} took the request for {slot_label_} and then pulled out on their "
+        "side. You have no visit with them now."
+    )
+
+
+SLOT_TAKEN_TEXT = (
+    "The provider says that slot was just taken by someone else, so nothing was booked."
+)
+NOT_BOOKED_TEXT = (
+    "The booking did not go through, and nothing was booked. The hold has lapsed, so I "
+    "need a fresh quote."
+)

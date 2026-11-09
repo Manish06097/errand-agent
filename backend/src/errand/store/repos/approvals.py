@@ -203,6 +203,16 @@ class ApprovalsRepo:
         )
         return int(cur.rowcount)
 
+    async def rebind_hold(self, approval_id: str, *, old_hold_id: str, new_hold_id: str) -> bool:
+        """Move a granted approval to the hold that replaced a lapsed one (9.4 step 2).
+        Conditional on the hold it leaves, so a repeat cannot move it twice."""
+        cur = await self._conn.execute(
+            "UPDATE approvals SET bound_hold_id = ? WHERE approval_id = ? "
+            "AND status = 'granted' AND bound_hold_id = ?",
+            (new_hold_id, approval_id, old_hold_id),
+        )
+        return cur.rowcount == 1
+
     async def invalidate(self, approval_id: str, reason: str) -> bool:
         cur = await self._conn.execute(
             "UPDATE approvals SET status = 'invalidated', invalidated_reason = ? "
