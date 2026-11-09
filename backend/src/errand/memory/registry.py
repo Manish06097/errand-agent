@@ -170,6 +170,8 @@ def _parse_note(raw: Any) -> str:
     text = clean_text(str(raw), limit=ACCESS_NOTE_CAP)
     if len(text) < 4:
         raise RegistryError("access_note needs at least 4 characters")
+    if "<" in text or ">" in text:
+        raise RegistryError("access_note cannot contain < or >")
     return text
 
 

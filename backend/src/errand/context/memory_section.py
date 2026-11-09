@@ -23,8 +23,21 @@ def render_section(chosen: Sequence[Chosen]) -> str:
     if not chosen:
         return ""
     items = [_item(c) for c in chosen]
-    body = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+    body = _escape(json.dumps(items, ensure_ascii=False, separators=(",", ":")))
     return f"<memory>\n{body}\n</memory>"
+
+
+_HTML = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026"}
+
+
+def _escape(body: str) -> str:
+    """JSON-escape the characters that could end the data block or open a tag.
+
+    json.dumps leaves < > & alone. These are valid JSON escapes, so the block still parses
+    to the same value, but no stored text can write `</memory>` into the request. The
+    registry also refuses angle brackets in a note; this is the second wall.
+    """
+    return "".join(_HTML.get(ch, ch) for ch in body)
 
 
 def _item(c: Chosen) -> dict[str, object]:

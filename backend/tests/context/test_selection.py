@@ -323,4 +323,4 @@ def test_an_access_note_with_angle_brackets_is_refused_at_the_registry(note: str
 
 def test_a_stored_note_with_angle_brackets_is_never_selected() -> None:
     got = pick([row("m-1", "access_note", "global", HOSTILE_NOTE)])
-    assert got.included == [] and got.excluded == {"m-1": "invalid_value"}
+    assert not got.included and got.excluded == {"m-1": "invalid_value"}
