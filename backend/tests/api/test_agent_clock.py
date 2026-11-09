@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from errand.clock import AGENT_CLOCK_HEADER, from_ms, parse_clock_header, to_ms, wall_now
+from errand.clock import AGENT_CLOCK_HEADER, from_ms, parse_clock_header
 from evals.runner import Harness, harness
 from tests.api.test_approvals import card_of, ops, to_card, world
 
@@ -64,12 +64,15 @@ async def test_a_client_synced_to_the_agent_clock_is_granted(tmp_path: Path) -> 
 
 
 async def test_a_client_on_its_own_clock_gets_an_ordinary_message(tmp_path: Path) -> None:
+    """A client that never read the agent clock is ordinary. Stated against the agent's
+    clock, not the wall clock, so it cannot flip with the date (BUG-M4F-1): the
+    world clock starts at a fixed date, and the wall clock passes it."""
     async with harness(tmp_path, world(), clock_mode="system_offset") as h:
         await to_card(h)
-        own = to_ms(wall_now())
-        routed = await _type(h, own + 2_000, own + 1_000)
-        agent_now = (await h.client.get("/api/health")).headers[AGENT_CLOCK_HEADER]
+        agent_now = await h.now_ms()
+        routed = await _type(h, agent_now - 3_600_000 + 2_000, agent_now - 3_600_000 + 1_000)
+        header = (await h.client.get("/api/health")).headers[AGENT_CLOCK_HEADER]
         rec = await h.records()
     assert routed["routed_as"] != "grant"
     assert ops(rec.op_log, "book") == 0
-    assert parse_clock_header(agent_now).offset_ms != 0
+    assert parse_clock_header(header).offset_ms != 0
