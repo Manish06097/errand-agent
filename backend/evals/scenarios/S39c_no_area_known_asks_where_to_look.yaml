@@ -1,0 +1,20 @@
+id: S39c_no_area_known_asks_where_to_look
+title: The provider cancels the seeded AC servicing and nothing is saved about where the user lives; the brief is built from the booking alone, so there is no search and no hold, and the notice asks where to look
+category: [followup]
+seed: 39
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: the scenario ends at the question, so nothing reaches `book`
+steps:
+  - world_event: {type: provider_cancelled, booking: "seeded:1"}
+  - watcher_tick: {}
+  - expect_outcome: NOTIFIED
+  - expect_notification: {count: 1}
+  - open_followup: {}
+  - expect_transcript: {last_includes: ["Where should I look?"]}
+  - expect_card: {kind: none}
+  - expect_world: {search_providers: 0, hold_slot: 0, book: 0}
+expect:
+  invariants: [default]
