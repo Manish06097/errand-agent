@@ -327,3 +327,7 @@ Two things were needed to make parallel runs safe. Tests that run a scenario wro
 - *Minor, race test docstring.* It now says the grant goes in below the route and the resume starts the way the route starts it.
 
 **Next.** Review and merge. Then M8W (the React rendering of chips, "Why this order", the Excluded row and the greyed card) once M7 and this branch are on main.
+
+## M8, landing
+
+**In short.** I set out to make the agent pleasant to talk to: a closed set of day and time phrases, corrections that discard what they made stale, and evidence bound to the value so a budget the user never said cannot get in. The deviations I accepted stand as written above: the existing window label, a granted but unconsumed card is invalidated by a correction (only a consumed one stands), the tool list headroom of about 1,080 tokens that M9 and M11 must respect, and the two one-line touches in `prepare_proposal` and `ingress`. Review caught four bugs a user would hit early, each reproduced end to end first: a rupee marker glued to the amount (BUG-M8-1), a day-only correction that dropped the day part and time bounds (BUG-M8-2), a day part the patch set without any day-part word in the evidence (BUG-M8-3), and a carried bound that "any time" could not widen (BUG-M8-4).
