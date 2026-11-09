@@ -396,3 +396,22 @@ def surface_forms(key: str, value: Any) -> tuple[str, ...]:
 
 def service_of_scope(scope: str) -> str | None:
     return scope.split(":", 1)[1] if scope.startswith("service:") else None
+
+
+def _providers(value: Any) -> set[str]:
+    return {value} if isinstance(value, str) else set(value or [])
+
+
+def conflicts(key: str, value: Any, other_key: str, other_value: Any) -> bool:
+    """Do two stored values in one scope contradict (gate 2 decision 2)?
+
+    Preferring and avoiding a shared provider, or an earliest_time at or after the
+    latest_time. Anything else never conflicts, so a pending "latest 12:00" is not
+    rejected by an unrelated "earliest 09:00".
+    """
+    if {key, other_key} == {"preferred_provider", "avoid_provider"}:
+        return bool(_providers(value) & _providers(other_value))
+    if {key, other_key} == {"earliest_time", "latest_time"}:
+        earliest, latest = (value, other_value) if key == "earliest_time" else (other_value, value)
+        return bool(earliest >= latest)
+    return False
