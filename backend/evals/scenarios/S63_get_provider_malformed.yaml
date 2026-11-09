@@ -1,5 +1,5 @@
 id: S63_get_provider_malformed
-title: get_provider returns invalid JSON (test-only fault); ToolUnexpected, never retried, nothing of the payload reaches the model, TOOL_UNAVAILABLE with its own wording
+title: get_provider returns truncated JSON (test-only fault; the marker is a brand from the half that survives); ToolUnexpected, never retried, nothing of the payload reaches the model, TOOL_UNAVAILABLE with its own wording
 category: [tool failure]
 seed: 63
 faults:
@@ -13,7 +13,7 @@ steps:
   - expect_outcome: TOOL_UNAVAILABLE
   - expect_notice: retry
   - expect_transcript: {last_includes: ["sent back something I couldn't read", "Nothing was booked"]}
-  - expect_not_in_requests: {markers: ["internal_rank_score", "ToolUnexpected"], no_tool_result_for: [get_provider]}
+  - expect_not_in_requests: {markers: ["Kohler", "ToolUnexpected"], no_tool_result_for: [get_provider]}
   - expect_no_side_effects: {}
 expect:
   invariants: [default]
