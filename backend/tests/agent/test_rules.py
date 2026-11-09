@@ -98,7 +98,7 @@ def test_a_re_ask_needs_options_and_a_third_ask_is_refused() -> None:
     [
         ("Under ₹1,500", True),
         ("under  ₹1,500", True),  # whitespace and case are normalised
-        ("₹1,5", True),
+        ("₹1,5", False),  # in the message, but M8: it does not read as ₹1,500
         ("150", False),  # shorter than 4 characters
         ("under ₹2,000", False),  # not in the message
     ],
@@ -158,7 +158,7 @@ def test_this_week_mornings_is_today_to_sunday_seven_to_twelve() -> None:
     }
 
 
-@pytest.mark.parametrize("phrase", ["Thursday", "this weekend", "in 3 days", "2026-11-12"])
+@pytest.mark.parametrize("phrase", ["the 14th", "next month", "in 3 days", "2026-11-12"])
 def test_anything_outside_the_closed_set_is_unresolved(phrase: str) -> None:
     assert isinstance(timewin.resolve(TimeWindowExpr(phrase=phrase), NOW, IST), timewin.Unresolved)
 

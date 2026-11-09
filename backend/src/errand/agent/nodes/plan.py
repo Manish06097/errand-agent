@@ -377,17 +377,17 @@ class PlannerLoop:
         except ValidationError as exc:
             problem = exc.errors()[0]["msg"] if exc.errors() else "invalid"
             return views.render_error("invalid_arguments", detail=problem), True
-        quotes: dict[str, str] = {}
+        quotes: dict[str, list[str]] = {}
         for item in parsed.evidence:
-            quotes.setdefault(item.field, item.quote)
+            quotes.setdefault(item.field, []).append(item.quote)
         sets: list[brief_ops.FieldValue] = []
         values = parsed.set.model_dump(exclude_none=True)
         for name in values:
             value: Any = getattr(parsed.set, name)
             if name == "window":
                 value = TimeWindowExpr.model_validate(value.model_dump())
-            sets.append(brief_ops.FieldValue(BriefField(name), value, quotes.get(name)))
-        clears = [brief_ops.FieldValue(BriefField(n), None, quotes.get(n)) for n in parsed.clear]
+            sets.append(_field_value(name, value, quotes))
+        clears = [_field_value(n, None, quotes) for n in parsed.clear]
         outcome = brief_ops.apply_patch(
             self.errand.brief,
             sets=sets,
@@ -521,6 +521,13 @@ class PlannerLoop:
         return _End(
             Proposal(action="book", provider_id=parsed.provider_id, slot_ref=parsed.slot_ref)
         )
+
+
+def _field_value(name: str, value: Any, quotes: Mapping[str, list[str]]) -> brief_ops.FieldValue:
+    spans = quotes.get(name) or []
+    return brief_ops.FieldValue(
+        BriefField(name), value, spans[0] if spans else None, tuple(spans[1:])
+    )
 
 
 def answer_text(message: AIMessage) -> str:

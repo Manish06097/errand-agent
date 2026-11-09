@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from typing import Literal
 
-from errand.agent import timewin
+from errand.agent import evidence, timewin
+from errand.domain import aliases
 from errand.domain.brief import (
     AreaFact,
     Brief,
@@ -70,20 +71,69 @@ class EvidenceCheck:
     reason: str | None = None
 
 
-def check_evidence(quote: str, message: str, name: BriefField, value: object) -> EvidenceCheck:
-    """Is `quote` real evidence for `name = value` in the user's current message?
+def check_evidence(
+    quote: str,
+    message: str,
+    name: BriefField,
+    value: object,
+    more_quotes: Sequence[str] = (),
+) -> EvidenceCheck:
+    """Is the quote real evidence for `name = value` in the user's current message?
 
-    M3 checks the span: a normalised substring of the current message, at least 4
-    characters. M8 adds the value-bound rules of 10.7 (the value must parse out of the
-    span) here, in this one function, so every caller gets them at once. `name` and
-    `value` are already passed for that.
+    Two layers (10.7). The span: every quote is a normalised substring of the current
+    message, at least 4 characters. The value: what the spans say must give the value,
+    so "under" (a substring of "under ₹1,500") cannot back a budget of 5,000:
+    - budget: a number parses out of the spans and equals the value; "none" needs a
+      no-limit phrase;
+    - window: the phrase is in the spans, and `not_before` / `not_after` each parse to
+      the time given (a bare "5" reads as 05:00 or 17:00, either may be the value);
+    - area, service: an alias of that enum value is in the spans;
+    - issue: every content word of the value is in the spans.
+    A clear (`value` None) needs the span only. `more_quotes` are further spans for the
+    same field (a window phrase and its "not before 10" are often two pieces of one
+    sentence); each must pass the span rule, and the value rules read all of them.
     """
-    q = normalise(quote)
-    if len(q) < MIN_EVIDENCE_CHARS:
-        return EvidenceCheck(False, f"the quote for {name.value} is shorter than 4 characters")
-    if q not in normalise(message):
-        return EvidenceCheck(False, f"the quote for {name.value} is not in the user's message")
-    return EvidenceCheck(True)
+    spans: list[str] = []
+    haystack = normalise(message)
+    for raw in (quote, *more_quotes):
+        q = normalise(raw)
+        if len(q) < MIN_EVIDENCE_CHARS:
+            return EvidenceCheck(False, f"the quote for {name.value} is shorter than 4 characters")
+        if q not in haystack:
+            return EvidenceCheck(False, f"the quote for {name.value} is not in the user's message")
+        spans.append(q)
+    if value is None:
+        return EvidenceCheck(True)
+    reason = _value_problem(name, value, " ; ".join(spans))
+    return EvidenceCheck(False, reason) if reason else EvidenceCheck(True)
+
+
+def _value_problem(name: BriefField, value: object, span: str) -> str | None:
+    """Why the spans do not give the value, or None when they do."""
+    if name is F.BUDGET:
+        if value == "none":
+            if not evidence.has_no_limit(span):
+                return f"budget: {span!r} does not say there is no limit"
+        elif isinstance(value, int) and value not in evidence.parse_amounts(span):
+            return f"budget: {span!r} does not give an amount of ₹{value:,}"
+        return None
+    if name is F.WINDOW and isinstance(value, TimeWindowExpr):
+        if normalise(value.phrase) not in span:
+            return f"window: {span!r} does not contain the phrase {value.phrase!r}"
+        times = evidence.parse_times(span)
+        for label, wanted in (("not_before", value.not_before), ("not_after", value.not_after)):
+            if wanted is not None and wanted not in times:
+                return f"window: {span!r} does not give {label} {wanted:%H:%M}"
+        return None
+    if name in (F.AREA, F.SERVICE) and isinstance(value, Service | Area):
+        if not any(a in span for a in aliases.aliases_of(name.value, value.value)):
+            return f"{name.value}: {span!r} does not name {value.value.replace('_', ' ')}"
+        return None
+    if name is F.ISSUE and isinstance(value, str):
+        if not evidence.words_in(normalise(value), span):
+            return f"issue: {span!r} does not contain the words of {value!r}"
+        return None
+    return None
 
 
 # ---------------------------------------------------------------- patches
@@ -96,6 +146,7 @@ class FieldValue:
     name: BriefField
     value: Service | Area | str | int | Literal["none"] | TimeWindowExpr | None
     quote: str | None
+    more_quotes: tuple[str, ...] = ()
 
 
 @dataclass
@@ -132,7 +183,7 @@ def apply_patch(
         if item.quote is None:
             errors.append(f"no evidence quote for {item.name.value}")
             continue
-        check = check_evidence(item.quote, message_text, item.name, item.value)
+        check = check_evidence(item.quote, message_text, item.name, item.value, item.more_quotes)
         if not check.ok:
             errors.append(check.reason or "evidence rejected")
             continue

@@ -30,20 +30,12 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
+from errand.domain import aliases as product_aliases
 from errand.llm.scripted import ScriptedRequest
 from evals.policies.common import TurnView, answer, read, tool_calls
 
-SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
-    "plumber": ("plumber", "plumbing"),
-    "electrician": ("electrician", "electrical"),
-    "ac_servicing": ("ac servicing", "ac service", "air conditioner", "aircon"),
-}
-AREA_ALIASES: dict[str, tuple[str, ...]] = {
-    "indiranagar": ("indiranagar", "indira nagar"),
-    "koramangala": ("koramangala",),
-    "whitefield": ("whitefield", "white field"),
-    "jayanagar": ("jayanagar", "jaya nagar"),
-}
+SERVICE_ALIASES = product_aliases.SERVICE_ALIASES
+AREA_ALIASES = product_aliases.AREA_ALIASES
 _PHRASE = re.compile(r"\b(today|tomorrow|this week|next week)\b", re.I)
 _PART = re.compile(r"\b(morning|afternoon|evening)s?\b", re.I)
 _BUDGET = re.compile(
