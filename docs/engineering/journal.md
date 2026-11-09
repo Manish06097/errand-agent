@@ -625,3 +625,21 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 **What broke.** The first INV-19 run over the seeded database failed (BUG-N2B-1: a forgotten chain's redactions were all filed under the newest row), found only because S64_rich ran every invariant over the seed. My own bugs on the way, before anything merged: S6 looked up redactions for only the last 12 messages and the superseded canary sat just outside; a scripted rebuild lost the loop and asked the same tool again until the policy read the carried results; a saved provider preference was rendered as "the same provider as last time" and the scripted planner treated it as a pin (now "a saved preference: prefers P1"); the `latest_assistant` filter dropped messages with no `type` (a test caught it after the merge with N3).
 
 **Next (N2C and open items).** The `/memory` page, the chat chips with Undo, Keep, Dismiss and Update, the MemoryListCard component, the forget dialog and the browser undo, the Context view, `memory_rich_v1` in the dev drawer, SSE replay through the masked reader, the Playwright forget test; the chip bodies resolved with their status at read time in the conversation API. Open from this milestone: `avoid_days` on the window, the reschedule candidates' bounds, S5 catalogue names, the offer chip for a time bound, the approvals-insert scrub, and the manual `make dev` transcript.
+
+**Lead rulings, N2B round 1.**
+- Scope: N2B finishes N2, so phase C is in N2B after all and there is no N2C. That contradicts the brief I wrote, and the mistake is mine, not the implementer's. The `/memory` page (inspect, correct, forget, Keep and Dismiss for suggestions), the chat chips, the Context view and the Playwright forget test from the N2 acceptance land in this branch.
+- Deviation 1 (S2 at 3,768 of 3,800) is accepted. Any later change to a tool has to trim the list first; the cap stays where it is.
+- Deviation 2 (S4 rows carry an `id` handle, and the Devanagari worst case drops one non-pinned row) is accepted.
+- Deviation 3 (service-scoped rows reach S4 from the errand's second request) is accepted: code applies them from the first request, and 13.7 says so.
+- Deviation 4 (no offer chip for a time bound that has no cue) is accepted.
+- Deviation 5 is split.
+  - Rejected: clearing the user's whole window when a time-bound memory is forgotten or corrected. Store the bound's memory id apart from the window's own provenance, clear only the bound, and have the manifest report `prefill: window` for that row.
+  - Deferred: `avoid_days` and the bounds for reschedule candidates.
+- Deviation 6 is rejected, because the forgotten value survives in `approvals.card_json` (see the review).
+- Deviation 7 (the mask covers all of history) is accepted. Decision 13 allows over-masking.
+- S5 still shows provider ids instead of names. Accepted: the brief says the id stays where the run holds no name.
+- The second leg of S42d runs at a gateway cap of 9,000. Accepted: it is the same code path, and the YAML records the cap.
+- INV-20 checks "eligible" as "active at some point" because the sim clock gives every record one instant. Accepted.
+- The conversation API reading chip bodies with their status at read time was deferred to N2C. Rejected: the web side now lands here, so it is needed now.
+- The "forget mid-run" test is S49b's hook scenario. Accepted.
+- The `$0` in the cassette commit message stays. History is not rewritten.
