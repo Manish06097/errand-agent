@@ -1132,8 +1132,10 @@ _TOOLS_PREAMBLE = 400  # measured once (spikes C5); repeated here, not imported
 
 def _request_lower_bound(record: dict[str, Any]) -> int:
     """ceil(utf8_bytes / 1.5) per string value in the recorded request, plus the tools
-    preamble when tools are bound. Bytes are never fewer than characters and the spike's
-    worst text is 1.68 characters per token, so this cannot exceed the real count."""
+    preamble when tools are bound. This is a lower bound on the estimator's own figure, not
+    on the real token count (bytes / 1.5 is above the real count, which is why the estimator
+    is conservative, ADR 0007): it counts the same bytes without keys or per-block overhead,
+    so a recorded estimate below it means the gateway under-reported."""
     request = record.get("request") or {}
     total = 0
     stack: list[tuple[Any, str]] = [(request, "")]

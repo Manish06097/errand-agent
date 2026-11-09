@@ -23,7 +23,11 @@ SUPERSEDED_MARKER = "[updated preference]"
 # The first is the primary text that redaction offsets refer to; a clarify card's options
 # are model-written too and are replaced without a row.
 #
-# Text that code renders is out of scope on purpose: a notice, an outcome or reminder line,
+# Notices are in scope: the step-limit notice restates the brief ("So far I have: plumber,
+# Indiranagar"), which can hold a memory-pre-filled value, and every other notice is fixed
+# wording so over-masking costs nothing (ruling in 12.4, review round 3).
+#
+# Other text that code renders is out of scope on purpose: an outcome or reminder line,
 # a status line, a card title. They record what happened ("Booked Ravi, Thu 10:00"), which
 # is a fact about a booking and not a copy of the preference. Forgetting "not before 10"
 # must not wipe "10:00" from them. The trade-off, accepted by the ruling in 12.4: a value
@@ -32,6 +36,7 @@ SUPERSEDED_MARKER = "[updated preference]"
 # the brief scrub and the builder's eligible view see to that.
 _PRIMARY: dict[str, str] = {
     "text": "text",
+    "notice": "text",
     "clarify": "question",
     "shortlist": "recommendation",
 }

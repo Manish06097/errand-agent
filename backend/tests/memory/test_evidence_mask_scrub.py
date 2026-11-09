@@ -249,13 +249,18 @@ def test_redact_body_leaves_code_rendered_text_alone() -> None:
     must not wipe '10:00' from the record of a booking."""
     status = "Waiting for you: 10 am slot held"
     for body in (
-        {"type": "notice", "text": "Nothing at 10 am today", "status_line": status},
         {"type": "outcome", "text": "Booked for 10 am", "title": "Booked 10 am", "lines": []},
         {"type": "reminder", "text": "Still waiting on: 10 am", "status_line": status},
         {"type": "text", "text": "Fine.", "status_line": status},
     ):
         new, edited = redaction.redact_body(body, ["10 am"])
         assert new == body and edited == [], body["type"]
+    # a notice is redacted (a step-limit notice restates the brief), its status line is not
+    notice, _ = redaction.redact_body(
+        {"type": "notice", "text": "Nothing at 10 am today", "status_line": status}, ["10 am"]
+    )
+    assert notice["text"] == "Nothing at [removed at your request] today"
+    assert notice["status_line"] == status
     # what the model wrote in a card is still redacted
     card, _ = redaction.redact_body(
         {"type": "shortlist", "recommendation": "Take the 10 am one", "status_line": status},
