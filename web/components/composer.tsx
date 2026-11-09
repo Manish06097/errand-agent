@@ -1,7 +1,7 @@
 "use client";
 
 import { SendHorizontal } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, type FormEvent } from "react";
 import { useChatContext } from "./chat-context";
 import { Button } from "./ui/button";
 
@@ -9,7 +9,17 @@ import { Button } from "./ui/button";
 // visible card it had at Send (use-chat.ts), and goes out after run.finished.
 export function Composer({ ready }: { ready: boolean }) {
   const chat = useChatContext();
-  const [text, setText] = useState("");
+  const text = chat.draft;
+  const setText = chat.setDraft;
+  const input = useRef<HTMLTextAreaElement>(null);
+
+  // A notice action asked for the composer (Answer, Shorten it): focus it, cursor at the end.
+  useEffect(() => {
+    if (chat.focusTick === 0 || !input.current) return;
+    input.current.focus();
+    const end = input.current.value.length;
+    input.current.setSelectionRange(end, end);
+  }, [chat.focusTick]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -23,6 +33,7 @@ export function Composer({ ready }: { ready: boolean }) {
       <textarea
         data-testid="composer-input"
         aria-label="Message"
+        ref={input}
         rows={1}
         value={text}
         placeholder="What do you need arranged?"

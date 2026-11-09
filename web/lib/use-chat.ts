@@ -64,6 +64,10 @@ export function useChat(conversationId: string) {
   const [activity, setActivity] = useState<Activity[]>([]);
   const [records, setRecords] = useState<Record<string, TraceRecord[]>>({});
   const [notice, setNotice] = useState<string | null>(null);
+  // The composer's text lives here so a notice action can focus it, or put the user's
+  // last message back in it, without sending anything.
+  const [draft, setDraft] = useState("");
+  const [focusTick, setFocusTick] = useState(0);
 
   const serverActive = conv.data?.active_run_id ?? null;
   const candidate = startedRun ?? serverActive;
@@ -177,6 +181,23 @@ export function useChat(conversationId: string) {
     [busy, submit],
   );
 
+  // "Answer" and "Shorten it" are asks for the user to type, never messages: nobody wrote
+  // those words. Answer focuses the composer; shorten also puts the last message back in
+  // it to edit. Nothing is sent.
+  const editLast = useCallback((prefill: boolean) => {
+    if (prefill) {
+      const messages = convRef.current?.messages ?? [];
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const m = messages[i];
+        if (m?.role === "user" && m.body.type === "text") {
+          setDraft(m.body.text);
+          break;
+        }
+      }
+    }
+    setFocusTick((n) => n + 1);
+  }, []);
+
   const decide = useCallback(
     async (
       approvalId: string,
@@ -236,6 +257,10 @@ export function useChat(conversationId: string) {
     activity,
     records,
     notice,
+    draft,
+    setDraft,
+    focusTick,
+    editLast,
     send,
     decide,
     action,

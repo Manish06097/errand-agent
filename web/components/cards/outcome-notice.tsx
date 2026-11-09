@@ -6,8 +6,9 @@ import type { OutcomeNotice as Notice } from "@/lib/types";
 import { StatusLine } from "./status-line";
 
 // A code-written outcome message. Buttons come only from the actions the server sent:
-// refresh_hold goes through the actions route, the others are the user's own quick
-// reply (the server's label sent as a message).
+// refresh_hold goes through the actions route; retry, narrow_search, raise_budget and
+// options are the user's own quick reply (the server's label sent as a message); answer
+// and shorten send nothing, they hand the composer to the user (nobody types "Answer").
 export function OutcomeNotice({
   body,
   live,
@@ -29,11 +30,15 @@ export function OutcomeNotice({
               size="sm"
               disabled={!live}
               data-testid={`notice-action-${action.kind}`}
-              onClick={() =>
-                action.kind === "refresh_hold" && action.approval_id
-                  ? void chat.action("refresh_hold", { approval_id: action.approval_id })
-                  : chat.send(action.label)
-              }
+              onClick={() => {
+                if (action.kind === "refresh_hold" && action.approval_id) {
+                  void chat.action("refresh_hold", { approval_id: action.approval_id });
+                } else if (action.kind === "answer" || action.kind === "shorten") {
+                  chat.editLast(action.kind === "shorten");
+                } else {
+                  chat.send(action.label);
+                }
+              }}
             >
               {action.label}
             </Button>

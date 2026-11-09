@@ -76,6 +76,14 @@ class AgentClock:
         return datetime.fromtimestamp(self.now_ms() / 1000, UTC).isoformat(timespec="milliseconds")
 
 
+def is_run_in_progress(response: httpx.Response) -> bool:
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("error") == "run_in_progress"
+
+
 @dataclass
 class Choice:
     """One numbered action under the last card."""
@@ -96,6 +104,7 @@ class Session:
     more: Callable[[], None] | None = None
     visible_card: dict[str, str] | None = None
     waiting_card: dict[str, Any] | None = None
+    last_user_text: str = ""
 
     # ------------------------------------------------------------------ transport
 
@@ -120,7 +129,7 @@ class Session:
             clock = convo["clock"]
             self.clock.sync(clock["mode"], int(clock["now_ms"]))
         self.say(f"errand {conversation_id}. Say what you need; a number picks an action.")
-        self.show_new(convo, only_after_run=None)
+        self.show_new(convo)
 
     def fetch(self) -> dict[str, Any]:
         response = self.call("GET", f"/api/conversations/{self.conversation_id}")
@@ -148,7 +157,7 @@ class Session:
     def post_with_retry(self, method: str, path: str, body: Any) -> httpx.Response:
         response = self.call(method, path, body)
         for _ in range(40):
-            if response.status_code != 409 or response.json().get("error") != "run_in_progress":
+            if response.status_code != 409 or not is_run_in_progress(response):
                 break
             time.sleep(0.2)
             response = self.call(method, path, body)
@@ -161,7 +170,7 @@ class Session:
         run_id = response.json().get("run_id")
         if run_id:
             self.stream(str(run_id))
-            self.show_new(self.fetch(), only_after_run=None)
+            self.show_new(self.fetch())
 
     # ------------------------------------------------------------------ SSE
 
@@ -190,8 +199,7 @@ class Session:
 
     # ------------------------------------------------------------------ rendering
 
-    def show_new(self, convo: dict[str, Any], *, only_after_run: str | None) -> None:
-        del only_after_run
+    def show_new(self, convo: dict[str, Any]) -> None:
         messages = convo["messages"]
         last_assistant = next((m for m in reversed(messages) if m["role"] == "assistant"), None)
         self.visible_card = None
@@ -210,6 +218,8 @@ class Session:
                 continue
             self.shown.add(m["message_id"])
             if m["role"] == "user":
+                if body_text := m["body"].get("text"):
+                    self.last_user_text = str(body_text)
                 continue
             live = m is last_assistant
             self.render(m, live=live)
@@ -317,7 +327,14 @@ class Session:
                 "client_action_id": f"ca_{uuid.uuid4().hex[:16]}",
             },
         )
-        answer = response.json()
+        try:
+            answer = response.json()
+        except ValueError:
+            answer = None
+        if not isinstance(answer, dict):
+            self.say(f"! not decided: {response.status_code} {response.text[:200]}")
+            self.show_new(self.fetch())
+            return
         if response.status_code == 202 and answer.get("run_id"):
             self.stream(str(answer["run_id"]))
         elif response.status_code == 200:
@@ -328,7 +345,7 @@ class Session:
                 error == "no_longer_valid" and answer.get("status") in ("superseded", "invalidated")
             )
             self.say("! details changed" if known_stale else f"! {error.replace('_', ' ')}")
-        self.show_new(self.fetch(), only_after_run=None)
+        self.show_new(self.fetch())
 
     def notice_action(self, action: dict[str, Any]) -> None:
         if action["kind"] == "refresh_hold" and action.get("approval_id"):
@@ -342,6 +359,12 @@ class Session:
                     "POST", f"/api/conversations/{self.conversation_id}/actions", body
                 )
             )
+        elif action["kind"] == "answer":
+            # Nobody types "Answer": hand the prompt back to the user and send nothing.
+            self.say("Type your answer below.")
+        elif action["kind"] == "shorten":
+            self.say("Type a shorter version of your message below. Your last message was:")
+            self.say(f"  {self.last_user_text}")
         else:
             self.send(action["label"])
 
