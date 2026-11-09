@@ -11,6 +11,8 @@ from pathlib import Path
 from errand.clock import to_ms
 from errand.domain.inbound import SystemEvent
 from errand.store.repos.approvals import ApprovalRow
+from errand.tools.errors import ToolTimeout
+from errand.trace.reader import read_trace
 from errand.world.scenario import BookConfig, ScenarioConfig, WorldConfig
 from evals.runner import Harness, harness
 
@@ -165,3 +167,56 @@ async def test_a_second_deliverer_finding_the_job_notified_does_nothing(tmp_path
         await h.manager.wait_idle()
         async with h.manager.db.session() as repos:
             assert await repos.notifications.count() == 1
+
+
+async def test_a_job_that_already_exists_is_not_detected_or_delivered_again(
+    tmp_path: Path,
+) -> None:
+    """The unique (booking, kind) rule is what keeps a second detector (the watcher after M5's
+    verify, or a second process) from starting the same follow-up twice: the mirror still
+    says `confirmed`, so the watcher sees a move, but the job row is already there."""
+    async with booked(tmp_path) as (h, booking_id):
+        await h.inspector.fire_provider_cancel(booking_id)
+        first = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        assert first.delivered
+        async with h.manager.db.transaction() as repos:
+            known = await repos.known_bookings.get(booking_id)
+            assert known is not None
+            await repos.known_bookings.upsert(
+                type(known)(**{**known.__dict__, "status": "confirmed"})  # forget the move
+            )
+        again = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        assert again.detected == [] and again.delivered == []
+        async with h.manager.db.session() as repos:
+            assert await repos.notifications.count() == 1
+            assert [j.state for j in await repos.followups.in_state("notified")] == ["notified"]
+
+
+async def test_a_failed_list_bookings_skips_the_user_and_shows_as_watcher_lag(
+    tmp_path: Path,
+) -> None:
+    """The user hears nothing; the tick is a watch run with the failure in its record, and
+    the next tick that works catches up and clears the lag."""
+    async with booked(tmp_path) as (h, booking_id):
+        client = h.manager.world.client
+        real = client.list_bookings
+
+        async def down(*args: object, **kwargs: object) -> object:
+            raise ToolTimeout("list_bookings", 5.0)
+
+        client.list_bookings = down
+        await h.inspector.fire_provider_cancel(booking_id)
+        failed = await h.app.state.watcher.tick()
+        assert failed.failed_users == ["u_demo"] and failed.trace is not None
+        assert failed.detected == [] and failed.delivered == []
+        assert (await h.client.get("/api/notifications")).json()["unread"] == 0
+        assert h.app.state.watcher.health.failing_users == ["u_demo"]
+        client.list_bookings = real
+        caught_up = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        assert caught_up.failed_users == [] and caught_up.delivered
+        assert h.app.state.watcher.health.failing_users == []
+        end = [r for r in read_trace(failed.trace).records if r["type"] == "run.end"]
+        assert end[0]["failed_users"] == ["u_demo"] and end[0]["outcome"] is None
