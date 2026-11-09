@@ -397,3 +397,54 @@ def test_inv19_fails_on_plaintext_of_a_forgotten_value_left_in_messages(rec: Rec
         }
     )
     assert any("plaintext of forgotten" in v for v in fails("INV-19", rec))
+
+
+def test_inv20_fails_when_s4_renders_an_id_the_manifest_does_not_list(rec: Records) -> None:
+    rec = copy.deepcopy(rec)
+    victim = next(
+        r
+        for r in rec.all_records()
+        if r["type"] == "context.built" and r["manifest"].get("memory_included")
+    )
+    victim["manifest"]["memory_included"].pop()
+    assert any("S4 renders" in v for v in fails("INV-20", rec))
+
+
+def test_inv20_fails_when_s4_renders_a_row_that_was_never_active(rec: Records) -> None:
+    rec = copy.deepcopy(rec)
+    pending = next(r for r in rec.memories if r["kind"] == "inferred")
+    call = next(r for r in _model_calls(rec))
+    manifest = next(
+        r["manifest"]
+        for r in rec.all_records()
+        if r["type"] == "context.built"
+        and r["manifest"].get("request_sha256") == call["request_sha256"]
+    )
+    manifest["memory_included"].append({"id": pending["memory_id"], "score": 1.0, "prefill": None})
+    pid = pending["memory_id"]
+    block = f'<memory>\n[{{"preferred_provider":"P1","id":"{pid}"}}]\n</memory>'
+    call["request"]["messages"][0]["content"].append({"type": "text", "text": block})
+    assert any("never active" in v or "S4 renders" in v for v in fails("INV-20", rec))
+
+
+def test_inv20_fails_when_a_later_request_carries_an_older_epoch(rec: Records) -> None:
+    rec = copy.deepcopy(rec)
+    manifests = [
+        r["manifest"]
+        for r in rec.all_records()
+        if r["type"] == "context.built" and r["manifest"].get("sent")
+    ]
+    assert len(manifests) >= 2
+    manifests[-1]["memory_epoch"] = manifests[0]["memory_epoch"] - 1
+    assert any("memory epoch" in v for v in fails("INV-20", rec))
+
+
+def test_inv20_fails_when_a_rebuild_is_not_at_the_epoch_the_guard_saw(rec: Records) -> None:
+    rec = copy.deepcopy(rec)
+    run_id = next(iter(rec.traces))
+    records = rec.traces[run_id]
+    first = next(i for i, r in enumerate(records) if r["type"] == "context.built")
+    records.insert(
+        first, {"type": "guard.context_stale", "seq": 0, "detail": {"built": 0, "current": 999}}
+    )
+    assert any("the guard saw 999" in v for v in fails("INV-20", rec))

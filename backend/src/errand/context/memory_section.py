@@ -41,7 +41,7 @@ def _escape(body: str) -> str:
 
 
 def _item(c: Chosen) -> dict[str, object]:
-    """{"home_area": "indiranagar"}, or with "service" for a service-scoped row.
+    """{"home_area": "indiranagar", "id": "m-01"}, or with "service" for a service-scoped row.
 
     The key names are the registry's, none of which is "service", so the tag is never
     ambiguous. This is the most compact form that still says which scope a row has.
@@ -49,6 +49,8 @@ def _item(c: Chosen) -> dict[str, object]:
     item: dict[str, object] = {c.row.key: c.value}
     if c.row.scope != "global":
         item["service"] = c.row.scope.split(":", 1)[1]
+    # The handle `propose_forget` names a row by: an id, never a value (N2B).
+    item["id"] = c.row.memory_id
     return item
 
 
