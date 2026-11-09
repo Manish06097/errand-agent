@@ -150,3 +150,6 @@ class ApprovalSettings(BaseSettings):
     # A bound hold with less than the book timeout plus this left is not booked on
     # (9.4 step 2); M4 sends it through a fresh hold and a new card instead.
     hold_margin_s: float = Field(default=30.0, ge=0)
+    # A typed grant is refused when the client says it composed the message later than
+    # the agent clock at receipt plus this much (8.7, BUG-M4F-1): a skewed client clock.
+    composed_tolerance_s: float = Field(default=2.0, ge=0)

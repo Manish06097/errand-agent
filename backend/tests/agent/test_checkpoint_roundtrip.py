@@ -19,6 +19,10 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.slow  # subprocesses or real servers: second step of make check
+
 SCRIPT = textwrap.dedent(
     """
     import asyncio, logging, sys, warnings

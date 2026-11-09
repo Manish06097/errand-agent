@@ -11,8 +11,11 @@ Every condition from 8.3, in order; the first that fails makes the message ordin
    pressed Send) and names the live approval and its fingerprint;
 4. bound to the conversation position: its `message_id` is the latest assistant
    message, that message is the card or its reminder, and it has `typed_grant_ok`;
-5. bound to time: the client acked the card's render before `client_composed_at`, and
-   the approval was requested before `client_composed_at`.
+5. bound to time: the client acked the card's render before `client_composed_at`, the
+   approval was requested before `client_composed_at`, and `client_composed_at` is not
+   later than the agent clock at receipt plus a small tolerance (a client clock that
+   runs ahead could otherwise stamp a message typed before the render with a time after
+   it). The render ack is below `client_composed_at`, so it is bounded too.
 
 A bare acknowledgement never grants. It gets the code hint only when the latest
 assistant message is the live card with `typed_grant_ok`; otherwise it is probably
@@ -56,6 +59,8 @@ def decide(
     visible_card: VisibleCard | None,
     composed_at_ms: int | None,
     latest: Message | None,
+    now_ms: int,
+    tolerance_ms: int,
 ) -> Verdict:
     if live is None or live.status != "pending":
         return Verdict(Decision.ORDINARY, "no_live_card")
@@ -85,6 +90,8 @@ def decide(
         return Verdict(Decision.ORDINARY, "latest_message_does_not_allow_typed_grants")
     if composed_at_ms is None:
         return Verdict(Decision.ORDINARY, "no_compose_time")
+    if composed_at_ms > now_ms + tolerance_ms:
+        return Verdict(Decision.ORDINARY, "composed_in_the_future")
     if latest.rendered_at is None or not latest.rendered_at < composed_at_ms:
         return Verdict(Decision.ORDINARY, "composed_before_render")
     if not live.requested_at < composed_at_ms:

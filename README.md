@@ -27,7 +27,7 @@ git and make. macOS or Linux.
 |---|---|
 | `make setup` | Installs backend and web dependencies from the lockfiles and the git hooks. |
 | `make dev` | Starts the world (8765), the API (8000) and the web app (3200) with prefixed logs. Stops all three if one exits or on Ctrl-C. |
-| `make check` | `uv sync --locked` (fails if `uv.lock` disagrees with the pins in `pyproject.toml`), ruff, ruff format, mypy, import-linter, the em-dash, attribution and secret guards, the design-note budget, `pytest backend/tests`, web typecheck and lint. |
+| `make check` | `uv sync --locked` (fails if `uv.lock` disagrees with the pins in `pyproject.toml`), ruff, ruff format, mypy, import-linter, the em-dash, attribution and secret guards, the design-note budget, `pytest backend/tests` in two steps (the fast tests under pytest-xdist, then the `slow` ones that start subprocesses or servers, three workers, one file each), web typecheck and lint. |
 | `make evals` | The offline eval suite. There are no scenarios yet, so it prints `0 scenarios`. If pytest collects nothing while `backend/evals` holds anything besides placeholders, it fails instead. |
 | `make e2e` | Playwright (`web/e2e`): starts its own stack through `scripts/dev.py` (scripted planner, fresh data dir, `ERRAND_DEV=1`, your ports), runs the browser tests and stops it. Installs chromium first. |
 | `make record SCENARIO=S01` | Records the scenario's cassette (`backend/evals/cassettes`) with the real Opus and Haiku and the key in `.env`, on the simulated clock, and prints the cost. `make evals` then replays it offline. |
@@ -43,6 +43,12 @@ web app's `/api` rewrite follows the API port, or `ERRAND_API_URL` if set:
 ERRAND_API_PORT=8100 make dev
 curl localhost:3200/api/health    # {"status":"ok","service":"errand-api"}
 ```
+
+The tests bind port 0 wherever they can. A test that needs a fixed port takes it from
+`worker_port(slot)` in `backend/tests/conftest.py`: `ERRAND_WORLD_PORT` (default 8765)
+`+ 1000 + 8 * worker + slot`, where `worker` is n for xdist's `gwN` (0 in a serial run)
+and `slot` is 0 to 7. The block starts 1000 above the world port, so it never lands on
+the world, API or web port, and two workers never share a port.
 
 ## Hygiene
 

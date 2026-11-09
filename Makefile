@@ -9,6 +9,22 @@ PNPM := pnpm -C web
 
 export NEXT_TELEMETRY_DISABLED := 1
 
+# The test suite runs in two pytest steps (make check), and together they run every
+# test exactly once:
+#   1. `-m "not slow"` under pytest-xdist: -n 4 --dist loadscope. Measured on an 11-core
+#      machine, -n 4, 6, 8, 10 and auto all land at 10 to 12 s: the floor is the longest
+#      module, not the worker count, so four workers cost the least CPU and memory and
+#      leave the machine quiet for step 2. loadscope keeps a module on one worker, which
+#      pays each module's session-cached scenario runs (tests/evals) once per module.
+#   2. `-m slow`: the tests that start subprocesses or real servers or shell out to make
+#      and git (marker `slow`). Their time is process start-up, not CPU, so they share
+#      the machine well: -n 2, 3 and 4 with --dist loadfile took 64, 46 and 41 s against
+#      121 s serial. -n 3 --dist loadfile (a file stays on one worker, so its fixtures
+#      and temp repos are never split); each worker has its own port block
+#      (backend/tests/conftest.py). Serial (`-p no:xdist`) is 135 s with step 1, over
+#      the 120 s goal.
+# -n is not in addopts, so make evals and any other pytest call run as before.
+
 .PHONY: help setup dev check evals e2e record langfuse-up langfuse-down
 
 help:
@@ -44,7 +60,8 @@ check:
 	$(UV) python scripts/check_attribution.py --history
 	$(UV) python scripts/secret_scan.py --tracked
 	$(UV) python scripts/check_design_note.py
-	cd backend && uv run --frozen pytest tests
+	cd backend && uv run --frozen pytest tests -m "not slow" -n 4 --dist loadscope
+	cd backend && uv run --frozen pytest tests -m slow -n 3 --dist loadfile
 	$(PNPM) typecheck
 	$(PNPM) lint
 	$(UV) python scripts/gen_api_types.py --check

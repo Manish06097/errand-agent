@@ -11,12 +11,16 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from errand.tools.client import HttpTransport, InProcessTransport
 from errand.tools.inspector import HttpInspector
 from errand.world.contracts import ToolName
 from errand.world.engine import WorldHost
 from errand.world.scenario import BookConfig, ScenarioConfig, WorldConfig
 from tests.contract.world_process import WorldProcess
+
+pytestmark = pytest.mark.slow  # subprocesses or real servers: second step of make check
 
 SCENARIO = ScenarioConfig(
     id="parity", seed=13, world=WorldConfig(book=BookConfig(forced=["success", "slot_taken"]))

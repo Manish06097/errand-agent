@@ -96,3 +96,51 @@ def test_sorted_by_and_a_search_done_are_not_claims() -> None:
     assert kept("I've done the booking.") == ""
     assert kept("It's sorted!") == ""
     assert kept("Sorted out, you're good.") == ""
+
+
+# BUG-M4-2 round 5: a present claim under a present-tense approval may take a subject
+# pronoun and a be-form ("you're all set"), a modal bridges only a provider name that is
+# on the shortlist or among the user's known bookings, and the approval opener matches in
+# any case. Sharma is on the shortlist; Ramesh is on neither list.
+SHORTLIST = {"P7": "Sharma Plumbing"}
+ROUND5_KEPT = [
+    "Once you approve it gets booked.",
+    "Once you approve, you're all set.",
+    "Once you approve, you're booked.",
+    "Once you approve, we're all set.",
+    "Once you approve, you are all set.",
+    "Once you approve, they're booked.",
+    "If you want, I can get Sharma booked for Saturday.",
+    "If you want, I can get Sharma Plumbing booked for Saturday.",
+    "Once You Approve, I Can Get Sharma Booked.",
+]
+ROUND5_REMOVED = [
+    "I can get Saturday booked.",
+    "If you want, I can get Ramesh booked for Saturday.",
+    "If you want, I can get Saturday booked.",
+    "Once You Approve You Can See It Is Booked.",
+    "Once you approved, you're all set.",
+    "Once you refresh, you're all set.",
+    "Once you approve, you're all set, and I booked Sharma.",
+    "Once you approve, you were booked.",
+    "You're all set.",
+    "Once you approve, you're told I booked Sharma.",
+]
+
+
+def test_round5_the_guard_keeps_the_honest_lines_and_removes_the_claims() -> None:
+    for text in ROUND5_KEPT:
+        assert kept(text, names=SHORTLIST) == text, text
+    for text in ROUND5_REMOVED:
+        assert kept(text, names=SHORTLIST) == "", text
+
+
+def test_round5_a_name_bridges_only_from_the_shortlist_or_a_known_booking() -> None:
+    line = "If you want, I can get Ramesh booked for Saturday."
+    assert kept(line, names=SHORTLIST) == ""
+    assert kept(line) == ""
+    # A known booking's provider is a name too, whether or not it is on the shortlist.
+    ramesh = Verified("B-9", "P9", "Ramesh Electricals", "electrician", THURSDAY)
+    assert kept(line, ramesh, names=SHORTLIST) == line
+    # Sharma is only a name when the caller says so: the model's own text never makes one.
+    assert kept("If you want, I can get Sharma booked for Saturday.") == ""
