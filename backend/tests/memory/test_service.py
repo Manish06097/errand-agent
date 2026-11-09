@@ -151,23 +151,23 @@ async def _suggest_provider(env: Env, value: str, scope: str = "service:electric
 
 
 async def test_suggestions_follow_the_gate_rules(env: Env) -> None:
-    first = await _suggest_provider(env, "P4")
+    first = await _suggest_provider(env, "E4")
     assert first is not None and first["declined"] is None
-    again = await _suggest_provider(env, "P4")
+    again = await _suggest_provider(env, "E4")
     assert again is not None and again["declined"] == "already_pending"
     # Dismiss blocklists the value, so inference stops; stating it yourself still works
     await env.service.dismiss(user_id=USER, memory_id="m-01", client_action_id=env.action())
-    blocked = await _suggest_provider(env, "P4")
+    blocked = await _suggest_provider(env, "E4")
     assert blocked is not None and blocked["declined"] == "blocklisted"
     stated = await env.remember(
-        "preferred_provider", "service:electrician", "P4", "I prefer P4 for electricians"
+        "preferred_provider", "service:electrician", "E4", "I prefer E4 for electricians"
     )
     assert stated["memory"]["status"] == "active"
     # an active row for the same key and scope stops suggestions
-    other = await _suggest_provider(env, "P5")
+    other = await _suggest_provider(env, "E5")
     assert other is not None and other["declined"] == "active_row_exists"
     # another scope is another question
-    pair = await _suggest_provider(env, "P4", "service:plumber")
+    pair = await _suggest_provider(env, "A4", "service:ac_servicing")
     assert pair is not None and pair["declined"] is None
 
 

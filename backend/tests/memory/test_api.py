@@ -93,7 +93,7 @@ async def test_a_refused_add_is_422_and_stores_nothing(tmp_path: Path) -> None:
 
 async def test_keep_dismiss_and_undo_over_http(tmp_path: Path) -> None:
     async with harness(tmp_path, world()) as h:
-        for provider, scope in (("P4", "service:electrician"), ("P1", "service:plumber")):
+        for provider, scope in (("E4", "service:electrician"), ("P1", "service:plumber")):
             await service_of(h).suggest(
                 user_id="u_demo", key="preferred_provider", scope=scope, value=provider,
                 rule="same_provider_twice", booking_ids=["B1", "B2"],

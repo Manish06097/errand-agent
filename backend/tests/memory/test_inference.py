@@ -58,31 +58,31 @@ def test_cancelled_bookings_do_not_count() -> None:
 
 def test_the_same_provider_twice_for_a_service_suggests_it_for_that_service_only() -> None:
     rows = [
-        _b("B1", "P4", "electrician", 2, 9),
-        _b("B2", "P5", "electrician", 3, 9),
-        _b("B3", "P4", "electrician", 4, 9),
+        _b("B1", "E4", "electrician", 2, 9),
+        _b("B2", "E5", "electrician", 3, 9),
+        _b("B3", "E4", "electrician", 4, 9),
         _b("B4", "P1", "plumber", 5, 9),
     ]
     got = inference.same_provider_twice(rows)
     assert [(c.key, c.scope, c.value, c.booking_ids) for c in got] == [
-        ("preferred_provider", "service:electrician", "P4", ("B1", "B3"))
+        ("preferred_provider", "service:electrician", "E4", ("B1", "B3"))
     ]
 
 
 def test_the_most_booked_provider_wins() -> None:
-    rows = [_b(f"B{i}", "P4" if i < 3 else "P6", "electrician", i + 1, 9) for i in range(1, 7)]
+    rows = [_b(f"B{i}", "E4" if i < 3 else "P6", "electrician", i + 1, 9) for i in range(1, 7)]
     got = inference.same_provider_twice(rows)
-    assert got[0].value == "P4" or got[0].value == "P6"
-    tally = {"P4": 2, "P6": 4}
+    assert got[0].value == "E4" or got[0].value == "P6"
+    tally = {"E4": 2, "P6": 4}
     assert tally[got[0].value] == max(tally.values())
 
 
 async def test_run_inference_writes_pending_rows_with_booking_evidence(env: Env) -> None:
     async with env.db.transaction() as repos:
         for row in [
-            _b("B1", "P4", "electrician", 2, 9),
-            _b("B2", "P4", "electrician", 3, 10),
-            _b("B3", "P5", "plumber", 4, 9),
+            _b("B1", "E4", "electrician", 2, 9),
+            _b("B2", "E4", "electrician", 3, 10),
+            _b("B3", "E5", "plumber", 4, 9),
             _b("B4", "P1", "plumber", 5, 11),
         ]:
             await repos.known_bookings.upsert(row)

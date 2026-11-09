@@ -153,18 +153,18 @@ async def test_a_pending_suggestion_can_be_forgotten_and_a_forgotten_value_stays
     env: Env,
 ) -> None:
     await env.service.suggest(
-        user_id=USER, key="preferred_provider", scope="service:electrician", value="P4",
+        user_id=USER, key="preferred_provider", scope="service:electrician", value="E4",
         rule="same_provider_twice", booking_ids=["B1", "B2"],
     )  # fmt: skip
     await env.service.forget(user_id=USER, memory_id="m-01", client_action_id="f1")
     again = await env.service.suggest(
-        user_id=USER, key="preferred_provider", scope="service:electrician", value="P4",
+        user_id=USER, key="preferred_provider", scope="service:electrician", value="E4",
         rule="same_provider_twice", booking_ids=["B1", "B2", "B3"],
     )  # fmt: skip
     assert again is not None and again["declined"] == "blocklisted"
     # but the user can still say it themselves
     stated = await env.remember(
-        "preferred_provider", "service:electrician", "P4", "I prefer P4 for electricians"
+        "preferred_provider", "service:electrician", "E4", "I prefer E4 for electricians"
     )
     assert stated["memory"]["status"] == "active"
 

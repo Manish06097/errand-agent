@@ -40,7 +40,9 @@ AREA_ALIASES: dict[str, tuple[str, ...]] = {
     "whitefield": ("whitefield", "white field"),
     "jayanagar": ("jayanagar", "jaya nagar", "jayanager"),
 }
-_PROVIDER = re.compile(r"^P[1-9][0-9]{0,2}$")
+_PROVIDER = re.compile(r"^[PEA][1-9][0-9]{0,2}$")
+# Provider ids start with the letter of their service (world/catalog.py service_of).
+SERVICE_LETTER = {"plumber": "P", "electrician": "E", "ac_servicing": "A"}
 _SERVICE_SCOPE = re.compile(r"^service:[a-z][a-z_]{1,30}$")
 _NUMBER_WORDS = {
     1: "one",
@@ -375,7 +377,16 @@ def check_scope(spec: KeySpec, scope: str) -> str:
 
 def parse_value(key: str, scope: str, raw: Any) -> tuple[KeySpec, str, Any]:
     spec = spec_for(key)
-    return spec, check_scope(spec, scope), spec.parse(raw)
+    scope = check_scope(spec, scope)
+    value = spec.parse(raw)
+    if key in ("preferred_provider", "avoid_provider"):
+        letter = SERVICE_LETTER.get(service_of_scope(scope) or "")
+        ids = [value] if isinstance(value, str) else value
+        if letter is None or any(not i.startswith(letter) for i in ids):
+            raise RegistryError(
+                f"{key} in {scope} takes {letter or 'no'} provider ids, got {value}"
+            )
+    return spec, scope, value
 
 
 def dump_value(value: Any) -> str:

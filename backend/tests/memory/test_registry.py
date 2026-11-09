@@ -57,7 +57,7 @@ def test_an_unknown_key_and_a_wrong_scope_are_errors() -> None:
         ("avoid_days", "global", ["Sun", "saturday"], ["saturday", "sunday"]),
         ("budget_ceiling", "service:plumber", "₹1,500", 1500),
         ("budget_ceiling", "service:plumber", 800, 800),
-        ("preferred_provider", "service:electrician", "p4", "P4"),
+        ("preferred_provider", "service:electrician", "e4", "E4"),
         ("avoid_provider", "service:plumber", ["P7", "P2"], ["P2", "P7"]),
         ("language", "global", "Hinglish", "hinglish"),
         (
@@ -118,3 +118,14 @@ def test_render_round_trips_the_stored_value() -> None:
     assert render_value("avoid_provider", ["P2", "P7"]) == "P2, P7"
     with pytest.raises(RegistryError):
         render_value("home_area", "atlantis")
+
+
+def test_a_provider_id_must_belong_to_the_scopes_service() -> None:
+    assert parse_value("preferred_provider", "service:electrician", "E4")[2] == "E4"
+    for key, scope, raw in [
+        ("preferred_provider", "service:electrician", "P4"),
+        ("avoid_provider", "service:plumber", ["P7", "E2"]),
+        ("preferred_provider", "service:painting", "P1"),
+    ]:
+        with pytest.raises(RegistryError):
+            parse_value(key, scope, raw)
