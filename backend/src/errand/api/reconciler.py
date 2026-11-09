@@ -40,12 +40,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from errand.agent import cards
+from errand.agent.graph import run_config
 from errand.agent.templates import run_interrupted
 from errand.api.locks import thread_key, user_key
 from errand.api.runs import RunManager
 from errand.approvals import service
 from errand.clock import to_ms, wall_now
 from errand.config import ReconcilerSettings
+from errand.domain.errand import Phase
 from errand.domain.inbound import Inbound, Recover, UiAction
 from errand.ids import message_id_for
 from errand.store.repos.approvals import ApprovalRow
@@ -125,7 +128,9 @@ class Reconciler:
                     report.recovery_runs.append(run_id)
             for runs in dead_by_conversation.values():
                 for run in runs:
-                    await self.close_dead_run(run, recovered_by=None)
+                    await self.close_dead_run(
+                        run, recovered_by=None, status_line=await self._status_line(run)
+                    )
                     report.closed_runs.append(run.run_id)
             await self.manager.wait_idle()
             return report
@@ -151,7 +156,9 @@ class Reconciler:
                 if owner is not None:
                     await repos.leases.take_over(user_key(owner))
         for run in dead:
-            await self.close_dead_run(run, recovered_by=run_id)
+            await self.close_dead_run(
+                run, recovered_by=run_id, status_line=cards.STATUS_LINES[Phase.VERIFYING]
+            )
             report.closed_runs.append(run.run_id)
         admission = await manager.start_recovery(conversation_id, inbound, run_id=run_id)
         if admission is None:
@@ -213,7 +220,21 @@ class Reconciler:
 
     # ------------------------------------------------------------- dead runs
 
-    async def close_dead_run(self, run: Run, recovered_by: str | None) -> None:
+    async def _status_line(self, run: Run) -> str | None:
+        """The status line for a dead run's message when no recovery run follows: the
+        phase of the errand as the last checkpoint holds it (10.8)."""
+        try:
+            snapshot = await self.manager.graph.aget_state(run_config(run.conversation_id))
+            errand = (snapshot.values or {}).get("errand")
+            phase = getattr(errand, "phase", None)
+            return None if phase is None else cards.status_line(phase)
+        except Exception:
+            log.exception("could not read the checkpoint of %s", run.conversation_id)
+            return None
+
+    async def close_dead_run(
+        self, run: Run, recovered_by: str | None, status_line: str | None = None
+    ) -> None:
         """Give a run the process died in its one `run.end` and its message (decision 3).
 
         The Tracer's last write to the file may be torn (it writes each record in one
@@ -226,7 +247,7 @@ class Reconciler:
         _append_run_end(path, run, recovered_by, now)
         async with manager.db.transaction() as repos:
             if not await repos.messages.assistant_for_run(run.run_id):
-                body = run_interrupted()
+                body = run_interrupted().model_copy(update={"status_line": status_line})
                 await repos.messages.upsert_assistant(
                     Message(
                         message_id=message_id_for(run.run_id, "notice"),

@@ -123,6 +123,9 @@ class Until(_Strict):
 
 
 class ApproveSpec(_Strict):
+    # The button press itself is expected to die with the API process (crash_at:
+    # after_grant_commit): the harness answers 599 and the process exits with code 1.
+    expect_crash: bool = False
     # stale: send the fingerprint of the card shown before the current one
     fingerprint: Literal["current", "stale"] = "current"
     # original: press the button on the first approval card of the conversation
@@ -180,6 +183,29 @@ class Advance(_Strict):
     """Move the simulated clock (agent and world share it in process)."""
 
     advance: str
+
+
+class Restart(_Strict):
+    """Wait for the API to exit with code 1 (the scenario's `crash_at`), start it again on
+    the same data directory without the fault and wait until it serves. The reconciler
+    runs before the first request, so the recovery runs it started are in the transcript
+    when this step returns; the runner then reads them like any other run."""
+
+    restart: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReconcilerTick(_Strict):
+    """Run the reconciler's re-check of `needs_attention` intents now (the dev drawer's
+    "Reconcile now"): the evals set the periodic interval to 0 and drive every tick."""
+
+    reconciler_tick: dict[str, Any] = Field(default_factory=dict)
+
+
+class CheckNow(_Strict):
+    """The "Check now" button on a PENDING_VERIFICATION message. `expect_status` 409
+    asserts there was nothing to check."""
+
+    check_now: dict[str, Any] = Field(default_factory=dict)
 
 
 class SwitchConversation(_Strict):
@@ -330,6 +356,9 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "refresh_hold": RefreshHold,
     "advance": Advance,
     "conversation": SwitchConversation,
+    "restart": Restart,
+    "reconciler_tick": ReconcilerTick,
+    "check_now": CheckNow,
     "expect_card": ExpectCard,
     "expect_transcript": ExpectTranscript,
     "expect_booking": ExpectBooking,
@@ -362,6 +391,9 @@ Step = (
     | RefreshHold
     | Advance
     | SwitchConversation
+    | Restart
+    | ReconcilerTick
+    | CheckNow
     | ExpectCard
     | ExpectTranscript
     | ExpectBooking
@@ -402,6 +434,7 @@ class FinalExpect(_Strict):
     invariants: list[str] = Field(default_factory=lambda: ["default"])
 
 
+CrashPoint = Literal["after_intent_write", "after_world_book", "after_grant_commit"]
 PlannerName = Literal[
     "scripted:reference",
     "scripted:injection_follower",
@@ -422,6 +455,9 @@ class Scenario(_Strict):
     model: PlannerName = "scripted:reference"
     # The scripted quarantined reader (evals/policies/reader.py).
     reader: ReaderName = "keyword"
+    # Run against real processes and kill the API at this fault point on its first start
+    # (ERRAND_FAULT); the steps then use `restart` (architecture 18.1, N1).
+    crash_at: CrashPoint | None = None
     world: WorldConfig = Field(default_factory=WorldConfig)
     faults: FaultsConfig = Field(default_factory=FaultsConfig)
     user: UserSpec

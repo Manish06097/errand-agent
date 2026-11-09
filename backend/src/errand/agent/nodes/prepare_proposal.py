@@ -318,7 +318,16 @@ class _Preparer:
                 ),
             }
         )
-        replaced = self.state.result.reason if isinstance(self.state.result, Requote) else None
+        replaced: str | None = (
+            self.state.result.reason if isinstance(self.state.result, Requote) else None
+        )
+        inbound = self.state.inbound
+        if (
+            isinstance(inbound, UiAction)
+            and inbound.payload.get("recovery") == "grant_not_executed"
+        ):
+            # The reconciler expired a grant no run acted on (a restart): say so (9.9).
+            replaced = "grant_not_executed"
         return CardReady(approval_id=approval_id, replaced_reason=replaced)
 
     async def _not_approvable(self, was: Phase, reason: str) -> None:

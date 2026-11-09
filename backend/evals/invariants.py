@@ -177,7 +177,11 @@ def inv07_one_end_per_run(rec: Records) -> Violations:
         outcome = ends[0].get("outcome")
         if outcome not in RunOutcome.__members__:
             out.append(f"{rid}: run.end outcome {outcome!r} is not a RunOutcome")
-        if run["status"] != "ended" or run["outcome"] != outcome:
+        # A run the process died in is ended by the reconciler: `recovered`, RUN_INTERRUPTED.
+        status_ok = run["status"] == "ended" or (
+            run["status"] == "recovered" and outcome == "RUN_INTERRUPTED"
+        )
+        if not status_ok or run["outcome"] != outcome:
             out.append(f"{rid}: runs row says {run['status']}/{run['outcome']}, trace {outcome}")
         shown = [
             m
@@ -201,28 +205,47 @@ def _visible_text(body: dict[str, Any]) -> str:
 
 
 def inv08_transitions_allowed(rec: Records) -> Violations:
-    """Every state.transition is in ALLOWED and starts where the errand last was."""
+    """Every state.transition is in ALLOWED and starts where the errand last was.
+
+    A run the process died in (ended RUN_INTERRUPTED by the reconciler) only keeps the
+    transitions of nodes that finished: LangGraph checkpoints at the end of a node, so a
+    transition recorded inside the node that was running never reached the errand's
+    state, and the recovery run starts from the phase before it (N1).
+    """
     out: Violations = []
     phase: dict[str, Phase] = defaultdict(lambda: INITIAL_PHASE)
-    for record in rec.all_records():
-        if record["type"] != "state.transition":
-            continue
-        errand = str(record.get("errand_id"))
-        try:
-            frm, to = Phase(record["from"]), Phase(record["to"])
-        except ValueError:
-            out.append(f"seq {record['seq']}: unknown phase {record['from']}->{record['to']}")
-            continue
-        if to not in ALLOWED[frm]:
-            out.append(
-                f"{record['run_id']} seq {record['seq']}: {frm.value}->{to.value} not allowed"
-            )
-        if frm != phase[errand]:
-            out.append(
-                f"{record['run_id']} seq {record['seq']}: from {frm.value}, "
-                f"but the errand was {phase[errand].value}"
-            )
-        phase[errand] = to
+    for _run, records in rec.run_records():
+        finished = {r["span_id"] for r in records if r["type"] == "node.end"}
+        interrupted = any(
+            r["type"] == "run.end" and r.get("outcome") == "RUN_INTERRUPTED" for r in records
+        )
+        before = dict(phase)
+        kept: dict[str, Phase] = {}
+        for record in records:
+            if record["type"] != "state.transition":
+                continue
+            errand = str(record.get("errand_id"))
+            try:
+                frm, to = Phase(record["from"]), Phase(record["to"])
+            except ValueError:
+                out.append(f"seq {record['seq']}: unknown phase {record['from']}->{record['to']}")
+                continue
+            if to not in ALLOWED[frm]:
+                out.append(
+                    f"{record['run_id']} seq {record['seq']}: {frm.value}->{to.value} not allowed"
+                )
+            if frm != phase[errand]:
+                out.append(
+                    f"{record['run_id']} seq {record['seq']}: from {frm.value}, "
+                    f"but the errand was {phase[errand].value}"
+                )
+            phase[errand] = to
+            if record.get("parent_span_id") in finished:
+                kept[errand] = to
+        if interrupted:
+            for errand in {str(r.get("errand_id")) for r in records}:
+                if errand in before or errand in phase:
+                    phase[errand] = kept.get(errand, before.get(errand, INITIAL_PHASE))
     return out
 
 

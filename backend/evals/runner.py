@@ -51,6 +51,7 @@ from evals.dsl import (
     Answer,
     Approve,
     ApproveConcurrently,
+    CheckNow,
     ClickSlot,
     Decline,
     ExpectBooking,
@@ -70,7 +71,9 @@ from evals.dsl import (
     ExpectTranscript,
     ExpectWorld,
     Post,
+    ReconcilerTick,
     RefreshHold,
+    Restart,
     Say,
     Scenario,
     Step,
@@ -90,6 +93,9 @@ OUT = EVALS / "out"
 # The unit tests that run scenarios point this elsewhere (tests/conftest.py), so parallel
 # workers never share backend/evals/out. make evals leaves it unset.
 TRACE_DIR_ENV = "ERRAND_EVAL_TRACE_DIR"
+# The tests that run a process scenario pin its API port to their worker's block
+# (tests/conftest.py worker_port); `make evals` leaves it unset and takes a free one.
+API_PORT_ENV = "ERRAND_EVAL_API_PORT"
 BASE_URL = "http://errand.test"
 
 PLANNERS: dict[str, Policy] = {
@@ -322,6 +328,12 @@ class Harness:
     async def op_log(self) -> list[dict[str, Any]]:
         return [row_to_json(r) for r in await self.inspector.op_log()]
 
+    async def reconcile(self) -> list[str]:
+        """The reconciler's re-check now (the dev drawer's "Reconcile now"): the ids of
+        the recovery runs it started, all ended when this returns."""
+        report = await self.app.state.reconciler.tick(wait=True)
+        return list(report.recovery_runs)
+
     async def records(self) -> invariants.Records:
         await self.manager.wait_idle()
         return invariants.load_records(self.root, await self.op_log())
@@ -366,6 +378,30 @@ async def harness(
         clock_mode,
     ) as h:
         yield h
+
+
+@asynccontextmanager
+async def scenario_harness(
+    scenario: Scenario, root: Path, planner: Policy, reader: Policy
+) -> AsyncIterator[Harness]:
+    """In process by default; against real processes for a scenario that crashes the API."""
+    if scenario.crash_at is None:
+        async with harness(root, scenario.world_config(), planner, reader=reader) as h:
+            yield h
+        return
+    if scenario.model != "scripted:reference":
+        raise ValueError(f"{scenario.id}: process scenarios run the reference planner")
+    from evals.process_harness import ProcessHarness
+
+    async with ProcessHarness(
+        root,
+        scenario.world_config(),
+        planner,
+        crash_at=scenario.crash_at,
+        reader_name=scenario.reader,
+        api_port=int(os.environ[API_PORT_ENV]) if os.environ.get(API_PORT_ENV) else None,
+    ) as ph:
+        yield ph
 
 
 # ---------------------------------------------------------------- scenarios
@@ -431,9 +467,16 @@ def describe(step: Step) -> str | None:
     if isinstance(step, Post):
         mode = "concurrently" if step.post.concurrent else "in sequence"
         return f"same client_msg_id x{step.post.times} {mode}: 1 run, 1 message, 1 run.start"
+    if isinstance(step, Restart):
+        return "API killed at its fault point, restarted; the reconciler ran before serving"
+    if isinstance(step, ReconcilerTick):
+        return "reconciler tick"
+    if isinstance(step, CheckNow):
+        return "Check now"
     if isinstance(step, Approve):
         a = step.approve
         what = "approve" + (" (stale fingerprint)" if a.fingerprint == "stale" else "")
+        what += " (the API dies under it)" if a.expect_crash else ""
         what += " (original card)" if a.card == "original" else ""
         if a.expect_status is not None:
             what += f" -> {a.expect_status}" + (f" {a.expect_error}" if a.expect_error else "")
@@ -678,6 +721,15 @@ class Runner:
         await self._before_run()
         response = await self.h.decide(card["approval_id"], decision, fingerprint)
         body = response.json()
+        crashed = response.status_code == 599
+        expects_crash = isinstance(step, Approve) and step.approve.expect_crash
+        self.expect(
+            crashed == expects_crash,
+            f"{decision}: the API {'died' if crashed else 'did not die'} under the request, "
+            f"{'unexpectedly' if crashed else 'but the step expects it to'}",
+        )
+        if crashed:
+            return
         if want is not None:
             self.expect(
                 response.status_code == want,
@@ -718,6 +770,29 @@ class Runner:
         response = await self.h.action(kind, payload)
         if response.status_code not in (200, 202):
             raise AssertionError(f"{kind}: {response.status_code} {response.text}")
+        await self._view(response.json()["run_id"])
+
+    async def _restart(self) -> None:
+        """The API died at the scenario's fault point; start it again and read what the
+        reconciler did before it served. The runs it ended and started are the user's view."""
+        h = self.h
+        restart = getattr(h, "restart", None)
+        if restart is None:
+            raise AssertionError("restart needs crash_at: the scenario runs against processes")
+        code = await restart()
+        self.expect(code == 1, f"the API exited with {code}, expected 1 (the fault point)")
+        seen = {v.run_id for v in self.runs}
+        convo = await h.conversation()
+        for run in convo["runs"]:
+            if run["run_id"] not in seen and run["trigger"] == "recovery":
+                await self._view(run["run_id"])
+
+    async def _check_now(self) -> None:
+        await self._flush_acks()
+        await self._before_run()
+        response = await self.h.action("check_now", {})
+        if response.status_code not in (200, 202):
+            raise AssertionError(f"check_now: {response.status_code} {response.text}")
         await self._view(response.json()["run_id"])
 
     async def _until(self, step: Until) -> None:
@@ -903,6 +978,13 @@ class Runner:
             await self.h.inspector.advance(parse_duration(step.advance).total_seconds())
         elif isinstance(step, SwitchConversation):
             await self.h.switch(step.conversation)
+        elif isinstance(step, Restart):
+            await self._restart()
+        elif isinstance(step, ReconcilerTick):
+            for run_id in await self.h.reconcile():
+                await self._view(run_id)
+        elif isinstance(step, CheckNow):
+            await self._check_now()
         elif isinstance(step, ExpectCard):
             await self._expect_card(step)
         elif isinstance(step, ExpectTranscript):
@@ -1252,7 +1334,7 @@ async def run_scenario(
     failures: list[str] = []
     planner = policy or PLANNERS[scenario.model]
     reader = reader_doubles.READERS[scenario.reader]
-    async with harness(root, scenario.world_config(), planner, reader=reader) as h:
+    async with scenario_harness(scenario, root, planner, reader) as h:
         runner = Runner(scenario, h, planner)
         try:
             await runner.run()

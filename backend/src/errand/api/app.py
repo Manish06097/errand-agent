@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ from errand import faults
 from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
+from errand.api import dev_reconcile
 from errand.api.reconciler import Reconciler
 from errand.api.runs import (
     Answer,
@@ -274,7 +276,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings = AgentSettings()
-        faults.configure()  # an unknown ERRAND_FAULT point refuses to start (9.9)
+        faults.configure()  # an unknown fault point refuses to start (9.9)
         model_settings = config.model_settings or ModelSettings()
         limits = config.limits or LimitSettings()
         data_dir = config.data_dir or PathSettings().data_dir
@@ -353,6 +355,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 await manager.shutdown()
 
     app = FastAPI(title=SERVICE, lifespan=lifespan)
+    if os.environ.get("ERRAND_DEV") == "1":
+        dev_reconcile.register(app)
 
     @app.middleware("http")
     async def agent_clock_header(

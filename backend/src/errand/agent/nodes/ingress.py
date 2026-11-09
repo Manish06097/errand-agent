@@ -69,11 +69,18 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
             "system_notes": [],
         }
         live = await live_approval(deps)
-        if errand.phase is Phase.AWAITING_APPROVAL and (
-            live is None or live.approval_id != errand.approval_id
+        inbound = state.inbound
+        rechecks = isinstance(inbound, Recover) or (
+            isinstance(inbound, UiAction) and inbound.kind in RECHECK_ACTIONS
+        )
+        # A re-check is about an intent, not a card: the approval it consumed is not live
+        # by design, and the errand must not be moved off the phase verify starts from.
+        if (
+            not rechecks
+            and errand.phase is Phase.AWAITING_APPROVAL
+            and (live is None or live.approval_id != errand.approval_id)
         ):
             errand = await _off_dead_card(deps, errand)
-        inbound = state.inbound
         if isinstance(inbound, UserMessage):
             if inbound.confirm_hint and live is not None and live.status == "pending":
                 update["result"] = ConfirmHint(approval_id=live.approval_id)
@@ -82,6 +89,14 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
         ):
             errand, update["result"] = await recovery.reopen(deps, errand, inbound)
         elif isinstance(inbound, UiAction):
+            if inbound.payload.get("recovery") == "grant_not_executed":
+                # The reconciler expired this grant before the run started (a restart);
+                # the trace of the run that tells the user records it (INV-15).
+                gone = inbound.payload.get("approval_id", "")
+                deps.tracer.emit("approval.expired", approval_id=gone, reason="grant_not_executed")
+                deps.tracer.emit(
+                    "card.update", approval_id=gone, status="expired", reason="grant_not_executed"
+                )
             if inbound.kind not in M4_ACTIONS:
                 update["plan_result"] = Failure(reason=f"ui action {inbound.kind} is not built yet")
         elif isinstance(inbound, ApprovalGranted):

@@ -260,6 +260,14 @@ class _Respond:
                         "I held the slot again; please check the new card.",
                     )
                 )
+            elif result.replaced_reason == "grant_not_executed":
+                bodies.append(
+                    notice(
+                        RunOutcome.AWAITING_APPROVAL,
+                        "I restarted before I could act on your approval, so nothing was "
+                        "booked. Here is a fresh quote.",
+                    )
+                )
             elif result.replaced_reason == "material_changed":
                 bodies.append(
                     notice(
