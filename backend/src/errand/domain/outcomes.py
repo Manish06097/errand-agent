@@ -142,6 +142,18 @@ class Failure(_Result):
     reason: str
 
 
+class Refused(_Result):
+    """The model refused (stop_reason refusal): MODEL_REFUSED, no retry, no fallback."""
+
+    kind: Literal["refused"] = "refused"
+
+
+class Truncated(_Result):
+    """stop_reason max_tokens with no reprompt left, or twice: MODEL_NO_PROGRESS."""
+
+    kind: Literal["truncated"] = "truncated"
+
+
 PlanResult = Annotated[
     Reply
     | Ask
@@ -151,6 +163,8 @@ PlanResult = Annotated[
     | Limit
     | ToolDown
     | ModelDown
+    | Refused
+    | Truncated
     | TooLarge
     | Failure
     | OutOfCoverage

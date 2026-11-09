@@ -68,3 +68,22 @@ def tool_unexpected() -> OutcomeNotice:
         ),
         actions=[NoticeAction(kind="retry", label="Retry")],
     )
+
+
+def model_refused() -> OutcomeNotice:
+    return OutcomeNotice(
+        outcome=RunOutcome.MODEL_REFUSED,
+        text="I can't help with that request. Nothing was booked.",
+        actions=[],
+    )
+
+
+def model_truncated() -> OutcomeNotice:
+    return OutcomeNotice(
+        outcome=RunOutcome.MODEL_NO_PROGRESS,
+        text=(
+            "My answer kept getting cut off, so I stopped. Nothing was booked. "
+            "Try asking again, or in smaller steps."
+        ),
+        actions=[NoticeAction(kind="retry", label="Try again")],
+    )

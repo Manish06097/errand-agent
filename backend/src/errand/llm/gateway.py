@@ -449,6 +449,10 @@ class LoopSession:
         self._appended: list[BaseMessage] = []
         self._pending_tool_ids: set[str] = set()
         self._calls = 0
+        # What the last call() started from, so retry_last() can put it back.
+        self._before: (
+            tuple[dict[str, Any], list[BaseMessage], dict[str, Any] | None, Usage | None] | None
+        ) = None
         # Set when a response cannot be carried forward byte for byte; the next call raises.
         self._broken: str | None = None
 
@@ -482,6 +486,7 @@ class LoopSession:
             raise ValueError("the request must end with a user turn; assistant prefill is not used")
         canonical = self._gateway.canonical(self._messages)
         self._check_prefix(canonical)
+        self._before = (canonical, list(self._appended), self._expected, self._prev_usage)
         turn = await self._gateway.send(
             self._messages,
             canonical,
@@ -497,6 +502,25 @@ class LoopSession:
         self._appended = []
         self._pending_tool_ids = {str(tc["id"]) for tc in turn.message.tool_calls}
         return turn
+
+    async def retry_last(self, *, on_token: TokenCallback | None = None) -> ModelTurn:
+        """Send the previous request again, unchanged, as a new model call.
+
+        The only exception to the append rule. It is for a response that was cut off
+        (`max_tokens`): that response is dropped, never sent back, because a truncated
+        tool_use or thinking block is not valid input. The request bytes must equal the
+        previous request's, or this raises.
+        """
+        if self._before is None or not isinstance(self._messages[-1], AIMessage):
+            raise ValueError("retry_last needs a completed call to repeat")
+        canonical, appended, expected, prev_usage = self._before
+        self._messages.pop()
+        self._appended, self._expected, self._prev_usage = appended, expected, prev_usage
+        self._pending_tool_ids = set()
+        self._broken = None
+        if self._gateway.canonical(self._messages) != canonical:
+            raise AssertionError("retry_last must re-send the previous request byte for byte")
+        return await self.call(on_token=on_token)
 
     def _snapshot(self, canonical: Mapping[str, Any], response: AIMessage) -> dict[str, Any]:
         """The previous request plus `response`, in the form the next request must start with.

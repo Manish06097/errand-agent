@@ -43,10 +43,12 @@ from errand.domain.outcomes import (
     PendingCheck,
     PlanResult,
     Proposal,
+    Refused,
     Reply,
     RunOutcome,
     TooLarge,
     ToolDown,
+    Truncated,
 )
 from errand.domain.windows import slot_label
 
@@ -220,6 +222,10 @@ def render(
         )
     if isinstance(result, ModelDown):
         return RunOutcome.MODEL_UNAVAILABLE, templates_limits.model_unavailable()
+    if isinstance(result, Refused):
+        return RunOutcome.MODEL_REFUSED, templates_limits.model_refused()
+    if isinstance(result, Truncated):
+        return RunOutcome.MODEL_NO_PROGRESS, templates_limits.model_truncated()
     if isinstance(result, ToolDown) and result.error_class == "ToolUnexpected":
         return RunOutcome.TOOL_UNAVAILABLE, templates_limits.tool_unexpected()
     if isinstance(result, Limit):
