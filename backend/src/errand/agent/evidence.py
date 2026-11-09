@@ -201,6 +201,17 @@ def _readings(hour: int, minute: int, meridiem: str | None, twenty_four: bool = 
     return {time(hour % 12, minute), time(hour % 12 + 12, minute)}
 
 
+# ---------------------------------------------------------------- day parts
+
+_DAY_PART_WORDS = re.compile(r"\b(morning|afternoon|evening)s?\b|\bany ?time\b")
+
+
+def day_parts(span: str) -> set[str]:
+    """The parts of day the span names: morning(s), afternoon(s), evening(s), and "any"
+    for "any time" / "anytime"."""
+    return {(m.group(1) or "any") for m in _DAY_PART_WORDS.finditer(span)}
+
+
 # ---------------------------------------------------------------- words
 
 _STOP_WORDS = (

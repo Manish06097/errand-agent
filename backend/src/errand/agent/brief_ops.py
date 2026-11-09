@@ -87,8 +87,10 @@ def check_evidence(
     so "under" (a substring of "under ₹1,500") cannot back a budget of 5,000:
     - budget: a number parses out of the spans and equals the value; "none" needs a
       no-limit phrase;
-    - window: the phrase is in the spans, and `not_before` / `not_after` each parse to
-      the time given (a bare "5" reads as 05:00 or 17:00, either may be the value);
+    - window: the phrase is in the spans, a `part_of_day` the patch sets has a day-part
+      word in them (morning, afternoon, evening, or "any time" for "any"), and
+      `not_before` / `not_after` each parse to the time given (a bare "5" reads as 05:00
+      or 17:00, either may be the value);
     - area, service: an alias of that enum value is in the spans;
     - issue: every content word of the value is in the spans.
     A clear (`value` None) needs the span only. `more_quotes` are further spans for the
@@ -122,6 +124,10 @@ def _value_problem(name: BriefField, value: object, span: str) -> str | None:
     if name is F.WINDOW and isinstance(value, TimeWindowExpr):
         if normalise(value.phrase) not in span:
             return f"window: {span!r} does not contain the phrase {value.phrase!r}"
+        # A day part the patch sets needs its own word; one carried over from the old
+        # window (carry_over) is not in the patch, so it is not checked here.
+        if value.part_of_day is not None and value.part_of_day not in evidence.day_parts(span):
+            return f"window: {span!r} does not say {value.part_of_day}; a day part needs its words"
         times = evidence.parse_times(span)
         for label, wanted in (("not_before", value.not_before), ("not_after", value.not_after)):
             if wanted is not None and wanted not in times:
