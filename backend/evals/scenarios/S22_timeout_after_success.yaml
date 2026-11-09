@@ -2,6 +2,7 @@ id: S22_timeout_after_success
 title: Brief example 1; book commits and then times out; the first status check finds it confirmed, nothing is re-sent, one booking
 category: [booking_timeout, booking_correctness]
 seed: 22
+replay: {cassette: S22}
 world:
   book: {forced: [timeout_booked]}
 user:
