@@ -170,6 +170,8 @@ class MessagesRepo:
     async def latest_assistant(self, conversation_id: str) -> Message | None:
         async with self._conn.execute(
             f"SELECT {_COLUMNS} FROM messages WHERE conversation_id = ? AND role = 'assistant' "
+            # memory chips are lines in the transcript, never the card a typed grant targets
+            "AND json_extract(body_json, '$.type') NOT LIKE 'memory\\_%' ESCAPE '\\' "
             "ORDER BY created_at DESC, rowid DESC LIMIT 1",
             (conversation_id,),
         ) as cur:

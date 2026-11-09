@@ -51,7 +51,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from errand import faults
-from errand.agent.brief_ops import missing
+from errand.agent.brief_ops import INVALIDATES, missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
 from errand.api import dev_routes, web_routes
@@ -83,10 +83,12 @@ from errand.config import (
     ReconcilerSettings,
     TraceSettings,
 )
+from errand.domain.brief import BriefField
 from errand.domain.messages import MessageBody
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
 from errand.memory.hmac_key import load_or_create
+from errand.memory.registry import PREFILL_FIELD
 from errand.memory.scrub import scrub_brief
 from errand.memory.service import MemoryService
 from errand.store.agent_db import AgentDB
@@ -286,6 +288,16 @@ async def _highest(db: AgentDB, table: Literal["conversations", "runs"]) -> int:
     return int(row[0]) if row and row[0] is not None else 0
 
 
+def card_invalidating_keys() -> frozenset[str]:
+    """Memory keys whose change always discards a pending card, read from the brief's
+    INVALIDATES table: the key's brief field says `approval` in its `always` set."""
+    return frozenset(
+        key
+        for key, name in PREFILL_FIELD.items()
+        if "approval" in INVALIDATES[BriefField(name)].always
+    )
+
+
 def create_app(config: AppConfig | None = None) -> FastAPI:
     config = config or AppConfig()
 
@@ -365,6 +377,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 db,
                 lambda: to_ms(manager.clock.now()),
                 load_or_create(data_dir / MemorySettings().hmac_key_file),
+                card_keys=card_invalidating_keys(),
             )
             manager.memory = app.state.memory
             reconciler = Reconciler(manager, config.reconciler or ReconcilerSettings())

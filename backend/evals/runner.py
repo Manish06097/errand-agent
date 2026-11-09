@@ -45,7 +45,7 @@ from errand.tools.inspector import InProcessInspector, row_to_json
 from errand.tools.runtime import in_process
 from errand.world.engine import WorldHost
 from errand.world.scenario import ScenarioConfig, parse_duration
-from evals import invariants
+from evals import invariants, memory_steps
 from evals.dsl import (
     Advance,
     Answer,
@@ -93,6 +93,7 @@ from evals.dsl import (
     TypeConfirm,
     Until,
 )
+from evals.policies import context as context_policies
 from evals.policies import hostile, reference
 from evals.policies import reader as reader_doubles
 from evals.replay import ReplayRun
@@ -122,6 +123,8 @@ PLANNERS: dict[str, Policy] = {
     "hostile:no_evidence": hostile.no_evidence_policy,
     "hostile:no_day_part": hostile.no_day_part_policy,
     "hostile:reask": hostile.reask_policy,
+    "scripted:memory": context_policies.memory_policy,
+    "scripted:growing": context_policies.growing_policy,
 }
 SIDE_EFFECT_OPS = ("hold_slot", "book", "cancel", "reschedule")
 
@@ -195,7 +198,14 @@ class Harness:
         clock_mode: ClockMode = "sim",
         model_settings: ModelSettings | None = None,
         booking: BookingSettings | None = None,
+        memory_seed: str | None = None,
+        hooks: list[memory_steps.CallHook] | None = None,
     ) -> None:
+        self.memory_seed = memory_seed
+        self.hooks = hooks or []
+        self.inactive_pairs: list[dict[str, Any]] = []
+        self._fired: set[int] = set()
+        self.runs_started = 0
         self.model_settings = model_settings or ModelSettings(model_mode="scripted")
         self.clock_mode = clock_mode
         # The provider's dedupe is declared once, in the scenario's world block; the agent's
@@ -221,7 +231,44 @@ class Harness:
         self._msg_seq = 0
         self._action_seq = 0
 
+    async def _seed_memory(self) -> None:
+        """Build the scenario's seed into the data directory before the app opens it."""
+        from errand.seed.memory_demo import build_demo
+        from errand.seed.memory_rich import build_rich
+
+        if self.memory_seed == "memory_demo":
+            seeded = await build_demo(self.root)
+        else:
+            seeded, _ = await build_rich(self.root)
+        async with seeded.db.session() as repos:
+            rows = await repos.memories.for_user("u_demo")
+        self.inactive_pairs = [
+            {"key": r.key, "value": r.value, "status": r.status}
+            for r in rows
+            if r.status in ("pending_confirmation", "rejected") and r.value is not None
+        ]
+        await seeded.db.close()
+
+    async def _before_model_call(self, n: int) -> None:
+        """Harness-side triggers (`hooks`): a real DELETE just before the Nth model call."""
+        for i, hook in enumerate(self.hooks):
+            if hook.before_call != n or i in self._fired:
+                continue
+            self._fired.add(i)
+            ref = hook.forget
+            memory_id = memory_steps.find_memory_id(self.root, ref)
+            response = await self.client.delete(
+                f"/api/memory/{memory_id}?client_action_id={self.next_action_id()}"
+            )
+            response.raise_for_status()
+
     async def __aenter__(self) -> Harness:
+        if self.memory_seed:
+            await self._seed_memory()
+        if self.hooks:
+            self.model_factory = context_policies.hooked_factory(
+                self.policy, self._before_model_call
+            )
         self.host.load(self.world_config, self.clock_mode)
         self._stack.callback(self.host.close)
         self.app = create_app(
@@ -230,7 +277,7 @@ class Harness:
                 world=in_process(self.host),
                 model_factory=self.model_factory,
                 reader_factory=self.reader_factory,
-                ids=SequentialIds(),
+                ids=SequentialIds(conversations=1 if self.memory_seed else 0),
                 model_settings=self.model_settings,
                 limits=self.limits,
                 tz=IST,
@@ -243,6 +290,8 @@ class Harness:
         self.client = await self._stack.enter_async_context(
             httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url=BASE_URL)
         )
+        if self.memory_seed == "memory_rich_v1":
+            self.conversations["main"] = "c_0001"  # the seed's own conversation (its history)
         await self.switch("main")
         return self
 
@@ -367,6 +416,16 @@ class Harness:
             "max_same_key_retries": self.booking.max_same_key_retries,
             "provider_dedupes_keys": self.booking.provider_dedupes_keys,
         }
+        if self.memory_seed:
+            rec.notes["memory_inactive_pairs"] = self.inactive_pairs
+            if self.memory_seed == "memory_rich_v1":
+                rec.notes["memory_seed"] = self.memory_seed
+                fixture = EVALS / "fixtures" / "memory_rich_v1.json"
+                manifest = json.loads(fixture.read_text(encoding="utf-8"))
+                rec.notes["memory_canaries"] = [
+                    {"text": text, "kind": info["kind"]}
+                    for text, info in manifest["canaries"].items()
+                ]
         return rec
 
     def agent_db_approval_statuses(self) -> list[str]:
@@ -410,6 +469,8 @@ async def harness(
     clock_mode: ClockMode = "sim",
     model_settings: ModelSettings | None = None,
     booking: BookingSettings | None = None,
+    memory_seed: str | None = None,
+    hooks: list[memory_steps.CallHook] | None = None,
 ) -> AsyncIterator[Harness]:
     async with Harness(
         root,
@@ -423,6 +484,8 @@ async def harness(
         clock_mode,
         model_settings,
         booking,
+        memory_seed,
+        hooks,
     ) as h:
         yield h
 
@@ -433,7 +496,15 @@ async def scenario_harness(
 ) -> AsyncIterator[Harness]:
     """In process by default; against real processes for a scenario that crashes the API."""
     if scenario.crash_at is None:
-        async with harness(root, scenario.world_config(), planner, reader=reader, **extra) as h:
+        async with harness(
+            root,
+            scenario.world_config(),
+            planner,
+            reader=reader,
+            memory_seed=scenario.memory_seed,
+            hooks=scenario.hooks,
+            **extra,
+        ) as h:
             yield h
         return
     if scenario.model != "scripted:reference":
@@ -632,7 +703,7 @@ def describe(step: Step, mode: Dedupe = "on") -> str | None:
         return "quick replies " + ", ".join(step.expect_options)
     if isinstance(step, ExpectApprovals):
         return "approvals " + ", ".join(step.expect_approvals)
-    return None
+    return memory_steps.describe(step)
 
 
 def _describe_reader(step: ExpectReader) -> str:
@@ -686,6 +757,8 @@ class Runner:
         # The conversation's input steps so far, for a twin to replay.
         self.inputs: list[Step] = []
         self.twin: TwinResult | None = None
+        # len(self.runs) at each forget, for the "since the forget" context checks (N2B)
+        self.forgets: list[int] = []
 
     @property
     def client(self) -> ClientState:
@@ -1267,6 +1340,8 @@ class Runner:
             self.expect(got == step.expect_options, f"{self.last.run_id}: quick replies {got}")
         elif isinstance(step, ExpectApprovals):
             await self._expect_approvals(step)
+        elif isinstance(step, memory_steps.MEMORY_STEPS):
+            await memory_steps.run(self, step)
         else:  # pragma: no cover - the DSL admits nothing else
             raise AssertionError(f"no runner for {step!r}")
 

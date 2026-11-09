@@ -39,6 +39,7 @@ from errand.agent.validation import Rejected, check_book_proposal, nearby_bookin
 from errand.approvals import service
 from errand.approvals.fingerprint import fingerprint
 from errand.clock import from_ms, to_ms
+from errand.domain.brief import Brief
 from errand.domain.errand import Errand, Phase
 from errand.domain.inbound import UiAction, UserMessage
 from errand.domain.material import BookMaterial, ist_seconds
@@ -54,6 +55,7 @@ from errand.domain.outcomes import (
 )
 from errand.domain.slots import HoldRef, SlotHandle
 from errand.domain.windows import slot_label
+from errand.memory.briefjson import FACT_FIELDS
 from errand.store.repos.approvals import ApprovalRow
 from errand.store.repos.holds import HoldRow, hold_record_id_for
 from errand.tools.errors import ToolError
@@ -62,6 +64,8 @@ from errand.world.contracts import BookingItem, HoldSlotOut, ListBookingsOut, ho
 
 REPLANS_PER_RUN = 1
 _REFUSED_TEXT = {
+    "memory_changed": "A saved preference this request used was just changed, so I didn't "
+    "prepare a card from it. Tell me again what you want and I'll start from there.",
     "no_shortlist": "That option list is out of date, so I didn't hold anything. "
     "Ask me to search again.",
     "stale_shortlist": "That option list is out of date, so I didn't hold anything. "
@@ -106,6 +110,16 @@ async def prepare_proposal(state: ThreadState, runtime: Runtime[RunDeps]) -> dic
 
 def route_after_prepare(state: ThreadState) -> str:
     return "plan" if isinstance(state.result, Replan) else "respond"
+
+
+def memory_ids_of(brief: Brief) -> list[str]:
+    """The memories behind the brief's fields: the card's material depends on them."""
+    ids = {
+        fact.prov.memory_id
+        for name in FACT_FIELDS
+        if (fact := getattr(brief, name)) is not None and fact.prov.memory_id is not None
+    }
+    return sorted(ids)
 
 
 class _Preparer:
@@ -310,7 +324,13 @@ class _Preparer:
             consumed_at=None,
             expires_at=to_ms(expires),
         )
-        created = await service.create(deps.db, row, deps.approval_policy)
+        memory_ids = memory_ids_of(self.errand.brief)
+        created = await service.create(deps.db, row, deps.approval_policy, memory_ids)
+        if created.stale_memory:
+            # A memory behind the brief was forgotten or corrected a moment ago: no card
+            # from it (decision 11). The next run clears the field and asks again.
+            await self._not_approvable(was, "memory_changed")
+            return ProposalRefused(reason="memory_changed", text=_REFUSED_TEXT["memory_changed"])
         emit_swept(deps.tracer, created.swept)
         for old in created.superseded:
             deps.tracer.emit(

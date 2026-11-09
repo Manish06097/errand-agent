@@ -137,7 +137,12 @@ class MemoryService:
         hmac_key: bytes,
         *,
         value_check: ValueCheck = default_value_check,
+        card_keys: frozenset[str] = frozenset({"home_area"}),
     ) -> None:
+        # Memory keys whose change invalidates a pending card that depends on the row. The
+        # wiring derives them from the brief's INVALIDATES table (data in, no import of the
+        # agent): a changed area discards the card, a changed time bound does not.
+        self._card_keys = card_keys
         self._db = db
         self._now = now_ms
         self._key = hmac_key
@@ -358,6 +363,9 @@ class MemoryService:
         await self._reject_pending(
             mem, user_id, spec, scope, value, by=new_id, actor=actor, now=now
         )
+        cards = await self._invalidate_cards(
+            repos, [r for r in replaced if r.key in self._card_keys]
+        )
         await mem.bump_epoch(user_id)
         stored = await mem.get(new_id)
         assert stored is not None
@@ -365,7 +373,19 @@ class MemoryService:
             "memory": view(stored),
             "unchanged": False,
             "replaced": [view(r) for r in replaced],
+            "cards_invalidated": cards,
         }
+
+    async def _invalidate_cards(self, repos: Repos, rows: Sequence[MemoryRow]) -> list[str]:
+        """Pending cards that list one of `rows` become `invalidated` (request_changed), in
+        the caller's transaction. A granted card or an open intent is left alone (decision
+        11): the user approved the provider, slot and price, none of which is a memory value."""
+        done: list[str] = []
+        for r in rows:
+            for approval_id in await repos.approvals.pending_listing(r.memory_id):
+                if await repos.approvals.invalidate(approval_id, "request_changed"):
+                    done.append(approval_id)
+        return done
 
     async def _refuse_contradiction(
         self, mem: MemoriesRepo, user_id: str, spec: KeySpec, scope: str, value: Any
@@ -609,6 +629,9 @@ class MemoryService:
                     r.memory_id, "redacted_span", sorted(set(span_hashes.get(r.memory_id, [])))
                 )
                 await mem.blank_client_responses(r.memory_id)
+            cards = await self._invalidate_cards(
+                repos, [r for r in chain if r.key in self._card_keys]
+            )
             await mem.bump_epoch(user_id)
             for r in chain:  # last: the value and the quote leave the row
                 await mem.null_value(r.memory_id, _bare_evidence(r.evidence))
@@ -629,6 +652,7 @@ class MemoryService:
                 "earlier_values": len(chain) - 1,
                 "messages_redacted": cleared,
                 "briefs_cleared": archived,
+                "cards_invalidated": cards,
                 "memory": view((await mem.get(memory_id)) or row),
             }
 
