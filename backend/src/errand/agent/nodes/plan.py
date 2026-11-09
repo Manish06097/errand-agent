@@ -208,6 +208,8 @@ class PlannerLoop:
         self.card_changes: list[CardChange] = []
         # (tool, rendered result) of this run, for a rebuild or a compaction.
         self.results: list[tuple[str, str]] = []
+        # The size of the last request a rebuild produced, for an honest Exhausted.
+        self._last_estimate = 0
         self.memory_tools = MemoryTools(self)
 
     def reject(self, tool: str, reason: str, **detail: Any) -> None:
@@ -242,6 +244,7 @@ class PlannerLoop:
         compacted = False
         retry = False
         iterations = 0
+        stale_rebuilds = 0
         probe = self._epoch_probe if deps.memory is not None else None
         while iterations < deps.limits.loop_iterations:
             if self._past_deadline():
@@ -262,10 +265,14 @@ class PlannerLoop:
                 deps.tracer.emit(
                     "guard.context_stale", detail={"built": stale.built, "current": stale.current}
                 )
-                rebuilt = await self._rebuild(compact=False)
+                stale_rebuilds += 1
+                rebuilt = await self._rebuild(compact=False) if stale_rebuilds <= 2 else None
                 if rebuilt is None:
+                    # an epoch that keeps moving: two rebuilds a run are plenty
                     return Exhausted(
-                        section="request", estimated=0, cap=deps.limits.context_budget_tokens
+                        section="request",
+                        estimated=self._last_estimate,
+                        cap=deps.limits.context_budget_tokens,
                     )
                 session = deps.llm.session(
                     system=rebuilt.system, messages=rebuilt.messages, manifest=rebuilt.manifest
@@ -440,6 +447,7 @@ class PlannerLoop:
             )
         if built is None or built.over_cap is not None:
             return None
+        self._last_estimate = request_estimate(built, tools_json)
         return built
 
     def _not_executed(self, calls: list[Any]) -> None:

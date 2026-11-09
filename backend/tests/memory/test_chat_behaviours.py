@@ -19,7 +19,8 @@ from typing import Any
 import pytest
 
 from evals.dsl import Scenario
-from evals.runner import ScenarioResult, run_scenario
+from evals.runner import ScenarioResult, harness, run_scenario
+from tests.api.support import world
 
 BOOK = "Book a plumber for my kitchen tap this week, mornings only, under ₹1,500."
 
@@ -131,6 +132,31 @@ async def test_the_offer_chip_refuses_after_a_forget_redacted_its_span(tmp_path:
             {"say": BOOK + " (save my budget)"},
             {"expect_chip": {"type": "memory_offer", "count": 1}},
             {"forget_memory": {"key": "budget_ceiling", "scope": "service:electrician"}},
+            {
+                "memory_action": {
+                    "kind": "save_memory",
+                    "chip": "memory_offer",
+                    "expect_status": 409,
+                }
+            },
+            {"expect_memory": {"key": "budget_ceiling", "scope": "service:plumber", "count": 0}},
+        ],
+        memory_seed="memory_demo",
+    )
+    await passes(tmp_path, sc)
+
+
+async def test_the_offer_chip_refuses_after_a_forget_shifted_the_words_before_its_span(
+    tmp_path: Path,
+) -> None:
+    """Forgetting the home area overwrites "Indiranagar" earlier in the same message; the
+    chip's offsets would now read other words, so the click is refused, not guessed."""
+    sc = scenario(
+        "chat_offer_shifted",
+        [
+            {"say": BOOK.replace("a plumber", "a plumber in Indiranagar") + " (save my budget)"},
+            {"expect_chip": {"type": "memory_offer", "count": 1}},
+            {"forget_memory": {"key": "home_area"}},
             {
                 "memory_action": {
                     "kind": "save_memory",
@@ -282,3 +308,47 @@ async def test_a_card_cannot_be_created_from_a_memory_that_is_no_longer_eligible
         assert not refused.created and refused.stale_memory == ("m-01",)
         async with db.session() as repos:
             assert await repos.approvals.get("ap_2") is None
+
+
+async def test_an_epoch_that_keeps_moving_ends_in_context_exhausted_after_two_rebuilds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from errand.memory.service import MemoryService
+
+    calls = {"n": 0}
+
+    async def moving(self: MemoryService, user_id: str) -> int:
+        calls["n"] += 1
+        return 1000 + calls["n"]
+
+    monkeypatch.setattr(MemoryService, "epoch", moving)
+    async with harness(tmp_path, world(), memory_seed="memory_demo") as h:
+        view = await h.say(BOOK)
+        rec = await h.records()
+    assert view.outcome == "CONTEXT_EXHAUSTED"
+    stale = [r for r in rec.all_records() if r["type"] == "guard.context_stale"]
+    assert len(stale) == 3  # the first send and two rebuilds; the third stale ends the run
+    assert calls["n"] < 20
+
+
+async def test_a_forget_leaves_a_granted_but_not_consumed_approval_alone(tmp_path: Path) -> None:
+    """Decision 11: the user approved provider, slot and price, none of which is a memory
+    value. The grant is written without the resume row, so no run consumes it meanwhile."""
+    async with harness(tmp_path, world(), memory_seed="memory_demo") as h:
+        await h.say(BOOK)
+        db = h.app.state.manager.db
+        async with db.transaction() as repos:
+            (card,) = await repos.approvals.list_for_conversation(h.conversation_id)
+            assert await repos.approvals.grant(
+                card.approval_id, fingerprint=card.fingerprint, via="button",
+                message_id=None, now_ms=card.requested_at + 1,
+            )  # fmt: skip
+        listed = (await h.client.get("/api/memory")).json()["preferences"]
+        memory_id = next(r["memory_id"] for r in listed if r["key"] == "home_area")
+        done = await h.client.delete(f"/api/memory/{memory_id}", params={"client_action_id": "d1"})
+        assert done.status_code == 200 and done.json()["cards_invalidated"] == []
+        async with db.session() as repos:
+            (after,) = await repos.approvals.list_for_conversation(h.conversation_id)
+        assert (after.status, after.consumed_by_intent) == ("granted", None)
+        assert after.fingerprint == card.fingerprint and after.material_json == card.material_json
+        assert "ndiranagar" not in after.card_json.lower()  # the chip text is still scrubbed

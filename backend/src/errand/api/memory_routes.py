@@ -249,7 +249,11 @@ async def _value_of_chip(db: Any, chip: dict[str, Any]) -> Any | None:
     """Re-read the user's span and parse it; None if a forget redacted it meanwhile."""
     async with db.session() as repos:
         source = await repos.messages.get(chip["source_message_id"])
+        redactions = await repos.memories.redactions_for_message(chip["source_message_id"])
     text = source.body.get("text") if source is not None else None
     if not isinstance(text, str) or chip["end"] > len(text):
+        return None
+    # A forget that overwrote an earlier span moved the words, so the offsets read other text.
+    if any(r.kind == "forgotten" and r.start < chip["end"] for r in redactions):
         return None
     return value_from_span(chip["key"], text[chip["start"] : chip["end"]])
