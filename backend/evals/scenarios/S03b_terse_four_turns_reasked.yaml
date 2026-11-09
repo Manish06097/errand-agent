@@ -1,0 +1,31 @@
+id: S03b_terse_four_turns_reasked
+title: S03's conversation with a planner that asks again for a field the user already gave; the ask guard refuses each re-ask and the user is never asked twice
+category: [conversation, adversarial model]
+seed: 3
+model: hostile:reask
+user:
+  persona: terse
+  goal:
+    service: plumber
+    area: indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "need a plumber"
+    gives: [service]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [area, window, budget_max_inr]
+  - expect_trace: {guard.ask_rejected: 0}
+  - say: "indiranagar"
+    gives: [area]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [window, budget_max_inr]
+    with_options: true
+  - expect_trace: {guard.ask_rejected: 1}
+  - say: "this week mornings, 1500"
+    gives: [window, budget_max_inr]
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_trace: {guard.ask_rejected: 1}
+  - expect_world: {search_providers: 1}
+expect:
+  invariants: [default]

@@ -17,7 +17,7 @@ from errand.domain.errand import Errand, Phase
 from errand.domain.inbound import Inbound
 from errand.domain.outcomes import PlanResult, RunOutcome, StepResult
 
-__all__ = ["Errand", "Phase", "SystemNote", "ThreadState"]
+__all__ = ["CardChange", "Errand", "Phase", "SystemNote", "ThreadState"]
 
 
 class SystemNote(BaseModel):
@@ -27,6 +27,22 @@ class SystemNote(BaseModel):
 
     kind: Literal["hold_failed", "slot_taken", "slot_conflict", "over_budget"]
     text: str
+
+
+class CardChange(BaseModel):
+    """What a brief correction did to the approval card on screen, for the status line.
+
+    `invalidated`: the card is out of date (`request_changed`). `kept`: the conditional
+    UPDATE lost to the booking path (the row was already consumed or otherwise closed), so
+    the card stands and `status` says in what state it was found.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    approval_id: str
+    outcome: Literal["invalidated", "kept"]
+    changed_fields: list[str] = Field(default_factory=list)
+    status: str | None = None
 
 
 class ThreadState(BaseModel):
@@ -46,3 +62,5 @@ class ThreadState(BaseModel):
     park: str | None = None
     counters: RunCounters = Field(default_factory=RunCounters)
     outcome: RunOutcome | None = None
+    # Corrections this run made to a live card (M8); respond's status line says why.
+    card_changes: list[CardChange] = Field(default_factory=list)
