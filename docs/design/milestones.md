@@ -16,9 +16,9 @@ Design gates are where I stop and sign off before the next milestone starts. Eac
 | Gate | When | What I decide |
 |---|---|---|
 | Gate 1 | before M0 (signed off 2026-11-06) | state model, graph, approval design, idempotency, persistence, eval strategy (architecture section 20) |
-| Gate 2 | after M10, before M11 (signed off 2026-11-09) | memory registry, forget semantics, relevance scoring, context budget split, seed data |
-| Gate 3 | after M13, before M14 | follow-up notify policy, replacement rules, card and notification UX |
-| Gate 4 | after M17 | design note, eval table, bugs write-up, trace excerpt, demo script before submission |
+| Gate 2 | after M10, before N2 (signed off 2026-11-09) | memory registry, forget semantics, relevance scoring, context budget split, seed data |
+| Gate 3 | inside N3, after bounded execution and before follow-up (one page) | follow-up notify policy, replacement rules, card and notification UX |
+| Gate 4 | after N4 | design note, eval table, bugs write-up, trace excerpt, demo script before submission |
 
 ---
 
@@ -103,15 +103,6 @@ Acceptance:
 - SWEEP: the reference policy over 200 seeds, all invariants green.
 - `errand-trace export --thread` exists, and the conversation-level trace of S22 is saved as the first draft of `docs/traces/timeout_after_success.jsonl`.
 
-## M6. Restart and recovery
-
-Scope: fault points (incl. `after_grant_commit` and `before_same_key_retry`), reconciler (startup scan before serving; non-terminal attempts, granted-unconsumed approvals and unfinished follow-up jobs; periodic scan of rows whose run lease expired; lease epochs and fenced attempt writes; original runs marked `recovered`; `ainvoke(None)` for other interrupted runs; `RUN_INTERRUPTED`), the critical section (Stop and general caps deferred once an intent exists; every exit with an open intent becomes `PENDING_VERIFICATION`), "Check now" and "Never mind" actions, user messages routed to `plan` during verification, subprocess restart harness against the HTTP world, recovery messages and notifications.
-
-Acceptance:
-- S36, S37, S38, S52, S53, S58, S59, S70, S72 pass; S24, S68 and S69 now complete through the reconciler.
-- INV-16 and INV-18 hold on every scenario.
-- A manual repro: kill the agent with `ERRAND_FAULT=after_world_book:exit` during a booking in the dev setup, restart, and see the verified message in the conversation.
-
 ## M7. Web app core and first live run
 
 Scope:
@@ -137,15 +128,6 @@ Acceptance:
 - The cap tests pass with the widened `update_brief`, and the eval notes show every scenario's maximum estimate under 12,000.
 - `timewin` unit tests cover "this week", "next week", weekday names, "mornings", "not before 10 a.m.", week boundaries and the IST offset.
 
-## M9. Cancel, reschedule and booking history
-
-Scope: `list_bookings` resolution with booking refs and ambiguity, the pinned-provider path (`get_provider` admits a history provider to the shortlist; budget from `budget_ceiling` or waived with last price on the card), `propose_cancel`, `propose_reschedule` with candidates from the booked provider's slots, cancel retry with the same key, reschedule conflict handling, verification through `list_bookings`, intent indexes per target. `propose_cancel` and `propose_reschedule` join the tool list inside S2's 3,800 tokens (the S2 cap test from M8 stays green; 11 tools project to about 3,660 with M11's three).
-
-Acceptance:
-- S07, S08 (without memory), S09, S26, S47, S48 pass.
-- The S2 cap test passes with both new tools bound.
-- INV-01 and INV-02 hold for cancel and reschedule.
-
 ## M10. Untrusted output and the quarantined reader
 
 Scope: reader with enum output, id checking, cache, `ReviewDigest`, `ProviderView`, sanitizer caps, zero-width stripping, injection badge in the UI, `review_signal` from unflagged star ratings only, `InjectionFollowerPolicy`.
@@ -156,60 +138,6 @@ Acceptance:
 
 **Gate 2** after this milestone: memory and context design.
 
-## M11. Memory
-
-Scope (gate 2 decisions 1 to 14 and 17; architecture 12 and 13.2):
-- Registry in code with the per-key table (12.1), store, migration 0004 (`memory_surface_hashes`, `approvals.memory_ids_json`, `users.memory_epoch`, `message_redactions.kind`), and the HMAC key file outside `agent.sqlite`.
-- Explicit writes: `remember(key, scope, value, evidence)` with no `claim` argument, value-bound evidence, the standing-preference cue table with key-specific cues and the one-off veto (a unit-tested pure function), the "Remember this for next time?" chip as a cue, `/memory` add and edit. Undo sets `rejected` (`undone`) and redacts nothing.
-- Inferred writes only from `memory/inference.py` over booking records (the two registry rules), pending until Keep; Keep and Dismiss as conditional updates with 409; the blocklist on (key, scope, value_hash); no suggestion while an active row or its contradicting pair exists; `superseded_by_explicit`.
-- Memory text as data: values re-validated when rendered (`invalid_value`), `access_note` cleaned like world text and rendered inside S4's data envelope.
-- Correction with supersede in one transaction, the model-view redaction of the old evidence span, the `update_memory` chip; archived briefs not rewritten.
-- Forget (12.3): one transaction with redaction overwritten in `messages.body_json`, the cascade into archived errands and `origin_brief_json`, superseded ancestors, dependent pending cards invalidated through `INVALIDATES`, `memory_epoch` bumped, value nulled. The open-errand scrub in the builder, `ingress`, every brief write into `agent.sqlite` and the state API. The rebuild-from-state step when the epoch changes mid-run; `prepare_proposal`'s eligibility check on `memory_ids_json`. Granted approvals and open intents left alone; bookings stay.
-- The n-gram mask over user and model text written before the forget (not S7, code-rendered material or world tool results); `trace/reader.py` masking on every user-facing read path (trace panel, `/runs/[id]`, SSE replay, `errand-trace show` and `export`), with the evals reading the raw files; the README's retention statement and the corrected forget-vs-traces wording.
-- Browser-side 8-second undo with `keepalive` DELETE on `pagehide`.
-- Memory content stored by reference in messages, `propose_forget` chip, `list_memories` and `MemoryListCard`, the memory API with `client_action_id` and 409s (17.3), `/memory` page, chat chips with Undo, `EagerForgetPolicy`.
-- Pre-fill with `prov.memory_id` (13.2): global keys in `ingress`, service keys in `update_brief`'s merge; a cleared field is not refilled in that errand.
-- INV-19, and INV-05 with its `user_words_kept` exception.
-
-Acceptance:
-- S32, S32b, S33, S34, S34b, S35, S35b, S49, S49b, S61, S64 and S16b pass, plus S16's memory leg and S60's "this time" leg. INV-05 and INV-19 hold on every scenario.
-- After a forget, a dump of `agent.sqlite` contains no plaintext of the value; a test reads one trace through `trace/reader.py` (masked) and raw (unmasked).
-- Playwright: forget a fact on `/memory`, then the next chat turn's Context view shows it excluded with reason `forgotten`.
-
-## M12. Context builder and budget
-
-Scope (gate 2 decisions 15, 16 and 18 to 24; architecture 13):
-- Full sectioned builder at the gate 2 caps (M8 set them), S3 sub-caps, per-section shed rules that never borrow.
-- Relevance as a gate (eligible, scope, errand kind) and the score only ordering; shadowing, tie order, no expiry, `last_used_at` once per run at `run.end`, S4 rendered in registry order; the longest-value S4 fit test.
-- Ledger from archived errands and `known_bookings`, booking-record fields only.
-- Manifest with `memory_epoch`, `memory_included` (`id`, `score`, `prefill`), `memory_excluded` with a reason for every row from the closed set, `ledger_lines`, `turns_dropped`, `masked`, `compacted`, `shed`; the trace panel's Context view.
-- In-loop usage floor, loop compaction reusing M11's rebuild step, then the shed order (S6 to the latest turn, S5, S4 to pinned rows), `CONTEXT_TOO_LARGE`, `CONTEXT_EXHAUSTED`; live estimator calibration test with thinking-bearing fixtures.
-- Seeds through the real code paths with `errand.seed`: `memory_demo` (eight rows, no canaries) for `make dev` and the demo, `memory_rich_v1` (the 60-row canary seed of 13.5, 240 messages, 6 archived errands, 30 upcoming bookings) with its manifest in `backend/evals/fixtures/memory_rich_v1.json`; a byte-for-byte rebuild test and a canary placement test.
-- INV-20.
-
-Acceptance:
-- S42 (with the budget binding: `turns_dropped` at least 1, a ledger overflow line, S3 sub-capped, a request over 9,000 estimated tokens), S42b, S42c, S42d and S43 pass. S01 (area from memory via `memory_demo`, zero questions) and S08 (with the memory variant) pass. S34, S49 and S64 also pass on `memory_rich_v1`.
-- INV-06 and INV-20 hold on every scenario, INV-06 on the estimate in scripted mode and on reported usage in replay mode; the live calibration test shows the estimate is never below `count_tokens`; the eval notes show max actual input tokens.
-
-## M13. Bounded execution, every exit path
-
-Scope: remaining `RunOutcome` templates, `stop_reason` mapping (`max_tokens`, `refusal` to `MODEL_REFUSED`), server-side refusal fallback on live Opus calls with the answering model recorded and priced in the trace (architecture section 10.1), cost cap, wall-clock deadline, outer backstop, node exception wrapper, `MODEL_UNAVAILABLE` retry, `ToolUnexpected` from malformed world responses, `LoopForeverPolicy`, `GarbageToolPolicy`.
-
-Acceptance:
-- S44, S45, S63 pass; a `GarbageToolPolicy` scenario ends with a clear outcome and no crash.
-- INV-07 and INV-09 hold on every scenario.
-- A test injects an exception into each node in turn and asserts a templated user message and a `run.end` every time.
-
-**Gate 3** after this milestone: proactive follow-up policy and UX.
-
-## M14. Proactive follow-up
-
-Scope: watcher, `followup_jobs` with states and reconciler resume, card invalidation on provider cancel, policy (including the pending-cancel-card rule), follow-up conversations, replacement search within current preferences, "Rebook" card with `replaces_booking_id`, notifications table, user-level SSE stream, notification bell and toast.
-
-Acceptance:
-- S39, S40, S41, S56, S57, S66 pass. INV-17 holds on every scenario.
-- Playwright: dev drawer "Provider cancels booking" produces a notification without any user message, and approving the rebook card books once.
-
 ## M15. Langfuse sink and infrastructure
 
 Scope: `LangfuseSink` behind `make_sink()`, private tracer provider, live spans with explicit costs, pinned compose plus override and `.env.example`, `make langfuse-up`, health endpoint field.
@@ -218,29 +146,93 @@ Acceptance:
 - With Docker up, one live booking shows in Langfuse with matching trace id, session and cost.
 - With Docker down or keys absent, the app and the full eval suite run with no Langfuse import and no added latency (a test asserts `langfuse` is not in `sys.modules`).
 
-## M16. Live-model hardening
+---
 
-Scope: record cassettes for the replay subset (at least one scenario per brief category, listed in architecture section 18.6), prompt tuning against them, measure the evidence-check reject rate and planner cost per turn, live smoke suite with invariant-only assertions.
+# Remaining plan
 
-Acceptance:
-- The replay subset passes offline.
-- The live smoke suite passes with all invariants; median cost per planning turn and evidence reject rate are recorded in the README.
+## Scope trim (2026-11-09)
 
-## M17. Deliverables
+This is a take-home, so from here the plan builds what the brief (`ASSIGNMENT.pdf`) asks for and grades, at the same quality bar, and stops there. M0 to M5, M7, M8, M10 and M15 above are done or in flight and keep their entries. The eight milestones that had not started (M6, M9, M11, M12, M13, M14, M16, M17) become four, N1 to N4, each tied to brief requirements. Where an entry above names an old milestone, read M6 and M9 as N1, M11 and M12 as N2, M13 and M14 as N3, M16 and M17 as N4.
+
+Nothing the brief requires is dropped: every row of its tool table, every section 3 constraint and every section 5 deliverable has a home above or in N1 to N4. Gate 2's decisions stand as signed. Everything that is built still gets its end-to-end proof.
+
+Cut, and why:
+- **From M6:** fault points beyond the three that restarts need, lease-epoch fencing of attempt writes, the periodic scan of expired-lease runs, the `ainvoke(None)` resume of interrupted runs, resuming a granted approval within a grace window, "Never mind" and plan routing during verification. Correctness needs a startup reconciler, verify before any claim and no double booking across a restart. It does not need the rest.
+- **From M9:** the choice card for an ambiguous "last electrician". A plain question listing the matches does the job.
+- **From M13:** the server-side refusal fallback to a second model, the per-run cost cap and the `GarbageToolPolicy` scenario. The brief asks for limits on turns, tool calls and wall-clock time. `refusal` still maps to `MODEL_REFUSED`, and S63 covers unexpected tool output.
+- **From M14:** the pending-cancel-card rule, the race between the follow-up and a same-chat replacement, and the crash in the middle of a follow-up. The brief asks to detect the cancel, decide whether and how to notify, replace within preferences and get fresh approval. S39 to S41 prove that.
+- **From M15 and M16:** no more Langfuse work (the A5 re-run and the Docker memory change are dropped, and the demo shows our own trace panel). No cassette per brief category, no prompt-tuning pass and no evidence-reject-rate study. Evals run on the scripted model, which the brief allows; a small replay subset and a live smoke stay.
+- **Scenarios:** the brief asks for at least 20 and 33 run today. M5 and M8 add 15, N1 to N3 add 23, so the catalogue ends at 71 instead of about 90. Cut from the plan: S09, S16b, S32b, S33, S34b, S35b, S38, S42b, S42c, S53, S56, S57, S58, S59, S61, S66, S70, S72 and the `GarbageToolPolicy` scenario. Each proves something the brief does not ask for, or repeats what a kept scenario or an every-scenario invariant already checks (INV-05, INV-16, INV-18, INV-19).
+
+## N1. Restart, cancel and reschedule
+
+Brief: no duplicate bookings across process restarts; cancel and reschedule only on explicit approval; the `cancel` 503 and `reschedule` `slot_conflict` behaviours; examples 2 and 3.
 
 Scope:
-- `docs/DESIGN_NOTE.md` final pass (one page: state model, approval enforcement, idempotency and recovery, memory, observability, key trade-offs); the sections were filled milestone by milestone, so this is an edit, not a write. The annotated excerpt is cut from the real trace file and shows one planner `model.call` with usage and cost plus the timeout, status check and verified block.
-- Final `docs/traces/timeout_after_success.jsonl`: the conversation-level export (`errand-trace export --thread`) of a live booking, from the first user message to `BOOKED_VERIFIED`, with the timeout forced through the dev drawer, which the note says plainly.
-- `docs/BUGS.md` with the three strongest real bugs, each with its regression test.
-- README: setup, `make dev`, `make evals`, architecture overview, limits, known limitations.
-- Generated `docs/EVAL_TABLE.md` from a clean run.
-- Demo script and rehearsal: one full booking with chat and trace side by side, then a live timeout-after-success via the dev drawer, optionally the injection badge.
-- Coding-assistant transcripts: `scripts/export_transcripts.py` collects every session file for this project, including subagent sessions, into `docs/ai-transcripts/` (raw JSONL, one rendered Markdown file per session, `index.md` linking sessions to gates). The only edit is replacing the pasted API key with `[REDACTED-KEY]`, and the README says so.
-- Rotate the Anthropic API key that was pasted in chat, and confirm no key appears in the repo history or in `docs/ai-transcripts/`.
+- Startup reconciler (the core of M6), run before the API serves. It verifies every open intent by its key through `get_booking_status`. On `confirmed` it records the booking and tells the user. On `not_found` with the hold live it re-sends once with the same key (Gate 1 Q1); past expiry `not_found` is definitive and ends `ACTION_FAILED` with a fresh quote. While status is unavailable the intent stays `PENDING_VERIFICATION` with the lapse time. The same pass runs as a tick that the evals, the dev drawer and a "Check now" button on the verifying card can trigger.
+- Other rows found at startup: a granted but unconsumed approval is expired with a message and a fresh card, never resumed. A run with no open intent ends `RUN_INTERRUPTED` with a message.
+- The critical section: once an intent exists, Stop and the general caps wait for verify, and any exit with an open intent ends `PENDING_VERIFICATION`.
+- Fault points `after_intent_write`, `after_world_book` and `after_grant_commit` through `ERRAND_FAULT`, and a subprocess harness that kills and restarts the agent against the HTTP world.
+- Cancel, reschedule and history (M9 as written): `list_bookings` resolution with booking refs, ambiguity answered with a question listing the matches, the pinned-provider path for "same electrician as last time", `propose_cancel`, `propose_reschedule` with candidates from the booked provider's slots, cancel retry with the same key, reschedule conflict handling, verification through `list_bookings`, intent indexes per target. Both tools fit inside S2's 3,800 tokens.
 
 Acceptance:
-- A clean clone runs `make evals` offline and regenerates an identical table apart from the timestamp header.
+- S07, S08 (without memory), S26, S36, S37, S47, S48 and S52 pass. S24, S68 and S69 now complete through the reconciler tick.
+- S37 is a real restart: the harness kills the agent at `after_world_book`, starts it again, and the conversation shows the verified message, with exactly 1 world booking.
+- INV-01 and INV-02 hold for cancel and reschedule; INV-16 and INV-18 hold on every scenario.
+- The S2 cap test passes with both new tools bound.
+
+## N2. Memory and context
+
+Brief: remember stable preferences across sessions; inspect, correct and forget; explicit versus inferred; at least 50 seeded memories and a long prior conversation; a fixed token budget; only relevant, current preferences reach the model; the context of every turn logged and proven in tests.
+
+Scope: M11 and M12 as signed in `GATE-02.md`, decisions 1 to 24 unchanged.
+- Memory: the registry in code, migration 0004 and the HMAC key file; explicit writes only from a cue-bearing span of the user's message; inferred rows only from the two code rules over bookings, pending until Keep; memory text treated as data; correct as a new version in one transaction; forget final in `agent.sqlite`, with redaction, the cascade, the open-errand scrub and the `memory_epoch` rebuild mid-run; bookings stay; mask on read for traces; pre-fill with `prov.memory_id`; `/memory` page, chat chips with Undo, `MemoryListCard`, the memory API.
+- Context: the sectioned builder at the 12,000-token caps M8 set, relevance as a gate with the score only ordering, shadowing and ties, the ledger, the shed order, loop compaction, `CONTEXT_TOO_LARGE` and `CONTEXT_EXHAUSTED`, the manifest on every `context.built` and the trace panel's Context view.
+- Seeds through the real code paths: `memory_demo` (eight rows) for `make dev` and the demo, `memory_rich_v1` (60 rows, 240 messages) for the evals.
+- Simplified where the gate left room: the selection order (shadowing, ties, `over_budget` drop order) is proven by unit tests on the pure selection function instead of S42b and S42c, and only S34 and S64 also run on `memory_rich_v1`.
+
+Acceptance:
+- S32, S34, S35, S42, S42d, S43, S49, S49b and S64 pass, plus S16's memory leg, S60's "this time" leg, S01 with the area from memory (zero questions) and S08's memory variant. S42 shows the budget binding as signed: `turns_dropped` at least 1, a ledger overflow line, S3 sub-capped and a request over 9,000 estimated tokens. S34 and S64 also pass on `memory_rich_v1`.
+- INV-05, INV-06, INV-19 and INV-20 hold on every scenario.
+- After a forget, a dump of `agent.sqlite` holds no plaintext of the value; one trace read through `trace/reader.py` is masked and the raw file is not.
+- Playwright: forget a fact on `/memory`, and the next turn's Context view shows it excluded as `forgotten`.
+- The live calibration test shows the estimate is never below `count_tokens`.
+
+## N3. Bounded execution and proactive follow-up
+
+Brief: hard limits on model turns, tool calls and wall-clock time; a clear outcome on every exit path; exhausted retries and unexpected tool errors handled; a provider cancel detected without a user prompt, a decision on whether and how to notify, a replacement within known preferences and fresh approval before rebooking.
+
+Scope, part A (bounded execution): the remaining `RunOutcome` templates, `stop_reason` mapping (`max_tokens`, `refusal` to `MODEL_REFUSED`), wall-clock deadline, outer backstop, node exception wrapper, `MODEL_UNAVAILABLE` retry, `ToolUnexpected` from malformed world responses, `LoopForeverPolicy`.
+
+**Gate 3** between part A and part B, one page in `docs/design/GATE-03.md`: I sign the follow-up policy (which cancels notify and how, and what `contact_window` changes), the replacement rules (current preferences only, never widened without me) and the card and notification UX.
+
+Scope, part B (proactive follow-up): watcher for provider-cancel events, `followup_jobs` with states and the startup reconciler resuming unfinished jobs, pending cards on the cancelled booking invalidated, the signed policy, a follow-up message in the booking's conversation, replacement search within current preferences, a "Rebook" card with `replaces_booking_id` that needs a fresh approval, notifications table, user-level SSE stream and a bell.
+
+Acceptance:
+- S44, S45 and S63 pass; S39, S40 and S41 pass.
+- INV-07, INV-09 and INV-17 hold on every scenario.
+- A test injects an exception into each node in turn and asserts a templated user message and one `run.end` every time; with an open intent the run ends `PENDING_VERIFICATION` and the reconciler resolves it.
+- Playwright: the dev drawer's "Provider cancels booking" produces a notification with no user message, and approving the rebook card books once.
+
+## N4. Deliverables
+
+Brief: section 5 (repo and README, 1-page design note, generated eval table, three real bugs, one timeout-after-success trace with an annotated excerpt, a 3 to 5 minute demo, the coding-assistant transcripts), and a real LLM in the loop with offline evals.
+
+Scope:
+- Live check (the useful part of M16): replay cassettes for S01 and S22 (recorded in M7) plus S07, S14 and S39, run offline in `make evals`; a live smoke over the same five with invariant-only assertions; median cost and latency per planning turn in the README, read from those traces.
+- `docs/DESIGN_NOTE.md` final pass (one page: state model, approval enforcement, idempotency and recovery, memory, observability, key trade-offs). The sections were filled milestone by milestone, so this is an edit. The annotated excerpt is cut from the real trace and shows one planner `model.call` with usage and cost, then the timeout, the status check and the verified block.
+- Final `docs/traces/timeout_after_success.jsonl`: the conversation-level export of a live booking from the first message to `BOOKED_VERIFIED`, with the timeout forced through the dev drawer, which the note says plainly.
+- Three real bugs written up from `docs/BUGS.md` (what broke, why, the fix, the regression test), with the full log kept below them. Shortlist: BUG-M1-3, BUG-M3-1, BUG-M4-2; Gate 4 picks.
+- Generated `docs/EVAL_TABLE.md` from a clean run.
+- README: setup, `make dev`, `make evals`, architecture overview, limits, known limitations, the retention statement.
+- Demo script and rehearsal: one full booking with chat and trace side by side, then a live timeout-after-success through the dev drawer, optionally the injection badge. I record the video.
+- Coding-assistant transcripts: `scripts/export_transcripts.py` collects every session file for this project, subagent sessions included, into `docs/ai-transcripts/` (raw JSONL, one Markdown file per session, `index.md` linking sessions to gates). The only edit is replacing the pasted API key with `[REDACTED-KEY]`, and the README says so.
+- Rotate the Anthropic API key that was pasted in chat, and confirm no key is in the repo history or in `docs/ai-transcripts/`.
+
+Acceptance:
+- A clean clone runs `make evals` offline, replay subset included, and regenerates an identical table apart from the timestamp header.
+- The live smoke passes with all invariants.
 - The design note fits on one page (`make check` enforces the budget).
-- `docs/BUGS.md` lists three bugs, each with a repro commit that precedes its fix commit.
+- The bugs write-up names three bugs, each with a repro commit that precedes its fix commit.
 
 **Gate 4** after this milestone: final review before submission.
