@@ -32,17 +32,17 @@ class _In(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ActionIn(_In):
+class MemoryActionIn(_In):
     client_action_id: str = Field(min_length=1, max_length=100)
 
 
-class AddIn(ActionIn):
+class AddIn(MemoryActionIn):
     key: str
     scope: str
     value: Any
 
 
-class CorrectIn(ActionIn):
+class CorrectIn(MemoryActionIn):
     value: Any
 
 
@@ -129,7 +129,7 @@ async def forget_memory(
 
 
 @router.post("/api/memory/{memory_id}/confirm", response_model=None)
-async def confirm_memory(memory_id: str, body: ActionIn, request: Request) -> Any:
+async def confirm_memory(memory_id: str, body: MemoryActionIn, request: Request) -> Any:
     try:
         return await _service(request).keep(
             user_id=_user(request), memory_id=memory_id, client_action_id=body.client_action_id
@@ -139,7 +139,7 @@ async def confirm_memory(memory_id: str, body: ActionIn, request: Request) -> An
 
 
 @router.post("/api/memory/{memory_id}/dismiss", response_model=None)
-async def dismiss_memory(memory_id: str, body: ActionIn, request: Request) -> Any:
+async def dismiss_memory(memory_id: str, body: MemoryActionIn, request: Request) -> Any:
     try:
         return await _service(request).dismiss(
             user_id=_user(request), memory_id=memory_id, client_action_id=body.client_action_id
@@ -149,7 +149,7 @@ async def dismiss_memory(memory_id: str, body: ActionIn, request: Request) -> An
 
 
 @router.post("/api/memory/{memory_id}/undo", response_model=None)
-async def undo_memory(memory_id: str, body: ActionIn, request: Request) -> Any:
+async def undo_memory(memory_id: str, body: MemoryActionIn, request: Request) -> Any:
     try:
         return await _service(request).undo(
             user_id=_user(request), memory_id=memory_id, client_action_id=body.client_action_id
