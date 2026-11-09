@@ -168,7 +168,11 @@ def thread_runs(thread: str, traces_dir: Path) -> list[Path]:
 
 
 def export_thread(thread: str, data_dir: Path, out: Path | None) -> int:
-    paths = thread_runs(thread, data_dir / "traces")
+    try:
+        paths = thread_runs(thread, data_dir / "traces")
+    except TraceFormatError as exc:
+        print(f"errand-trace: {exc}", file=sys.stderr)
+        return 1
     if not paths:
         print(
             f"errand-trace: no runs found for thread {thread!r} under {data_dir}", file=sys.stderr
