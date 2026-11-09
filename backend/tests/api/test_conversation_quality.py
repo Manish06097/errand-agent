@@ -391,3 +391,29 @@ async def test_not_covered_for_a_filled_field_is_a_notice_not_a_second_ask(
     assert "HSR Layout" in view.messages[0]["body"]["text"]
     assert brief["area"]["value"] == "indiranagar"
     assert invariants.check(rec) == {name: [] for name in invariants.DEFAULT}
+
+
+# ------------------------------------------------------------ widening a carried bound
+
+
+async def test_any_time_widens_a_time_bound_the_user_gave_earlier(tmp_path: Path) -> None:
+    """BUG-M8-4: 'not before 10' and then 'any time this week is fine' kept 'from 10:00'
+    and filtered out every early slot, and the model has no other way to drop a bound."""
+    async with harness(tmp_path, world()) as h:
+        first = await h.say(
+            "Find a plumber in Indiranagar for my kitchen tap this week, "
+            "not before 10 a.m., under ₹1,500."
+        )
+        before = (await h.conversation())["state"]["errand"]["brief"]["window"]["value"]["label"]
+        second = await h.say("Actually, any time this week is fine")
+        state = (await h.conversation())["state"]["errand"]
+        label = state["brief"]["window"]["value"]["label"]
+    assert first.outcome != "FAILED" and second.outcome != "FAILED"
+    assert before.endswith("from 10:00"), before
+    assert "from 10:00" not in label, label
+    slots = [
+        s["start"][11:16]
+        for c in (state.get("shortlist") or {}).get("candidates", [])
+        for s in c.get("slots", [])
+    ]
+    assert any(t < "10:00" for t in slots), slots
