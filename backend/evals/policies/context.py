@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
 
 from errand.llm.scripted import Policy, ScriptedChatModel, ScriptedRequest
@@ -45,6 +46,7 @@ _REMEMBER: tuple[tuple[re.Pattern[str], str, str], ...] = (
         "global",
     ),
 )
+_REMEMBER_AREA = re.compile(r"\bmoved to (?P<v>[A-Za-z]+)", re.I)
 _GROW = re.compile(r"grow=(\d+)")
 
 
@@ -66,9 +68,63 @@ def memory_policy(request: ScriptedRequest) -> AIMessage:
                 value = "12:00"
             args = {"key": key, "scope": scope, "value": value, "quote": found.group(0)}
             return tool_calls(request, "Save the preference.", ("remember", args))
-    if step >= 1 and view.loop and view.loop[-1][0] == "remember" and _only_a_preference(view):
+    if step == 1 and view.loop[-1][0] == "remember" and view.loop[-1][2] is False:
+        saved = _REMEMBER_AREA.search(view.current)
+        if (
+            saved is not None
+            and view.known.get("area", "").lower().split(" ")[0] != saved.group("v").lower()
+        ):
+            args = {
+                "set": {"area": saved.group("v").lower()},
+                "clear": [],
+                "evidence": [{"field": "area", "quote": saved.group("v")}],
+                "not_covered": None,
+            }
+            return tool_calls(request, "Use it for this errand too.", ("update_brief", args))
+    memory_calls = {"remember", "list_memories"}
+    if step >= 1 and view.loop and view.loop[-1][0] in memory_calls and _only_a_preference(view):
         return answer(request, "Saved. I'll use that from now on.")
-    return reference.policy(request)
+    return reference.policy(_without(request, memory_calls))
+
+
+def _without(request: ScriptedRequest, names: set[str]) -> ScriptedRequest:
+    """The request as the reference planner knows it: the memory tool calls (and their
+    results, also when a rebuild carried them as text) are not part of its loop."""
+    ids = {
+        str(tc["id"])
+        for m in request.messages
+        if isinstance(m, AIMessage)
+        for tc in m.tool_calls
+        if tc["name"] in names
+    }
+    kept: list[BaseMessage] = []
+    for m in request.messages:
+        if isinstance(m, AIMessage) and ids and any(str(tc["id"]) in ids for tc in m.tool_calls):
+            continue
+        if isinstance(m, ToolMessage) and m.tool_call_id in ids:
+            continue
+        if isinstance(m, HumanMessage) and "<run_so_far>" in str(m.content):
+            m = _drop_carried(m, names)
+        kept.append(m)
+    return replace(request, messages=tuple(kept))
+
+
+def _drop_carried(message: HumanMessage, names: set[str]) -> HumanMessage:
+    blocks = message.content if isinstance(message.content, list) else [message.content]
+    out: list[Any] = []
+    for block in blocks:
+        text = block.get("text") if isinstance(block, dict) else block
+        if isinstance(text, str) and "<run_so_far>" in text:
+            lines = [
+                ln for ln in text.splitlines() if not any(ln.startswith(f"[{n}] ") for n in names)
+            ]
+            text = "\n".join(lines)
+            if "<run_so_far>\n</run_so_far>" in text:
+                text = ""
+            block = {"type": "text", "text": text} if isinstance(block, dict) else text
+        if text != "":
+            out.append(block)
+    return HumanMessage(content=out)
 
 
 def _only_a_preference(view: Any) -> bool:

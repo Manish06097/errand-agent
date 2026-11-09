@@ -101,6 +101,7 @@ class ContextSpec(_Strict):
     rebuilt_calls: int | None = None  # context.built records with a memory_epoch change
     compacted: bool | None = None
     shed: list[str] | None = None
+    from_call: int = 1  # absent: checked from this model call of the run on (1-based)
     absent: list[str] | None = None  # strings no request of the run (or since the forget) holds
     present: list[str] | None = None  # strings the first sent request holds
     max_over: int | None = None  # no request over this many estimated tokens
@@ -386,13 +387,14 @@ async def expect_context(runner: Runner, spec: ContextSpec) -> None:
         got = [s for b in built for s in b["manifest"].get("shed", [])]
         runner.expect(sorted(set(got)) == sorted(spec.shed), f"{where}: shed {sorted(set(got))}")
     for needle in spec.absent or []:
-        for call in calls:
+        for call in calls[spec.from_call - 1 :]:
             runner.expect(
                 needle.casefold() not in _request_text(call).casefold(),
                 f"{where}: {needle!r} reached request seq {call['seq']}",
             )
     for needle in spec.present or []:
-        text = _request_text(calls[index]) if len(calls) > index else ""
+        at = spec.from_call - 1
+        text = _request_text(calls[at]) if len(calls) > at else ""
         runner.expect(
             needle.casefold() in text.casefold(), f"{where}: {needle!r} not in the request"
         )

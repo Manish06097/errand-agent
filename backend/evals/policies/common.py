@@ -124,6 +124,14 @@ def read(request: ScriptedRequest) -> TurnView:
                 )
     names: dict[str, str] = {}
     loop: list[tuple[str, Any, bool]] = []
+    # A compacted or rebuilt request (N2B) carries this run's earlier tool results as text.
+    carried = re.search(r"<run_so_far>\n(.*?)\n</run_so_far>", _text_of(human), re.S)
+    if carried is not None:
+        for row in carried.group(1).splitlines():
+            found = re.match(r"\[([a-z_]+)\] (<tool_data>.*</tool_data>|.*)$", row)
+            if found is not None:
+                data = _tool_data(found.group(2))
+                loop.append((found.group(1), data, isinstance(data, dict) and "error" in data))
     for m in request.messages:
         if isinstance(m, AIMessage):
             for tc in m.tool_calls:
