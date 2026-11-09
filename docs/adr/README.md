@@ -9,8 +9,8 @@ One short record per load-bearing decision. Each one states the context, the dec
 | [0003](0003-write-ahead-idempotency-and-recovery.md) | Write-ahead intents and attempts, derived keys, status-first recovery, one bounded same-key retry | Accepted (gate 1, 2026-11-06) |
 | [0004](0004-separate-mock-world-store.md) | Mock world is a separate store behind the tool contract | Accepted (gate 1, 2026-11-06) |
 | [0005](0005-quarantined-review-reader.md) | Untrusted reviews go only to a tool-less Haiku reader with enum output | Accepted (gate 1, 2026-11-06) |
-| [0006](0006-memory-model.md) | Typed, keyed memory with explicit vs inferred, supersede, forget with redaction | Proposed (gate 2) |
-| [0007](0007-context-budget-and-token-estimation.md) | 12k-token hard cap, sectioned budget, conservative byte estimator, manifest | Proposed (gate 2) |
+| [0006](0006-memory-model.md) | Typed, keyed memory with explicit vs inferred, supersede, forget with redaction | Accepted (gate 2, 2026-11-09) |
+| [0007](0007-context-budget-and-token-estimation.md) | 12k-token hard cap, sectioned budget, conservative byte estimator, manifest | Accepted (gate 2, 2026-11-09) |
 | [0008](0008-trace-source-of-truth-langfuse-optional.md) | Our JSONL trace is the record; Langfuse is an optional live sink | Accepted (gate 1, 2026-11-06) |
 | [0009](0009-offline-eval-strategy.md) | E2E scenarios with scripted reference and hostile policies plus recorded cassettes | Accepted (gate 1, 2026-11-06) |
 | [0010](0010-simulated-clock-and-keyed-rng.md) | Injected, persisted simulated clock and keyed per-call RNG | Accepted (gate 1, 2026-11-06) |

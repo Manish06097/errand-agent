@@ -1,6 +1,6 @@
 # Build plan
 
-Each milestone is small enough to build and test in one focused session, ends with a green `make check` and `make evals`, and is committed on its own. Scenario ids (S01 to S72, SWEEP) and invariant ids (INV-01 to INV-18) refer to `docs/design/architecture.md` section 18.
+Each milestone is small enough to build and test in one focused session, ends with a green `make check` and `make evals`, and is committed on its own. Scenario ids (S01 to S72, SWEEP) and invariant ids (INV-01 to INV-20) refer to `docs/design/architecture.md` section 18.
 
 Rules that apply to every milestone:
 
@@ -16,7 +16,7 @@ Design gates are where I stop and sign off before the next milestone starts. Eac
 | Gate | When | What I decide |
 |---|---|---|
 | Gate 1 | before M0 (signed off 2026-11-06) | state model, graph, approval design, idempotency, persistence, eval strategy (architecture section 20) |
-| Gate 2 | after M10, before M11 | memory registry, forget semantics, relevance scoring, context budget split, seed data |
+| Gate 2 | after M10, before M11 (signed off 2026-11-09) | memory registry, forget semantics, relevance scoring, context budget split, seed data |
 | Gate 3 | after M13, before M14 | follow-up notify policy, replacement rules, card and notification UX |
 | Gate 4 | after M17 | design note, eval table, bugs write-up, trace excerpt, demo script before submission |
 
@@ -130,17 +130,20 @@ Acceptance:
 ## M8. Conversation quality
 
 Scope: `TimeWindowExpr` and `timewin.resolve`, `INVALIDATES` table and `invalidate` records, card invalidation on corrections, brief chips with provenance, value-bound evidence (section 10.7), out-of-coverage template, the "Why this order" rendering of the score parts and the exclusion UX (the ranking function itself landed in M10), reprompt for missing proposals, `NoEvidencePolicy`, `MatchingQuotePolicy` and `ReaskPolicy`.
+- The gate 2 budget split (architecture 13.1), applied here because `not_before`/`not_after` take `update_brief` from 984 to about 1,080 and push the tool list past its old cap: S2 3,800 with the 400-token preamble inside it, S4 600, S6 1,000, S8 2,300 as a floor, slack 200. A config test fails if the caps do not sum to 12,000, and a test renders the bound tool list and fails over S2's cap. `INVALIDATES` lists, per brief field, whether a change invalidates a pending card; M11's forget and correct reuse it.
 
 Acceptance:
 - S04, S05, S51, S60 pass; S03 also passes with `ReaskPolicy` (the guard catches it).
+- The cap tests pass with the widened `update_brief`, and the eval notes show every scenario's maximum estimate under 12,000.
 - `timewin` unit tests cover "this week", "next week", weekday names, "mornings", "not before 10 a.m.", week boundaries and the IST offset.
 
 ## M9. Cancel, reschedule and booking history
 
-Scope: `list_bookings` resolution with booking refs and ambiguity, the pinned-provider path (`get_provider` admits a history provider to the shortlist; budget from `budget_ceiling` or waived with last price on the card), `propose_cancel`, `propose_reschedule` with candidates from the booked provider's slots, cancel retry with the same key, reschedule conflict handling, verification through `list_bookings`, intent indexes per target.
+Scope: `list_bookings` resolution with booking refs and ambiguity, the pinned-provider path (`get_provider` admits a history provider to the shortlist; budget from `budget_ceiling` or waived with last price on the card), `propose_cancel`, `propose_reschedule` with candidates from the booked provider's slots, cancel retry with the same key, reschedule conflict handling, verification through `list_bookings`, intent indexes per target. `propose_cancel` and `propose_reschedule` join the tool list inside S2's 3,800 tokens (the S2 cap test from M8 stays green; 11 tools project to about 3,660 with M11's three).
 
 Acceptance:
 - S07, S08 (without memory), S09, S26, S47, S48 pass.
+- The S2 cap test passes with both new tools bound.
 - INV-01 and INV-02 hold for cancel and reschedule.
 
 ## M10. Untrusted output and the quarantined reader
@@ -155,19 +158,38 @@ Acceptance:
 
 ## M11. Memory
 
-Scope: registry, store, explicit and inferred writes with value-bound evidence and the standing-preference cue, inference rules, confirm and dismiss, correction with supersede, forget with the cascade into brief fields, archived errands and `origin_brief_json`, redaction from evidence offsets and surface forms, blocklist, n-gram mask over every section and role, memory content stored by reference in messages, `propose_forget` chip, `list_memories` and `MemoryListCard`, memory API, `/memory` page, chat chips with Undo, `EagerForgetPolicy`.
+Scope (gate 2 decisions 1 to 14 and 17; architecture 12 and 13.2):
+- Registry in code with the per-key table (12.1), store, migration 0004 (`memory_surface_hashes`, `approvals.memory_ids_json`, `users.memory_epoch`, `message_redactions.kind`), and the HMAC key file outside `agent.sqlite`.
+- Explicit writes: `remember(key, scope, value, evidence)` with no `claim` argument, value-bound evidence, the standing-preference cue table with key-specific cues and the one-off veto (a unit-tested pure function), the "Remember this for next time?" chip as a cue, `/memory` add and edit. Undo sets `rejected` (`undone`) and redacts nothing.
+- Inferred writes only from `memory/inference.py` over booking records (the two registry rules), pending until Keep; Keep and Dismiss as conditional updates with 409; the blocklist on (key, scope, value_hash); no suggestion while an active row or its contradicting pair exists; `superseded_by_explicit`.
+- Memory text as data: values re-validated when rendered (`invalid_value`), `access_note` cleaned like world text and rendered inside S4's data envelope.
+- Correction with supersede in one transaction, the model-view redaction of the old evidence span, the `update_memory` chip; archived briefs not rewritten.
+- Forget (12.3): one transaction with redaction overwritten in `messages.body_json`, the cascade into archived errands and `origin_brief_json`, superseded ancestors, dependent pending cards invalidated through `INVALIDATES`, `memory_epoch` bumped, value nulled. The open-errand scrub in the builder, `ingress`, every brief write into `agent.sqlite` and the state API. The rebuild-from-state step when the epoch changes mid-run; `prepare_proposal`'s eligibility check on `memory_ids_json`. Granted approvals and open intents left alone; bookings stay.
+- The n-gram mask over user and model text written before the forget (not S7, code-rendered material or world tool results); `trace/reader.py` masking on every user-facing read path (trace panel, `/runs/[id]`, SSE replay, `errand-trace show` and `export`), with the evals reading the raw files; the README's retention statement and the corrected forget-vs-traces wording.
+- Browser-side 8-second undo with `keepalive` DELETE on `pagehide`.
+- Memory content stored by reference in messages, `propose_forget` chip, `list_memories` and `MemoryListCard`, the memory API with `client_action_id` and 409s (17.3), `/memory` page, chat chips with Undo, `EagerForgetPolicy`.
+- Pre-fill with `prov.memory_id` (13.2): global keys in `ingress`, service keys in `update_brief`'s merge; a cleared field is not refilled in that errand.
+- INV-19, and INV-05 with its `user_words_kept` exception.
 
 Acceptance:
-- S32, S33, S34, S35, S49, S61, S64 pass. INV-05 holds on every scenario.
-- Playwright: forget a fact on `/memory`, then the next chat turn's context view shows it excluded with reason `forgotten`.
+- S32, S32b, S33, S34, S34b, S35, S35b, S49, S49b, S61, S64 and S16b pass, plus S16's memory leg and S60's "this time" leg. INV-05 and INV-19 hold on every scenario.
+- After a forget, a dump of `agent.sqlite` contains no plaintext of the value; a test reads one trace through `trace/reader.py` (masked) and raw (unmasked).
+- Playwright: forget a fact on `/memory`, then the next chat turn's Context view shows it excluded with reason `forgotten`.
 
 ## M12. Context builder and budget
 
-Scope: full sectioned builder, S3 sub-caps, memory relevance scoring and pre-fill with `memory_id`, ledger from archived errands and `known_bookings`, manifest with exclusion reasons, seed fixtures (60 memories with canaries in every role and in brief evidence, 240-message history), in-loop usage floor and loop compaction, `CONTEXT_TOO_LARGE`, `CONTEXT_EXHAUSTED`, live estimator calibration test with thinking-bearing fixtures.
+Scope (gate 2 decisions 15, 16 and 18 to 24; architecture 13):
+- Full sectioned builder at the gate 2 caps (M8 set them), S3 sub-caps, per-section shed rules that never borrow.
+- Relevance as a gate (eligible, scope, errand kind) and the score only ordering; shadowing, tie order, no expiry, `last_used_at` once per run at `run.end`, S4 rendered in registry order; the longest-value S4 fit test.
+- Ledger from archived errands and `known_bookings`, booking-record fields only.
+- Manifest with `memory_epoch`, `memory_included` (`id`, `score`, `prefill`), `memory_excluded` with a reason for every row from the closed set, `ledger_lines`, `turns_dropped`, `masked`, `compacted`, `shed`; the trace panel's Context view.
+- In-loop usage floor, loop compaction reusing M11's rebuild step, then the shed order (S6 to the latest turn, S5, S4 to pinned rows), `CONTEXT_TOO_LARGE`, `CONTEXT_EXHAUSTED`; live estimator calibration test with thinking-bearing fixtures.
+- Seeds through the real code paths with `errand.seed`: `memory_demo` (eight rows, no canaries) for `make dev` and the demo, `memory_rich_v1` (the 60-row canary seed of 13.5, 240 messages, 6 archived errands, 30 upcoming bookings) with its manifest in `backend/evals/fixtures/memory_rich_v1.json`; a byte-for-byte rebuild test and a canary placement test.
+- INV-20.
 
 Acceptance:
-- S42, S43 pass. S01 (area from memory, zero questions) and S08 (with the memory variant) pass.
-- INV-06 holds on every scenario, on the estimate in scripted mode and on reported usage in replay mode; the live calibration test shows the estimate is never below `count_tokens`; the eval notes show max actual input tokens.
+- S42 (with the budget binding: `turns_dropped` at least 1, a ledger overflow line, S3 sub-capped, a request over 9,000 estimated tokens), S42b, S42c, S42d and S43 pass. S01 (area from memory via `memory_demo`, zero questions) and S08 (with the memory variant) pass. S34, S49 and S64 also pass on `memory_rich_v1`.
+- INV-06 and INV-20 hold on every scenario, INV-06 on the estimate in scripted mode and on reported usage in replay mode; the live calibration test shows the estimate is never below `count_tokens`; the eval notes show max actual input tokens.
 
 ## M13. Bounded execution, every exit path
 
