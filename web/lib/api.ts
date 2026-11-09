@@ -1,4 +1,5 @@
 import { agentClock, AGENT_CLOCK_HEADER, parseClockHeader } from "./agent-clock";
+import type { MemoryGroups, MemoryRow } from "./memory";
 import type {
   ActionIn,
   ConversationOut,
@@ -42,6 +43,8 @@ function post<T>(path: string, payload: unknown): Promise<ApiResult<T>> {
   return call<T>(path, { method: "POST", body: JSON.stringify(payload) });
 }
 
+type MemoryAnswer = { memory?: MemoryRow; error?: string; detail?: string; current?: MemoryRow };
+
 export async function getOk<T>(path: string): Promise<T> {
   const result = await call<T>(path);
   if (!result.ok) throw new Error(`GET ${path} answered ${result.status}`);
@@ -75,6 +78,25 @@ export const api = {
     ),
   action: (conversationId: string, body: ActionIn) =>
     post<{ run_id?: string } & ErrorBody>(`/api/conversations/${conversationId}/actions`, body),
+  memory: {
+    list: () => getOk<MemoryGroups>("/api/memory"),
+    correct: (id: string, value: unknown, clientActionId: string) =>
+      call<MemoryAnswer>(`/api/memory/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ value, client_action_id: clientActionId }),
+      }),
+    forget: (id: string, clientActionId: string) =>
+      call<MemoryAnswer>(
+        `/api/memory/${id}?client_action_id=${encodeURIComponent(clientActionId)}`,
+        { method: "DELETE" },
+      ),
+    keep: (id: string, clientActionId: string) =>
+      post<MemoryAnswer>(`/api/memory/${id}/confirm`, { client_action_id: clientActionId }),
+    dismiss: (id: string, clientActionId: string) =>
+      post<MemoryAnswer>(`/api/memory/${id}/dismiss`, { client_action_id: clientActionId }),
+    undo: (id: string, clientActionId: string) =>
+      post<MemoryAnswer>(`/api/memory/${id}/undo`, { client_action_id: clientActionId }),
+  },
   notifications: () => getOk<NotificationsOut>("/api/notifications"),
   markRead: (notificationId: string) =>
     post<{ unread?: number }>(`/api/notifications/${notificationId}/read`, undefined),
