@@ -12,7 +12,6 @@ Context building and the model gateway never import this module: they read throu
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import tzinfo
@@ -67,10 +66,6 @@ class MemoryRefused(MemoryError_):
 
 class RouteMismatch(MemoryError_):
     """A client_action_id already used for a different action."""
-
-
-def value_hash(value: Any) -> str:
-    return hashlib.sha256(dump_value(value).encode("utf-8")).hexdigest()
 
 
 def view(row: MemoryRow, *, events: Sequence[Any] | None = None) -> Json:
@@ -147,6 +142,16 @@ class MemoryService:
         self._now = now_ms
         self._key = hmac_key
         self._value_check = value_check
+
+    def hash_value(self, value: Any) -> str:
+        """HMAC-SHA256 of the canonical value under the install key.
+
+        `memories.value_hash` and `memory_blocklist.value_hash` only ever need equality.
+        Unkeyed, a forgotten value comes back from agent.sqlite alone with a short
+        dictionary of areas, half-hour times and rupee amounts. The prefix keeps this
+        digest apart from the surface-form hashes, which share the key.
+        """
+        return hmac_hex(self._key, "value:" + dump_value(value))
 
     # -------------------------------------------------------------------- idempotency
 
@@ -285,7 +290,7 @@ class MemoryService:
         now: int,
     ) -> Json:
         mem = repos.memories
-        digest = value_hash(value)
+        digest = self.hash_value(value)
         await self._refuse_contradiction(mem, user_id, spec, scope, value)
 
         replaced: list[MemoryRow] = []
@@ -440,7 +445,7 @@ class MemoryService:
             raise MemoryRefused("bad_value", str(exc)) from None
         if spec.inferred_by != rule:
             raise MemoryRefused("no_such_rule", f"{key} is not inferred by {rule}")
-        digest = value_hash(canonical)
+        digest = self.hash_value(canonical)
         async with self._db.transaction() as repos:
             mem = repos.memories
             now = self._now()

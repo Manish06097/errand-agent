@@ -249,5 +249,5 @@ async def test_value_hash_is_keyed_so_a_dictionary_cannot_recover_a_forgotten_va
         assert hashlib.sha256(dump_value(value).encode()).hexdigest() not in stored | blocked
     # the same value under another install key hashes differently
     other = MemoryService(env.db, lambda: 1, hmac_key.fixed_key("another-install"))
-    assert other.hash_value("11:00") != env.service.hash_value("11:00")  # type: ignore[attr-defined]
-    assert env.service.hash_value("11:00") == env.service.hash_value("11:00")  # type: ignore[attr-defined]
+    assert other.hash_value("11:00") != env.service.hash_value("11:00")
+    assert env.service.hash_value("11:00") == env.service.hash_value("11:00")
