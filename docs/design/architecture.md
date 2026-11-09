@@ -1389,7 +1389,7 @@ Pending and dismissed rows are rule-inferred with typed values and booking-id ev
 | world tool calls per run (incl. retries) | 16 | `ToolGateway` |
 | reprompts per run | 1 | `plan` |
 | SystemNote replans per run | 1 | routing |
-| wall clock per run | 60 s simulated in evals; live value set from the latency measured in M7 (p95 of a full planning turn times 2, rounded up) | checked before every node, model call and tool call outside the critical section |
+| wall clock per run | 60 s simulated in evals; 24 s live and in record mode (`live_run_deadline_s`: 13 live planning turns in M7 gave p50 7.4 s and p95 11.6 s, and 2 x p95 rounded up is 24) | checked before every node, model call and tool call outside the critical section |
 | per-tool timeout | see the timeout table below | `ToolGateway` |
 | critical-section grace | 20 s | `execute`/`verify` under `asyncio.shield` |
 | cost per run | $0.40 | `LLMGateway`; not applied inside the critical section |
@@ -1576,7 +1576,8 @@ On mobile the inspector becomes a bottom sheet and the sidebar a drawer. A dev d
 | `GET /api/users/me/events` | SSE: notifications and proactive messages, with replay |
 | `GET /api/memory` (grouped by status), `GET /api/memory/{id}` (with its `memory_events`), `PATCH /api/memory/{id}` (correct: a new version, never an overwrite), `DELETE /api/memory/{id}` (forget), `POST /api/memory/{id}/confirm`, `POST /api/memory/{id}/dismiss`, `POST /api/memory/{id}/undo` | memory (12.2, 12.3). Every mutation, here and in the chat actions, carries a `client_action_id`, is idempotent through `client_requests`, and returns 409 with the current row when the row is not in the state the action needs (correcting a superseded or forgotten row, forgetting twice) |
 | `GET /api/bookings`, `GET /api/notifications`, `GET /api/runs/{id}/trace[.jsonl]` | reads |
-| `/api/dev/*` | world events, clock, scenario, fault injection; only with `ERRAND_DEV=1` |
+| `GET /api/conversations`, `GET /api/meta` | the conversation list (newest activity first, with a preview of the first message and the active run) and `{dev, model_mode}`, which the web app reads to decide on the dev drawer (M7) |
+| `/api/dev/*` | `scenarios`, `scenario` (load one into a fresh world store), `clock/advance`, `next-book` (the next `book` answers `timeout_booked`, through the world's `/dev/world/force_book`, which pushes one outcome without resetting the store), `bookings` and `provider-cancel`. Registered only when `ERRAND_DEV=1`; otherwise the routes do not exist (404) |
 
 ### 17.4 Stack and types
 
