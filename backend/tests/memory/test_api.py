@@ -202,19 +202,3 @@ async def test_a_correct_blanks_the_old_area_on_the_card_it_invalidates(tmp_path
         assert "ndiranagar" not in str(card["body"]).lower()
         area = next(c for c in card["body"]["brief"] if c["field"] == "area")
         assert area["value"] == "[updated]"
-
-
-async def test_the_insert_scrub_masks_a_forgotten_value_in_a_card_about_to_be_stored(
-    tmp_path: Path,
-) -> None:
-    async with harness(tmp_path, world(), memory_seed="memory_demo") as h:
-        listed = (await h.client.get("/api/memory")).json()["preferences"]
-        memory_id = next(r["memory_id"] for r in listed if r["key"] == "home_area")
-        await h.client.delete(f"/api/memory/{memory_id}", params={"client_action_id": "d1"})
-        async with h.app.state.manager.db.session() as repos:
-            hashes = await repos.memories.hashes_for_user("u_demo")
-        card = (
-            '{"brief":[{"field":"area","value":"Indiranagar","source":"memory","evidence":null}]}'
-        )
-        scrubbed = service_of(h).card_scrubber()(card, hashes)
-        assert "ndiranagar" not in scrubbed and "[removed at your request]" in scrubbed

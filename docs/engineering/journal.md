@@ -605,7 +605,7 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 3. **Service-scoped rows reach S4 only from the errand's second request** (S4 is built before the service is known). Code applies them either way. S35 asserts the preferred provider is included on a later turn of the next errand.
 4. **A time bound with no cue** is refused by `remember` with no chip (it needs a window to patch); area and budget get the patch plus the offer chip.
 5. **Time-bound pre-fill clears the whole window on a forget** (the window's provenance carries the bound's memory id) instead of just the bound; `avoid_days` is not applied to the window yet; the reschedule candidate plug-in in `changes/prepare.py` is not done.
-6. **The approvals-insert scrub is not built.** The eligibility check at insert and the forget's own redaction of card brief chips cover the cases; there is no scrub of the material.
+6. **There is no masking scrub at approvals insert.** The eligibility check at insert is the decision 10 scrub point, and the forget's own redaction of card brief chips covers stored cards; nothing is masked at insert, so a re-picked area shows as the user's value.
 7. **The mask covers all history messages**, not only those created before `forgotten_at` (the hashes have no timestamps). Over-masking is accepted by decision 13.
 8. **S5 lines still carry the provider id**, not the catalogue name (no per-line lookup added).
 9. **The second leg of S42d runs at a gateway cap of 9,000** (through `limits`): inside the 16-call world budget the default 12,000 cannot be exhausted after the sheds.
@@ -618,7 +618,7 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 - `make evals` twice: 338 passed both times (90 to 95 s wall), 139 of 139 table rows (93 at ce0891f, plus N3 and this milestone); the two `docs/EVAL_TABLE.md` differ only in the Generated and Git SHA lines. Fifteen new or changed memory and context scenarios: S01b, S08b, S32, S34, S34_rich, S35, S42, S42d (two legs), S49, S49b (two), S64, S64_rich, and the S16 and S60 memory legs.
 - S01 cassette re-recorded once on the 11-tool list with `make record SCENARIO=S01`: $0.0424 (3 planner calls, 4 reader calls, 17,888 in and 1,433 out), then replays.
 - Live calibration (`ERRAND_LIVE=1`): step 0 est 1,058 / counted 656 (1.61), step 1 2,351 / 1,607 (1.46), step 2 2,710 / 1,789 (1.51), thinking blocks replayed; the test builds its own small requests, so it does not move with S1 and S2.
-- Mutations, each turning a named test or scenario red: dropping the epoch probe (S49b); `list_memories` returning values (S64_rich, through INV-05's pending pairs); dropping the shadowing in `select` (the selection test, S08b, S42); `mark_used` without the sent filter (`tests/memory/test_runend.py`); an in-loop overflow mapped back to `TooLarge` (S42d, second leg); skipping the card eligibility check at insert (`test_a_card_cannot_be_created_from_a_memory_that_is_no_longer_eligible`). Not applicable: skipping the approvals-insert scrub (not built, deviation 6) and compaction keeping thinking blocks (the compacted request is built from state and has none by construction).
+- Mutations, each turning a named test or scenario red: dropping the epoch probe (S49b); `list_memories` returning values (S64_rich, through INV-05's pending pairs); dropping the shadowing in `select` (the selection test, S08b, S42); `mark_used` without the sent filter (`tests/memory/test_runend.py`); an in-loop overflow mapped back to `TooLarge` (S42d, second leg); skipping the card eligibility check at insert, i.e. the approvals-insert scrub (`test_a_card_cannot_be_created_from_a_memory_that_is_no_longer_eligible`). The brief's "skip the approvals-insert scrub" entry is the same mutation: skipping the eligibility check at insert turns that test red (the scrub point is the check, deviation 6). Not applicable: compaction keeping thinking blocks (the compacted request is built from state and has none by construction).
 - Doctored-record tests for each new INV-20 clause (`tests/memory/test_invariants_memory.py`).
 - (Superseded by round 2 below: the manual run is now done and pasted there.)
 
@@ -679,6 +679,8 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 - Accepted: no Playwright test for the chat chips. The API read tests and the scenarios cover them.
 - Accepted, open doubts: `web/lib/memory.ts` hand-writes the row shape for now (a response model on `/api/memory` is a follow-up), and "[updated]" and "[removed at your request]" both read as "cleared".
 
+**N2B final round.** Deleted the dead insert mask (`scrub_card`, `CardScrubber`, `MemoryService.card_scrubber` and its helper-only test); 12.5 now says the insert scrub point is the eligibility check. Edit on `contact_window` shows and parses `HH:MM-HH:MM`. The conversation state read hides a window with a stale bound whole until the next turn (deliberate, commented in the test). `api/app.py` imports `MEMORY_BODY_TYPES` from the domain.
+
 ## N4: deliverables (phase 1)
 
 **Goal.** The things a reader of the repo opens first, written from what exists: the design note, the bugs write-up, the README, the demo script, a real timeout-after-success trace with an annotated excerpt, and the S22 cassette. Triage first of the one open bug from the M5 review.
@@ -705,3 +707,4 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 - Mark the memory part of `docs/DEMO_SCRIPT.md` as verified once the `/memory` page exists, and remove the matching README limits.
 - The AI-assistant transcripts: the candidate exports them and the README placeholder points to where they go.
 - Rotate the API key (it was in a shared tmp folder for a while) and record the demo video.
+

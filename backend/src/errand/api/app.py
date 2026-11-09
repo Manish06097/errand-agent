@@ -90,7 +90,7 @@ from errand.config import (
 )
 from errand.domain.brief import BriefField
 from errand.domain.inbound import SystemEvent
-from errand.domain.messages import MessageBody
+from errand.domain.messages import MEMORY_BODY_TYPES, MessageBody
 from errand.followup.watcher import Watcher
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
@@ -644,11 +644,6 @@ def _no_transport() -> None:
     return None
 
 
-MEMORY_BODY_TYPES = frozenset(
-    {"memory_saved", "memory_suggestion", "memory_update", "memory_forget", "memory_list"}
-)
-
-
 def _answer(answer: Answer) -> JSONResponse:
     return JSONResponse(answer.body, status_code=answer.status)
 
@@ -704,6 +699,8 @@ def _state_view(
     errand = state.errand
     if errand is not None:
         # A field sourced from a memory that is no longer eligible is not shown (decision 10).
+        # Deliberately coarse: a window with a stale bound is hidden whole until the next turn's
+        # apply_memory re-resolves it (this read has no clock to re-resolve with).
         brief, _ = scrub_brief(errand.brief, eligible)
         errand = errand.model_copy(update={"brief": brief})
     return {

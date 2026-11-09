@@ -64,6 +64,10 @@ export function scopeLabel(scope: string): string {
 /** Turn the text of an edit box back into the value type the row already has. */
 export function valueFromInput(current: unknown, text: string): unknown {
   if (typeof current === "number") return Number(text.replace(/[^\d.]/g, ""));
+  if (isClockWindow(current)) {
+    const [from, to] = text.split("-").map((part) => part.trim());
+    return { from: from ?? "", to: to ?? "" };
+  }
   if (Array.isArray(current)) {
     return text
       .split(",")
@@ -73,7 +77,17 @@ export function valueFromInput(current: unknown, text: string): unknown {
   return text.trim();
 }
 
+function isClockWindow(value: unknown): value is { from: string; to: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { from?: unknown }).from === "string" &&
+    typeof (value as { to?: unknown }).to === "string"
+  );
+}
+
 export function inputFromValue(value: unknown): string {
+  if (isClockWindow(value)) return `${value.from}-${value.to}`;
   if (Array.isArray(value)) return value.join(", ");
   return value === null || value === undefined ? "" : String(value);
 }

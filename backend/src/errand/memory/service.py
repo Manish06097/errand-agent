@@ -13,7 +13,7 @@ Context building and the model gateway never import this module: they read throu
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import tzinfo
 from typing import Any
 
@@ -388,27 +388,6 @@ class MemoryService:
                 if await repos.approvals.invalidate(approval_id, "request_changed"):
                     done.append(approval_id)
         return done
-
-    def card_scrubber(self) -> Callable[[str, Mapping[str, str]], str]:
-        """For `approvals.service.create`: mask, in a card about to be inserted, every brief
-        chip text that hashes like a forgotten value (the insert-time half of the scrub)."""
-
-        def scrub(card_json: str, hashes: Mapping[str, str]) -> str:
-            card = json.loads(card_json)
-            chips = card.get("brief")
-            if not hashes or not isinstance(chips, list):
-                return card_json
-            for chip in chips:
-                for name in ("value", "evidence"):
-                    text = chip.get(name) if isinstance(chip, dict) else None
-                    if isinstance(text, str):
-                        masked = mask.mask_text(
-                            text, self._key, hashes, marker=redaction.FORGOTTEN_MARKER
-                        )
-                        chip[name] = masked.text
-            return json.dumps(card, ensure_ascii=False, separators=(",", ":"))
-
-        return scrub
 
     async def _scrub_cards(
         self,

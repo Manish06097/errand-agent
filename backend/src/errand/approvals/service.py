@@ -26,8 +26,8 @@ refused, so a token built any other way is rejected at the call (`is_minted`).
 from __future__ import annotations
 
 import weakref
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal, NoReturn
 
@@ -109,28 +109,19 @@ class Created:
     stale_memory: tuple[str, ...] = ()
 
 
-CardScrubber = Callable[[str, Mapping[str, str]], str]
-
-
 async def create(
     db: AgentDB,
     row: ApprovalRow,
     policy: ApprovalPolicy,
     memory_ids: Sequence[str] = (),
-    scrub_card: CardScrubber | None = None,
 ) -> Created:
     """Insert a new pending approval. `memory_ids` are the memories behind the brief fields
     the card's material depends on (gate 2 decision 11): each must still be eligible in this
-    same transaction, else nothing is inserted and `stale_memory` says which. `scrub_card`
-    masks any forgotten value still in the card's chips before the row goes in."""
+    same transaction, else nothing is inserted and `stale_memory` says which. That check is
+    the insert-time scrub point: the card shows the user's current value, never a mask."""
     if row.status != "pending":
         raise ValueError("a new approval starts pending")
     async with db.transaction() as repos:
-        if scrub_card is not None:
-            hashes = await repos.memories.hashes_for_user(
-                await _user_of(repos, row.conversation_id)
-            )
-            row = replace(row, card_json=scrub_card(row.card_json, hashes))
         if memory_ids:
             eligible = await repos.memories.eligible_ids(await _user_of(repos, row.conversation_id))
             gone = tuple(m for m in memory_ids if m not in eligible)

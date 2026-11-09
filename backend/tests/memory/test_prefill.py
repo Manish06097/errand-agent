@@ -119,7 +119,8 @@ async def test_a_forgotten_time_bound_drops_the_bound_and_keeps_the_users_day(
 
         done = await h.client.delete(f"/api/memory/{earliest}", params={"client_action_id": "d1"})
         assert done.status_code == 200
-        # the open read never shows the forgotten bound's value
+        # the open read never shows the forgotten bound's value; it hides the whole window
+        # (coarse on purpose) until the next turn re-resolves it
         assert (await _brief(h)).get("window") is None or "08:00" not in str(await _brief(h))
 
         await h.say("And now?")
