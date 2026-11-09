@@ -4,9 +4,8 @@ Usage:
     check_em_dash.py --tracked        every file in `git ls-files` (make check)
     check_em_dash.py FILE...          the given files (pre-commit passes staged files)
 
-The two coding-assistant transcripts, docs/AI_TRANSCRIPT.md (the export) and
-AI_TRANSCRIPT.md (my edited version), are exempt: they quote the session as written.
-Nothing else is exempt.
+The coding-assistant transcript, docs/AI_TRANSCRIPT.md, is exempt: it quotes the
+session as written. Nothing else is exempt.
 
 Rejects the U+2014 character and the HTML entities that render as one. Binary files
 (a NUL byte in the first 8000 bytes) are skipped. The forbidden strings are built
@@ -26,7 +25,7 @@ FORBIDDEN = {
     "&#" + "8212;": "&#" + "8212; entity",
     "&#x" + "2014;": "&#x" + "2014; entity",
 }
-EXEMPT = {"docs/AI_TRANSCRIPT.md", "AI_TRANSCRIPT.md"}
+EXEMPT = {"docs/AI_TRANSCRIPT.md"}
 
 
 def find_problems(argv: list[str]) -> list[str]:
