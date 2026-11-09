@@ -26,15 +26,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
-from pydantic import (
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    SerializerFunctionWrapHandler,
-    StrictInt,
-    model_serializer,
-)
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictInt
 
 from errand.clock import IST
 from errand.world.contracts import Service
@@ -83,14 +75,9 @@ class BookMaterial(_Material):
     same_service_nearby: BookingIds = Field(default_factory=list)
     # A Rebook (14): the cancelled booking this one replaces. Left out of the canonical
     # JSON when None, so a plain book's fingerprint is exactly what it was before.
-    replaces_booking_id: str | None = Field(default=None, min_length=1)
-
-    @model_serializer(mode="wrap")
-    def _omit_replaces_when_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        data: dict[str, Any] = handler(self)
-        if data.get("replaces_booking_id") is None:
-            data.pop("replaces_booking_id", None)
-        return data
+    replaces_booking_id: str | None = Field(
+        default=None, min_length=1, exclude_if=lambda v: v is None
+    )
 
 
 class CancelMaterial(_Material):

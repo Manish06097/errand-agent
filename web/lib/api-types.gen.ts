@@ -404,6 +404,8 @@ export interface components {
             provider_id: string;
             /** Quoted Price Inr */
             quoted_price_inr: number;
+            /** Replaces Booking Id */
+            replaces_booking_id?: string | null;
             /** Same Service Nearby */
             same_service_nearby?: string[];
             service: components["schemas"]["Service"];
