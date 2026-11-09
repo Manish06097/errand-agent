@@ -307,6 +307,8 @@ export interface components {
             action: "book" | "cancel" | "reschedule";
             /** Approval Id */
             approval_id: string;
+            /** Brief */
+            brief?: components["schemas"]["BriefChip"][];
             /** Button Label */
             button_label: string;
             /**
@@ -419,6 +421,28 @@ export interface components {
             v: 1;
         };
         /**
+         * BriefChip
+         * @description One filled brief field, as a chip with where it came from (M8).
+         *
+         *     `source` is the provenance source ("user_msg", later "memory"), `evidence` the user's
+         *     words cut to 60 characters, and `window_label` the resolved window on the window chip
+         *     so the user can catch a wrong reading ("Thu 12 Nov - Fri 13 Nov, 10:00-12:00").
+         */
+        BriefChip: {
+            /** Evidence */
+            evidence?: string | null;
+            field: components["schemas"]["BriefField"];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "user_msg" | "ui_action" | "memory" | "booking_history" | "followup" | "default";
+            /** Value */
+            value: string;
+            /** Window Label */
+            window_label?: string | null;
+        };
+        /**
          * BriefField
          * @enum {string}
          */
@@ -475,6 +499,15 @@ export interface components {
             provider_id: string;
             /** Rating */
             rating: number;
+            /**
+             * Score
+             * @default 0
+             */
+            score: number;
+            /** Score Parts */
+            score_parts?: {
+                [key: string]: number;
+            };
             /** Slots */
             slots: components["schemas"]["SlotOption"][];
             /** Verified */
@@ -600,6 +633,8 @@ export interface components {
          * @description A question for the fields the brief still lacks, with quick replies.
          */
         ClarifyCard: {
+            /** Brief */
+            brief?: components["schemas"]["BriefChip"][];
             /** Errand Id */
             errand_id: string;
             /** Fields */
@@ -686,6 +721,20 @@ export interface components {
             slot_start: number;
             /** Status */
             status: string;
+        };
+        /**
+         * ExcludedOption
+         * @description A provider left off the shortlist, with a code-written reason.
+         */
+        ExcludedOption: {
+            /** Name */
+            name: string;
+            /** Provider Id */
+            provider_id: string;
+            /** Reason */
+            reason: string;
+            /** Reason Text */
+            reason_text: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -780,9 +829,11 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "retry" | "narrow_search" | "shorten" | "answer" | "refresh_hold" | "raise_budget" | "options";
+            kind: "retry" | "narrow_search" | "shorten" | "answer" | "refresh_hold" | "raise_budget" | "options" | "quick_reply";
             /** Label */
             label: string;
+            /** Reply */
+            reply?: string | null;
         };
         /**
          * OutcomeCard
@@ -960,12 +1011,16 @@ export interface components {
          * @description ProviderComparisonCard data: candidates in code order, slot buttons by handle.
          */
         ShortlistCard: {
+            /** Brief */
+            brief?: components["schemas"]["BriefChip"][];
             /** Brief Version */
             brief_version: number;
             /** Candidates */
             candidates: components["schemas"]["CandidateOption"][];
             /** Errand Id */
             errand_id: string;
+            /** Excluded */
+            excluded?: components["schemas"]["ExcludedOption"][];
             /**
              * Excluded Count
              * @default 0
