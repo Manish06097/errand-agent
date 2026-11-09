@@ -611,7 +611,7 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 9. **The second leg of S42d runs at a gateway cap of 9,000** (through `limits`): inside the 16-call world budget the default 12,000 cannot be exhausted after the sheds.
 10. **INV-20's "eligible at that moment"** is checked as "the row has an event that made it active, and an inferred row was confirmed", not against a timeline: the sim clock gives every trace record the same instant, so a time comparison cannot be made. The epoch ordering and the rebuild epoch are checked.
 11. **The five items of the brief's API-level list are scenario-driven tests** (`tests/memory/test_chat_behaviours.py`), through the real routes. The "forget mid-run seen by the next call" test is S49b's hook scenario.
-12. The task text also listed phase C (the `/memory` page, chips, Context view, Playwright forget test). I followed the lead's brief, which makes that N2C; none of it is built here.
+12. The task text also listed phase C. I followed the lead's brief, which made it N2C; the lead then ruled it belongs here, and round 2 below builds it.
 
 **Verified.** (numbers below are from this branch after merging main at ef413d4)
 - `make check` green on 9220/9221/9222: ruff, format, mypy, import-linter (11 contracts), the guards, the design-note budget (Memory 77 of 80), fast step 1,380 passed 4 skipped, slow step 241 passed 1 skipped, web typecheck and lint, API types up to date.
@@ -620,7 +620,7 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 - Live calibration (`ERRAND_LIVE=1`): step 0 est 1,058 / counted 656 (1.61), step 1 2,351 / 1,607 (1.46), step 2 2,710 / 1,789 (1.51), thinking blocks replayed; the test builds its own small requests, so it does not move with S1 and S2.
 - Mutations, each turning a named test or scenario red: dropping the epoch probe (S49b); `list_memories` returning values (S64_rich, through INV-05's pending pairs); dropping the shadowing in `select` (the selection test, S08b, S42); `mark_used` without the sent filter (`tests/memory/test_runend.py`); an in-loop overflow mapped back to `TooLarge` (S42d, second leg); skipping the card eligibility check at insert (`test_a_card_cannot_be_created_from_a_memory_that_is_no_longer_eligible`). Not applicable: skipping the approvals-insert scrub (not built, deviation 6) and compaction keeping thinking blocks (the compacted request is built from state and has none by construction).
 - Doctored-record tests for each new INV-20 clause (`tests/memory/test_invariants_memory.py`).
-- The manual `make dev` run with curl from the brief is not done in this session; S01b, S08b, S32, S34, S49 and S64 cover the same paths through the real routes.
+- (Superseded by round 2 below: the manual run is now done and pasted there.)
 
 **What broke.** The first INV-19 run over the seeded database failed (BUG-N2B-1: a forgotten chain's redactions were all filed under the newest row), found only because S64_rich ran every invariant over the seed. My own bugs on the way, before anything merged: S6 looked up redactions for only the last 12 messages and the superseded canary sat just outside; a scripted rebuild lost the loop and asked the same tool again until the policy read the carried results; a saved provider preference was rendered as "the same provider as last time" and the scripted planner treated it as a pin (now "a saved preference: prefers P1"); the `latest_assistant` filter dropped messages with no `type` (a test caught it after the merge with N3).
 
@@ -643,6 +643,34 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 - The conversation API reading chip bodies with their status at read time was deferred to N2C. Rejected: the web side now lands here, so it is needed now.
 - The "forget mid-run" test is S49b's hook scenario. Accepted.
 - The `$0` in the cassette commit message stays. History is not rewritten.
+**N2B round 2 (after the lead sent it back).** Scope and the leak, per the review.
+
+*What changed.*
+- **The leak (fixed repro-first).** `d5896e1` is the failing test (memory_demo, pending card, DELETE home_area: `approvals.card_json` still held `indiranagar` with source memory and the read served it). `013e02b` is the fix: the forget redacts the surface forms in every card of the user and blanks the memory-sourced chip of the forgotten field on the cards that list the row; a correct blanks that chip on the cards it just invalidated (marker `[updated]`); `approvals.service.create` masks forgotten values in the card before the insert. INV-19 now scans `card_json` and `material_json`; phase A's dump test now runs with a card pending (one test, not two). No BUGS.md row, as ruled.
+- **Window bound.** `WindowFact.bound_memory_ids` (per bound) replaces the bound's id in the window provenance. `apply_memory` drops only the stale bound (or re-fills from the active successor) and re-resolves; the pure scrubs (state view, stored briefs) clear the whole window because they cannot re-resolve. The manifest reports `prefill: window` (the dead `prov.memory_ids` read is gone). Test: forget `earliest_time`, the day stays, no `not_before`.
+- **Provider preference.** `prefer_memory_id` and `avoid_memory_id` on the fact; scrub and `apply_memory` clear one component. Test with both rows on one service: forgetting the avoid row leaves the prefer row and the avoided id leaves the hard filter's input.
+- **Conversation read.** Chip bodies and the list card are resolved at read time (`ResolvedMemory`: key, scope, kind, status, label only while active or pending); a forgotten row reads as forgotten with no value. API types regenerated.
+- **Web.** The six chips with Keep, Dismiss, Undo, Update and the forget confirm; `MemoryListCard`; the `/memory` page (preferences with source, evidence, Edit and Forget with a confirm dialog; Suggestions with Keep and Dismiss; History with "Forgotten on 5 Nov" and no value); the Context view in the trace panel (sections against caps, memory sent with prefill, memory left out with reasons, turns dropped, masked, compacted, shed, the raw manifest folded); brief chips with "(from memory)" on the approval card. Every memory action refetches the conversation, the memory list and the traces, since an API forget sends no SSE. The model.call to manifest match was by `span_id` and found nothing on a live stack; it is by `request_sha256` now.
+- **Minors.** Stale rebuilds capped at two per run, then `CONTEXT_EXHAUSTED` with the last real estimate (test with an epoch that never stops moving); the offer and update chips are refused with 409 when a forget redacted an earlier span of the source message (the test passes without the guard too, because the shifted words fail to parse; the guard covers a shift that would parse); the granted-but-not-consumed leg is tested (a grant written without the resume row, then a forget: status, fingerprint and material unchanged, chip text scrubbed).
+- The S22 cassette was re-recorded once on the 11-tool list (0.043 USD), because it replayed the pre-N2B tool list after the merge. S01 was done in round 1.
+
+*Deviations.* (a) Dev-drawer seed button and the browser undo are not built, as allowed. The Playwright test writes its row with `POST /api/memory`, the same call the page's add uses. (b) The `/memory` page has no add form (the route exists); Edit covers correct. (c) A forget-correct on a pending card blanks the chip with `[updated]`, which the card shows as "cleared". (d) After a window bound's row is corrected, `apply_memory` re-fills from the successor; after a provider preference's row is corrected, the successor is applied the next time the service is set (not at once). (e) No Playwright test for the chat chips: the dev stack's planner is the reference policy, which never calls `remember`; the chips are covered through the API read tests and the S-scenarios.
+
+*Open doubts.* The `/api/memory` row shape is written by hand in `web/lib/memory.ts`, because those routes have no response model; giving them one would put it in the generated types. The offer-chip guard is untested by itself for the reason above.
+
+*Verified (after merging main at the head of this branch).*
+- `make check` exit 0 on 9220-9222: fast step 1,390 passed 4 skipped, slow step 253 passed 1 skipped, web typecheck and lint, API types up to date.
+- `make evals` twice: 339 passed both times (86 s).
+- Playwright (`pnpm -C web exec playwright test`, 9220-9222): 14 passed, including `e2e/memory.spec.ts` (forget on `/memory` after Cancel, History shows "Forgotten on", the next turn's Context view lists the row with reason `forgotten`).
+- The manual run (the `memory_policy` scripted planner through `scripts/dev.py`, fresh data dir, curl):
+  - area chip: `card pending [('area', 'indiranagar', 'memory')]`, brief `{'source': 'memory', 'memory_id': 'm-01'}`, manifest `memory_included: [{'id': 'm-01', 'score': 3.5, 'prefill': 'area'}] epoch 1`.
+  - saved chip and supersession: `memory_saved` resolves to `m-02 access_note active 'use gate code ZEBRA-4417'`; after "I have moved to Koramangala." prefs `m-03 home_area koramangala`, history `m-01 superseded by m-03`.
+  - list card: `memory_list [('access_note','active'),('home_area','active')]`; the second request's last message is the tool_result "Shown to the user." (the `<memory>` block carries the active rows, as designed; no `list_memories` result carries a value).
+  - DELETE m-02: 200, replayed with the same `client_action_id` the same body, again with a new id 409 `m-02 is already forgotten`.
+  - pending card then DELETE home_area: `forgot ['m-03','m-01'] cards_invalidated ['ap_r_0005'] messages_redacted 3`; the read then shows the card `invalidated` with area chip `[removed at your request]`.
+  - dump grep on `agent.sqlite` after stop: `Indiranagar` 0, `indiranagar` 0, `ZEBRA-4417` 0; messages table 0; approvals card and material 0.
+  - traces: the raw JSONL of the first run mentions Indiranagar 11 times; `errand-trace show` 0; `errand-trace export --thread` 0 hits and 11 `[removed]` markers.
+
 ## N4: deliverables (phase 1)
 
 **Goal.** The things a reader of the repo opens first, written from what exists: the design note, the bugs write-up, the README, the demo script, a real timeout-after-success trace with an annotated excerpt, and the S22 cassette. Triage first of the one open bug from the M5 review.
