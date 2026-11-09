@@ -1,0 +1,17 @@
+id: S64_what_do_you_remember
+title: '"What do you remember about me?" calls list_memories; the user gets a MemoryListCard of references and the model gets only a fixed string, so no pending, rejected or forgotten value is in any request'
+category: [memory]
+seed: 64
+model: scripted:memory
+memory_seed: memory_demo
+user:
+  persona: cooperative
+  goal: {}
+steps:
+  - say: "What do you remember about me?"
+  - expect_outcome: REPLIED
+  - expect_planner: {called: [list_memories]}
+  - expect_chip: {type: memory_list, count: 1, memory_ids: 8, suggestion_ids: 0}
+  - expect_context: {present: ["Shown to the user."], call: 2}
+expect:
+  invariants: [default]
