@@ -1,0 +1,39 @@
+id: S35_inferred_preference_needs_a_keep
+title: 'The same plumber booked twice yields a suggestion after the second completed errand: a pending row, excluded from every request, with a suggestion chip after the outcome; Keep through the chat action makes it active and the next request carries it'
+category: [memory]
+seed: 35
+model: scripted:memory
+world:
+  book: {forced: [success, success]}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: tomorrow morning
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap tomorrow morning, under ₹1,500."
+  - until: approval_card
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_chip: {type: memory_suggestion, absent: true}
+  - say: "Book the same plumber as last time."
+    gives: [provider_pref]
+  - expect_outcome: ASKED_USER
+  - answer: {}
+  - expect_outcome: AWAITING_APPROVAL
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_memory: {key: preferred_provider, scope: "service:plumber", status: pending_confirmation, kind: inferred, evidence_type: rule}
+  - expect_chip: {type: memory_suggestion, count: 1}
+  - say: "Thanks. What do you remember about me?"
+  - expect_context: {excluded: {m-01: pending_confirmation}}
+  - memory_action: {kind: keep_memory, chip: memory_suggestion, again: true}
+  - expect_memory: {key: preferred_provider, scope: "service:plumber", status: active, kind: inferred}
+  - say: "I need a plumber for a dripping shower tomorrow evening in Indiranagar."
+  - expect_outcome: ASKED_USER
+  - answer: {}
+  - expect_context: {included: [m-01]}
+expect:
+  invariants: [default]

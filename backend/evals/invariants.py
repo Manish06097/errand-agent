@@ -1124,6 +1124,8 @@ def inv15_parked_on_every_live_card(rec: Records) -> Violations:
                 for m in rec.messages
                 if m["conversation_id"] == thread
                 and m["role"] == "assistant"
+                # memory chips are transcript lines of no run, never the card on screen
+                and not str(m["body"].get("type", "")).startswith("memory_")
                 and _run_index(rec, m["run_id"]) <= _run_index(rec, rid)
             ]
             last = shown[-1] if shown else None

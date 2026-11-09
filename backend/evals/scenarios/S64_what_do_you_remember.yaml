@@ -12,6 +12,6 @@ steps:
   - expect_outcome: REPLIED
   - expect_planner: {called: [list_memories]}
   - expect_chip: {type: memory_list, count: 1, memory_ids: 8, suggestion_ids: 0}
-  - expect_context: {present: ["Shown to the user."], call: 2}
+  - expect_context: {from_call: 2, present: ["Shown to the user."]}
 expect:
   invariants: [default]
