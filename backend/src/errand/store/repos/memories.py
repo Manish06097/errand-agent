@@ -329,6 +329,14 @@ class MemoriesRepo:
             out.extend(await self.redactions_for_message(message_id))
         return out
 
+    async def remove_superseded_redactions(self, memory_id: str) -> int:
+        """Drop the model-view redactions that hide `memory_id`'s span (it is active again)."""
+        cur = await self._conn.execute(
+            "DELETE FROM message_redactions WHERE memory_id = ? AND kind = 'superseded'",
+            (memory_id,),
+        )
+        return cur.rowcount
+
     async def replace_redactions(self, message_id: str, rows: Sequence[Redaction]) -> None:
         await self._conn.execute(
             "DELETE FROM message_redactions WHERE message_id = ?", (message_id,)

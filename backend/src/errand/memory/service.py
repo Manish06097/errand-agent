@@ -536,8 +536,8 @@ class MemoryService:
     async def undo(self, *, user_id: str, memory_id: str, client_action_id: str) -> Json:
         """Undo on a "Saved" chip: not a standing preference. Nothing is redacted.
 
-        If the save had replaced an older row, that row comes back: undoing a correction
-        returns to what was saved before it.
+        If the save had replaced an older row, that row comes back, and so do its words in
+        the model's view: undoing a correction returns to what was saved before it.
         """
 
         async def body(repos: Repos, now: int) -> Json:
@@ -555,6 +555,8 @@ class MemoryService:
                     old = await mem.get(old_id)
                     if old and old.status == "superseded" and old.superseded_by == memory_id:
                         await mem.reactivate(old_id)
+                        # the undone save hid the older row's words from the model
+                        await mem.remove_superseded_redactions(old_id)
                         await mem.add_event(
                             old_id, "restored", "user", now, details={"undone": memory_id}
                         )
