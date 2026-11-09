@@ -116,6 +116,25 @@ async def verified_records(deps: RunDeps, this_run: set[str]) -> list[Verified]:
                 slot_start=from_ms(b.slot_start),
                 kind="book",
                 this_run=b.booking_id in this_run,
+                source_intent_id=b.source_intent_id,
+            )
+        )
+    async with deps.db.session() as repos:
+        changes = await repos.intents.succeeded_changes(deps.user_id)
+    for intent in changes:
+        facts = json.loads(intent.result_json or "{}")
+        if not facts.get("booking_id") or facts.get("by_provider"):
+            continue  # the provider's own cancellation is not a claim we may make
+        out.append(
+            Verified(
+                booking_id=str(facts["booking_id"]),
+                provider_id=str(facts["provider_id"]),
+                provider_name=str(facts["provider_name"]),
+                service=str(facts["service"]),
+                slot_start=datetime.fromisoformat(str(facts["slot_start"])),
+                kind="cancel" if intent.action == "cancel" else "reschedule",
+                this_run=str(facts["booking_id"]) in this_run,
+                source_intent_id=intent.intent_id,
             )
         )
     return out

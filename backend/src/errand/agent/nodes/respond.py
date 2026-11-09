@@ -283,7 +283,7 @@ class _Respond:
 
     def _verified_this_run(self) -> set[str]:
         result = self.state.result
-        return {result.booking_id} if isinstance(result, Booked) else set()
+        return {result.booking_id} if isinstance(result, Booked | Changed) else set()
 
     async def _card_of(self, approval_id: str) -> ActionCard | None:
         async with self.deps.db.session() as repos:

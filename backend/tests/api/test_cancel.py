@@ -231,3 +231,37 @@ async def test_two_cancel_cards_for_one_booking_cancel_it_once(tmp_path: Path) -
     assert late.outcome == "ACTION_FAILED"
     assert len([r for r in rec.op_log if r["op"] == "cancel" and r["outcome"] == "ok"]) == 1
     assert invariants.inv02_one_side_effect_per_approval(rec) == []
+
+
+async def test_a_verified_cancel_backs_a_cancel_claim_and_nothing_else(tmp_path: Path) -> None:
+    """The claim guard's records (10.8): a cancelled booking backs "I cancelled it" and not
+    "I booked it", and before the cancel there is no record for either."""
+    from errand.agent.claim_guard import guard
+    from errand.agent.records import verified_records
+
+    async with harness(tmp_path, ScenarioConfig(id="records", seed=6), reference.policy) as h:
+        await h.say("Please cancel my AC servicing.")
+        card = await card_of(h)
+        deps = _deps_of(h)
+        before = await verified_records(deps, set())
+        click = await h.decide(card["approval_id"], "approve", card["body"]["fingerprint"])
+        await h.finish(click.json()["run_id"])
+        after = await verified_records(deps, set())
+    assert [r.kind for r in before] == []
+    assert [r.kind for r in after] == ["cancel"] and after[0].source_intent_id is not None
+    said = guard("I cancelled your AC servicing. I also booked a plumber.", after, IST)
+    assert said.text == "I cancelled your AC servicing."
+    assert said.removed == ["I also booked a plumber."]
+    assert guard("I cancelled it.", before, IST).text == ""
+
+
+def _deps_of(h: Harness) -> Any:
+    return SimpleDeps(h.manager)
+
+
+class SimpleDeps:
+    """The few RunDeps fields `verified_records` reads."""
+
+    def __init__(self, manager: Any) -> None:
+        self.db = manager.db
+        self.user_id = "u_demo"
