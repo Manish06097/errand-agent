@@ -182,7 +182,7 @@ errand-agent/
   scripts/ gen_types.py seed_demo.py run_evals.py export_transcripts.py check_design_note.py
   spikes/                         # pre-design experiments: scripts, raw outputs, README of findings
   docs/ DESIGN_NOTE.md BUGS.md EVAL_TABLE.md(generated) eval_results.json(generated)
-        adr/ design/ traces/ ai-transcripts/
+        adr/ design/ traces/ AI_TRANSCRIPT.md
 ```
 
 `errand chat` (a small CLI over the same API) is the terminal fallback for a grader who only has `uv`. `make dev` starts the world, the API and the web app in one command; Langfuse stays optional.
@@ -2006,7 +2006,7 @@ I rejected wording assertions and LLM-as-judge in the gate: flaky, costly, and t
 - **Hygiene:** pre-commit rejects em dashes in tracked text and AI-authorship trailers in commit messages, runs ruff, mypy (strict on `approvals`, `execution`, `world`), and the import-linter contract. `make check` also runs `scripts/check_design_note.py`, which fails when `docs/DESIGN_NOTE.md` exceeds its budget (about 550 words of prose plus a trace excerpt of at most 12 lines).
 - **Secrets:** the Anthropic key lives in the gitignored `.env`; Langfuse keys in `infra/langfuse/.env`; both have `.env.example` files. A secret scan over tracked files runs in `make check`.
 - **Design gates.** Each gate is a short record (`docs/design/GATE-*.md`) of what I decided, with my sign-off noted in it. The ADR statuses move from Proposed to Accepted only after the gate. The gate records, the ADRs and the coding-assistant transcripts tell the same story of who decided what.
-- **Coding-assistant transcripts** (a deliverable). `scripts/export_transcripts.py` collects every session file for this project, including subagent sessions, into `docs/ai-transcripts/` as the raw JSONL plus a rendered Markdown file per session and an `index.md` (date, session, role, linked gate). Exactly one redaction is applied: the Anthropic API key that was pasted into a chat is replaced with `[REDACTED-KEY]`. The README states that redaction, and the key is rotated before submission regardless.
+- **Coding-assistant transcript** (a deliverable). `scripts/export_transcripts.py` renders the session I worked in, from the first message to submission, into one file, `docs/AI_TRANSCRIPT.md`: my messages, the replies, and the tool calls and results in order, with long text clipped where marked. I chose one readable file over a folder of every subagent log: the session is where the instructions, the gate sign-offs and the reviews of each milestone's result are. Two edits only: the Anthropic API key becomes `[REDACTED-KEY]`, and the local Langfuse stack's keys become `[REDACTED-LANGFUSE-KEY]` because the secret scan rejects any key. The export exits 1 if anything key-shaped survives, the em-dash guard exempts that one file, the README states the edits, and the key is rotated before submission regardless.
 
 ---
 

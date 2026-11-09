@@ -226,8 +226,8 @@ Scope:
 - Generated `docs/EVAL_TABLE.md` from a clean run.
 - README: setup, `make dev`, `make evals`, architecture overview, limits, known limitations, the retention statement.
 - Demo script and rehearsal: one full booking with chat and trace side by side, then a live timeout-after-success through the dev drawer, optionally the injection badge. I record the video.
-- Coding-assistant transcripts: `scripts/export_transcripts.py` collects every session file for this project, subagent sessions included, into `docs/ai-transcripts/` (raw JSONL, one Markdown file per session, `index.md` linking sessions to gates). The only edit is replacing the pasted API key with `[REDACTED-KEY]`, and the README says so.
-- Rotate the Anthropic API key that was pasted in chat, and confirm no key is in the repo history or in `docs/ai-transcripts/`.
+- Coding-assistant transcript: `scripts/export_transcripts.py` renders the main session into one file, `docs/AI_TRANSCRIPT.md`. The only edits are the API key (`[REDACTED-KEY]`) and the local Langfuse keys, and the README says so.
+- Rotate the Anthropic API key that was pasted in chat, and confirm no key is in the repo history or in `docs/AI_TRANSCRIPT.md`.
 
 Acceptance:
 - A clean clone runs `make evals` offline, replay subset included, and regenerates an identical table apart from the timestamp header.
