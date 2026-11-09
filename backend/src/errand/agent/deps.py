@@ -61,6 +61,9 @@ class RunDeps:
     # The consequential lock this run holds, if any: taken in execute, released after
     # verify (or by the RunManager when the run ends, whatever happened).
     held: list[HeldLock] = field(default_factory=list)
+    # The intents this run wrote (execute) or took over (a recovery run): the critical
+    # section's exit (agent/critical.py) settles these and no other run's.
+    intents: set[str] = field(default_factory=set)
 
     @property
     def approval_policy(self) -> ApprovalPolicy:

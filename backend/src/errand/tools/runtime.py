@@ -102,6 +102,17 @@ async def over_http(
     if not clock.synced:
         await http.aclose()
         raise RuntimeError(f"the world at {base_url} sent no {CLOCK_HEADER}")
+    if clock.mode == "sim":
+        # A simulated world moves only when told to: the agent's `clock.sleep` (a verify
+        # backoff, a cancel's retry delay) advances it through /dev/clock/advance, which
+        # the world serves with ERRAND_DEV=1 (the restart harness runs it that way).
+
+        async def advance(seconds: float) -> None:
+            moved = await http.post("/dev/clock/advance", json={"seconds": seconds})
+            moved.raise_for_status()
+            clock.update_from_header(moved.headers.get(CLOCK_HEADER))
+
+        clock.advance_hook = advance
     transport = HttpTransport(base_url, timeouts, clock=clock, http=http)
     inspector = HttpInspector(base_url, clock, http=http)
     return WorldAccess(client=transport, clock=clock, aclose=http.aclose, inspector=inspector)

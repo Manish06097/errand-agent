@@ -35,6 +35,7 @@ from langchain_core.messages import AIMessage
 
 from errand.domain import aliases as product_aliases
 from errand.llm.scripted import ScriptedRequest
+from evals.policies import changes
 from evals.policies.common import TurnView, answer, read, tool_calls
 
 SERVICE_ALIASES = product_aliases.SERVICE_ALIASES
@@ -134,6 +135,26 @@ def window_value(text: str) -> tuple[dict[str, Any], str] | None:
     return window, quote
 
 
+def _bounds_from_earlier(
+    window: dict[str, Any], evidence: list[dict[str, str]], view: TurnView
+) -> None:
+    """A time bound the user said before the day ("not before 10 a.m.", then "tomorrow",
+    9.9): the day answer sets the window, and the bound is taken from the earlier message
+    of this errand, quoted from there. A bound the answer itself gives wins."""
+    users = [
+        ln.removeprefix("user: ") for ln in view.recent.splitlines() if ln.startswith("user: ")
+    ]
+    for key, pattern in (("not_before", _NOT_BEFORE), ("not_after", _NOT_AFTER)):
+        if window[key] is not None:
+            continue
+        for line in reversed(users):
+            found = pattern.search(line)
+            if found is not None:
+                window[key] = hhmm(found.group(1))
+                evidence.append({"field": "window", "quote": found.group(0)})
+                break
+
+
 def uncovered_place(text: str) -> str | None:
     """ "HSR Layout" in "a plumber in HSR Layout": a capitalised place that is not a covered
     area."""
@@ -179,6 +200,8 @@ def extract(text: str, view: TurnView) -> Patch:
     found = window_value(text)
     if found is not None:
         put("window", found[0], found[1])
+        if "window" in values:
+            _bounds_from_earlier(values["window"], evidence, view)
     if _NO_BUDGET.search(text):
         match = _NO_BUDGET.search(text)
         assert match is not None
@@ -381,6 +404,9 @@ def after_proposal_error(request: ScriptedRequest, result: Any) -> AIMessage:
 
 def policy(request: ScriptedRequest) -> AIMessage:
     view = read(request)
+    cancel = changes.step(request, view)  # cancel and reschedule moves (N1)
+    if cancel is not None:
+        return cancel
     if not view.loop:
         move = booking_move(request, view)
         if move is not None:

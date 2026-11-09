@@ -22,12 +22,15 @@ None of these makes a model call.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 
 from langgraph.runtime import Runtime
 
+from errand.agent import brief_ops
 from errand.agent.cards import book_card
+from errand.agent.changes import prepare as changes_prepare
 from errand.agent.deps import RunDeps
 from errand.agent.records import emit_swept, open_bookings
 from errand.agent.state import SystemNote, ThreadState
@@ -55,7 +58,7 @@ from errand.store.repos.approvals import ApprovalRow
 from errand.store.repos.holds import HoldRow, hold_record_id_for
 from errand.tools.errors import ToolError
 from errand.tools.gateway import Caller
-from errand.world.contracts import HoldSlotOut, ListBookingsOut, hold_is_live
+from errand.world.contracts import BookingItem, HoldSlotOut, ListBookingsOut, hold_is_live
 
 REPLANS_PER_RUN = 1
 _REFUSED_TEXT = {
@@ -84,6 +87,8 @@ def ids_for(run_id: str, k: int) -> tuple[str, str]:
 async def prepare_proposal(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     deps = runtime.context
     assert state.errand is not None
+    if changes_prepare.handles(state):
+        return await changes_prepare.run_node(deps, state)  # cancel, reschedule (N1)
     with deps.tracer.node("prepare_proposal", phase_before=state.errand.phase.value) as span:
         prep = _Preparer(deps, state)
         result = await prep.run()
@@ -142,6 +147,14 @@ class _Preparer:
                 if h.provider_id == hold.provider_id and h.slot.start == hold.slot.start:
                     return h.provider_id, h.ref
         return ProposalRefused(reason="stale_shortlist", text=_REFUSED_TEXT["stale_shortlist"])
+
+    def _last_visit(self, provider_id: str, bookings: Sequence[BookingItem]) -> BookingItem | None:
+        """The booking a pinned provider was chosen from ("the same electrician as last
+        time"), for the card's "Last visit" line (7.3, N1)."""
+        pref = self.errand.brief.provider_pref
+        if brief_ops.pinned(self.errand.brief) != provider_id or pref is None:
+            return None
+        return next((b for b in bookings if b.booking_id == pref.prov.booking_id), None)
 
     def _move(self, to: Phase, reason: str) -> None:
         self.errand = transition(self.errand, to, reason, self.deps.tracer)
@@ -275,6 +288,7 @@ class _Preparer:
             nearby=nearby,
             tz=deps.tz,
             brief=self.errand.brief,
+            last_visit=self._last_visit(verdict.candidate.provider_id, listed.bookings),
         )
         row = ApprovalRow(
             approval_id=approval_id,
@@ -329,8 +343,15 @@ class _Preparer:
                 ),
             }
         )
-        replaced = requote.reason if requote is not None else None
+        replaced: str | None = requote.reason if requote is not None else None
         detail = requote.detail if requote is not None else None
+        inbound = self.state.inbound
+        if (
+            isinstance(inbound, UiAction)
+            and inbound.payload.get("recovery") == "grant_not_executed"
+        ):
+            # The reconciler expired a grant no run acted on (a restart): say so (9.9).
+            replaced = "grant_not_executed"
         return CardReady(approval_id=approval_id, replaced_reason=replaced, replaced_detail=detail)
 
     async def _not_approvable(self, was: Phase, reason: str) -> None:

@@ -7,7 +7,10 @@ resets the per-run fields, runs the approval sweep and routes:
   acknowledgement the messages route marked `confirm_hint`);
 - `UiAction(select_slot | refresh_hold)` -> prepare_proposal, no model call;
 - `ApprovalGranted` -> execute, which re-reads the row: the inbound is a hint;
-- `ApprovalDeclined` -> respond (DECLINED).
+- `ApprovalDeclined` -> respond (DECLINED);
+- `Recover(intent_id)` and `UiAction(check_now)` -> verify, for an intent that is not
+  settled yet (agent/recovery.py; N1). The intent and its attempt come from our own
+  tables, so the route does not depend on where LangGraph says the thread stopped.
 
 A thread can be parked on a card that the sweep has since expired, or that something
 else ended. Ingress notices from the approvals table, not from state, moves the errand
@@ -24,18 +27,26 @@ from typing import Any, Literal
 
 from langgraph.runtime import Runtime
 
+from errand.agent import recovery
 from errand.agent.deps import RunDeps
 from errand.agent.records import live_approval
 from errand.agent.state import ThreadState
 from errand.agent.transitions import INITIAL_PHASE, transition
 from errand.domain.brief import Brief, ErrandKind
 from errand.domain.errand import Errand, Phase
-from errand.domain.inbound import ApprovalDeclined, ApprovalGranted, UiAction, UserMessage
-from errand.domain.outcomes import ConfirmHint, Declined, Failure
+from errand.domain.inbound import (
+    ApprovalDeclined,
+    ApprovalGranted,
+    Recover,
+    UiAction,
+    UserMessage,
+)
+from errand.domain.outcomes import BookCalled, ConfirmHint, Declined, Failure
 from errand.ids import errand_id_for
 
 TERMINAL = frozenset({Phase.COMPLETED, Phase.FAILED, Phase.ABANDONED})
 M4_ACTIONS = frozenset({"select_slot", "refresh_hold"})
+RECHECK_ACTIONS = frozenset({"check_now"})
 
 
 async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
@@ -59,15 +70,34 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
             "card_changes": [],
         }
         live = await live_approval(deps)
-        if errand.phase is Phase.AWAITING_APPROVAL and (
-            live is None or live.approval_id != errand.approval_id
+        inbound = state.inbound
+        rechecks = isinstance(inbound, Recover) or (
+            isinstance(inbound, UiAction) and inbound.kind in RECHECK_ACTIONS
+        )
+        # A re-check is about an intent, not a card: the approval it consumed is not live
+        # by design, and the errand must not be moved off the phase verify starts from.
+        if (
+            not rechecks
+            and errand.phase is Phase.AWAITING_APPROVAL
+            and (live is None or live.approval_id != errand.approval_id)
         ):
             errand = await _off_dead_card(deps, errand)
-        inbound = state.inbound
         if isinstance(inbound, UserMessage):
             if inbound.confirm_hint and live is not None and live.status == "pending":
                 update["result"] = ConfirmHint(approval_id=live.approval_id)
+        elif isinstance(inbound, Recover) or (
+            isinstance(inbound, UiAction) and inbound.kind in RECHECK_ACTIONS
+        ):
+            errand, update["result"] = await recovery.reopen(deps, errand, inbound)
         elif isinstance(inbound, UiAction):
+            if inbound.payload.get("recovery") == "grant_not_executed":
+                # The reconciler expired this grant before the run started (a restart);
+                # the trace of the run that tells the user records it (INV-15).
+                gone = inbound.payload.get("approval_id", "")
+                deps.tracer.emit("approval.expired", approval_id=gone, reason="grant_not_executed")
+                deps.tracer.emit(
+                    "card.update", approval_id=gone, status="expired", reason="grant_not_executed"
+                )
             if inbound.kind not in M4_ACTIONS:
                 update["plan_result"] = Failure(reason=f"ui action {inbound.kind} is not built yet")
         elif isinstance(inbound, ApprovalGranted):
@@ -113,10 +143,12 @@ async def _off_dead_card(deps: RunDeps, errand: Errand) -> Errand:
     return transition(errand, Phase.COMPARING, reason, deps.tracer)
 
 
-Route = Literal["plan", "prepare_proposal", "execute", "respond"]
+Route = Literal["plan", "prepare_proposal", "execute", "verify", "respond"]
 
 
 def route_after_ingress(state: ThreadState) -> Route:
+    if isinstance(state.result, BookCalled):
+        return "verify"
     if state.result is not None or state.plan_result is not None:
         return "respond"
     inbound = state.inbound

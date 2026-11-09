@@ -51,6 +51,8 @@ from evals.dsl import (
     Answer,
     Approve,
     ApproveConcurrently,
+    CheckNow,
+    ClickAction,
     ClickSlot,
     Decline,
     Dedupe,
@@ -58,7 +60,9 @@ from evals.dsl import (
     ExpectBookCalls,
     ExpectBooking,
     ExpectBrief,
+    ExpectCancel,
     ExpectCard,
+    ExpectMove,
     ExpectNoCard,
     ExpectNoSideEffects,
     ExpectNotice,
@@ -78,7 +82,9 @@ from evals.dsl import (
     ExpectWorld,
     IfDedupe,
     Post,
+    ReconcilerTick,
     RefreshHold,
+    Restart,
     Say,
     Scenario,
     Step,
@@ -99,6 +105,9 @@ OUT = EVALS / "out"
 # The unit tests that run scenarios point this elsewhere (tests/conftest.py), so parallel
 # workers never share backend/evals/out. make evals leaves it unset.
 TRACE_DIR_ENV = "ERRAND_EVAL_TRACE_DIR"
+# The tests that run a process scenario pin its API port to their worker's block
+# (tests/conftest.py worker_port); `make evals` leaves it unset and takes a free one.
+API_PORT_ENV = "ERRAND_EVAL_API_PORT"
 BASE_URL = "http://errand.test"
 
 PLANNERS: dict[str, Policy] = {
@@ -345,6 +354,12 @@ class Harness:
     async def op_log(self) -> list[dict[str, Any]]:
         return [row_to_json(r) for r in await self.inspector.op_log()]
 
+    async def reconcile(self) -> list[str]:
+        """The reconciler's re-check now (the dev drawer's "Reconcile now"): the ids of
+        the recovery runs it started, all ended when this returns."""
+        report = await self.app.state.reconciler.tick(wait=True)
+        return list(report.recovery_runs)
+
     async def records(self) -> invariants.Records:
         await self.manager.wait_idle()
         rec = invariants.load_records(self.root, await self.op_log())
@@ -410,6 +425,30 @@ async def harness(
         booking,
     ) as h:
         yield h
+
+
+@asynccontextmanager
+async def scenario_harness(
+    scenario: Scenario, root: Path, planner: Policy, reader: Policy, **extra: Any
+) -> AsyncIterator[Harness]:
+    """In process by default; against real processes for a scenario that crashes the API."""
+    if scenario.crash_at is None:
+        async with harness(root, scenario.world_config(), planner, reader=reader, **extra) as h:
+            yield h
+        return
+    if scenario.model != "scripted:reference":
+        raise ValueError(f"{scenario.id}: process scenarios run the reference planner")
+    from evals.process_harness import ProcessHarness
+
+    async with ProcessHarness(
+        root,
+        scenario.world_config(),
+        planner,
+        crash_at=scenario.crash_at,
+        reader_name=scenario.reader,
+        api_port=int(os.environ[API_PORT_ENV]) if os.environ.get(API_PORT_ENV) else None,
+    ) as ph:
+        yield ph
 
 
 # ---------------------------------------------------------------- scenarios
@@ -486,9 +525,18 @@ def describe(step: Step, mode: Dedupe = "on") -> str | None:
     if isinstance(step, Post):
         how = "concurrently" if step.post.concurrent else "in sequence"
         return f"same client_msg_id x{step.post.times} {how}: 1 run, 1 message, 1 run.start"
+    if isinstance(step, ClickAction):
+        return f"press the notice's {step.click_action.get('kind')} button"
+    if isinstance(step, Restart):
+        return "API killed at its fault point, restarted; the reconciler ran before serving"
+    if isinstance(step, ReconcilerTick):
+        return "reconciler tick"
+    if isinstance(step, CheckNow):
+        return "Check now"
     if isinstance(step, Approve):
         a = step.approve
         what = "approve" + (" (stale fingerprint)" if a.fingerprint == "stale" else "")
+        what += " (the API dies under it)" if a.expect_crash else ""
         what += " (original card)" if a.card == "original" else ""
         if a.expect_status is not None:
             what += f" -> {a.expect_status}" + (f" {a.expect_error}" if a.expect_error else "")
@@ -507,6 +555,21 @@ def describe(step: Step, mode: Dedupe = "on") -> str | None:
             if m
         ]
         return f"type {t.text!r}" + (f" ({', '.join(mods)})" if mods else "")
+    if isinstance(step, ExpectCancel):
+        c = step.expect_cancel
+        key = "one key" if c.same_key else "any keys"
+        status = f", booking {c.booking_status}" if c.booking_status else ""
+        return f"{c.calls} world cancel calls, {key}{status}"
+    if isinstance(step, ExpectMove):
+        m = step.expect_move
+        bits = [f"{m.calls} world reschedule calls"]
+        if m.applied is not None:
+            bits.append(f"{m.applied} applied")
+        if m.weekday is not None:
+            bits.append(f"booking on ISO weekday {m.weekday}")
+        if m.unchanged:
+            bits.append("booking not moved")
+        return ", ".join(bits)
     if isinstance(step, ExpectCard):
         spec = step.expect_card.model_dump(exclude_none=True)
         return "card " + ", ".join(f"{k}={v}" for k, v in spec.items())
@@ -750,6 +813,15 @@ class Runner:
         await self._before_run()
         response = await self.h.decide(card["approval_id"], decision, fingerprint)
         body = response.json()
+        crashed = response.status_code == 599
+        expects_crash = isinstance(step, Approve) and step.approve.expect_crash
+        self.expect(
+            crashed == expects_crash,
+            f"{decision}: the API {'died' if crashed else 'did not die'} under the request, "
+            f"{'unexpectedly' if crashed else 'but the step expects it to'}",
+        )
+        if crashed:
+            return
         if want is not None:
             self.expect(
                 response.status_code == want,
@@ -790,6 +862,38 @@ class Runner:
         response = await self.h.action(kind, payload)
         if response.status_code not in (200, 202):
             raise AssertionError(f"{kind}: {response.status_code} {response.text}")
+        await self._view(response.json()["run_id"])
+
+    async def _restart(self) -> None:
+        """The API died at the scenario's fault point; start it again and read what the
+        reconciler did before it served. The runs it ended and started are the user's view."""
+        h = self.h
+        restart = getattr(h, "restart", None)
+        if restart is None:
+            raise AssertionError("restart needs crash_at: the scenario runs against processes")
+        code = await restart()
+        self.expect(code == 1, f"the API exited with {code}, expected 1 (the fault point)")
+        seen = {v.run_id for v in self.runs}
+        convo = await h.conversation()
+        for run in convo["runs"]:
+            if run["run_id"] not in seen and run["trigger"] == "recovery":
+                await self._view(run["run_id"])
+
+    async def _click_action(self, step: ClickAction) -> None:
+        kind = step.click_action.get("kind")
+        notice = self.last.notice() or {}
+        actions = [a for a in notice.get("actions", []) if a.get("kind") == kind]
+        if not actions:
+            raise AssertionError(f"click_action: the last notice offers no {kind!r} button")
+        self.inputs.append(Say(say=str(actions[0]["label"])))
+        await self._type(str(actions[0]["label"]))
+
+    async def _check_now(self) -> None:
+        await self._flush_acks()
+        await self._before_run()
+        response = await self.h.action("check_now", {})
+        if response.status_code not in (200, 202):
+            raise AssertionError(f"check_now: {response.status_code} {response.text}")
         await self._view(response.json()["run_id"])
 
     async def _until(self, step: Until) -> None:
@@ -847,6 +951,17 @@ class Runner:
         if spec.slot_hour is not None:
             start = datetime.fromisoformat(str(action.get("slot_start")))
             self.expect(start.hour == spec.slot_hour, f"card slot starts {start}")
+        if spec.slot_not_before_hour is not None:
+            start = datetime.fromisoformat(str(action.get("slot_start")))
+            self.expect(
+                start.hour >= spec.slot_not_before_hour,
+                f"card slot starts {start}, before {spec.slot_not_before_hour}:00",
+            )
+        shown = " | ".join(
+            f"{ln.get('label')}: {ln.get('value')}" for ln in action.get("lines", [])
+        )
+        for needle in spec.lines_include:
+            self.expect(needle.lower() in shown.lower(), f"card lines {shown!r} lack {needle!r}")
         if spec.nearby is not None:
             self.expect(
                 len(action.get("nearby", [])) == spec.nearby, f"card nearby {action.get('nearby')}"
@@ -857,6 +972,56 @@ class Runner:
                 quote is not None and action.get("quoted_price_inr") == quote,
                 f"card price {action.get('quoted_price_inr')}, world hold quote {quote}",
             )
+
+    async def _expect_cancel(self, step: ExpectCancel) -> None:
+        spec = step.expect_cancel
+        ops = [r for r in await self.h.op_log() if r["op"] == "cancel"]
+        self.expect(len(ops) == spec.calls, f"world cancel calls: {len(ops)}, want {spec.calls}")
+        args = [json.loads(r["args_json"]) for r in ops]
+        keys = {a.get("idempotency_key") for a in args}
+        if spec.same_key:
+            self.expect(len(keys) <= 1, f"cancel calls used {len(keys)} different keys: {keys}")
+        targets = {a.get("booking_id") for a in args}
+        if spec.booking_status is not None:
+            self.expect(len(targets) == 1, f"cancel calls named bookings {targets}")
+            by_id = {b.booking_id: b.status for b in await self.h.inspector.bookings()}
+            for target in targets:
+                self.expect(
+                    by_id.get(target) == spec.booking_status,
+                    f"{target}: world status {by_id.get(target)}, want {spec.booking_status}",
+                )
+
+    async def _expect_move(self, step: ExpectMove) -> None:
+        spec = step.expect_move
+        ops = [r for r in await self.h.op_log() if r["op"] == "reschedule"]
+        self.expect(
+            len(ops) == spec.calls, f"world reschedule calls: {len(ops)}, want {spec.calls}"
+        )
+        if spec.applied is not None:
+            ok = sum(1 for r in ops if r["outcome"] == "ok")
+            self.expect(ok == spec.applied, f"world applied {ok} reschedules, want {spec.applied}")
+        if spec.same_key:
+            keys = {json.loads(r["args_json"]).get("idempotency_key") for r in ops}
+            self.expect(len(keys) <= 1, f"reschedule calls used {len(keys)} keys: {keys}")
+        targets = {json.loads(r["args_json"]).get("booking_id") for r in ops}
+        by_id = {b.booking_id: b for b in await self.h.inspector.bookings()}
+        for target in targets:
+            row = by_id.get(target)
+            self.expect(row is not None, f"the world has no booking {target}")
+            if row is None:
+                continue
+            day = from_ms(row.slot_start).isoweekday()
+            if spec.weekday is not None:
+                self.expect(day == spec.weekday, f"{target} sits on ISO weekday {day}")
+            if spec.unchanged:
+                seeded = {
+                    (b.provider, int(b.slot.timestamp() * 1000))
+                    for b in self.scenario.world_config().user.bookings
+                }
+                self.expect(
+                    (row.provider_id, row.slot_start) in seeded,
+                    f"{target} moved to {from_ms(row.slot_start)}",
+                )
 
     async def _expect_transcript(self, step: ExpectTranscript) -> None:
         spec = step.expect_transcript
@@ -979,8 +1144,21 @@ class Runner:
             await self.h.inspector.advance(parse_duration(step.advance).total_seconds())
         elif isinstance(step, SwitchConversation):
             await self.h.switch(step.conversation)
+        elif isinstance(step, ClickAction):
+            await self._click_action(step)
+        elif isinstance(step, Restart):
+            await self._restart()
+        elif isinstance(step, ReconcilerTick):
+            for run_id in await self.h.reconcile():
+                await self._view(run_id)
+        elif isinstance(step, CheckNow):
+            await self._check_now()
         elif isinstance(step, ExpectCard):
             await self._expect_card(step)
+        elif isinstance(step, ExpectCancel):
+            await self._expect_cancel(step)
+        elif isinstance(step, ExpectMove):
+            await self._expect_move(step)
         elif isinstance(step, ExpectTranscript):
             await self._expect_transcript(step)
         elif isinstance(step, ExpectBooking):
@@ -1482,7 +1660,7 @@ async def run_scenario(
     planner = policy or PLANNERS[scenario.model]
     reader = reader_doubles.READERS[scenario.reader]
     extra = replay.harness_kwargs() if replay else {}
-    async with harness(root, scenario.world_config(), planner, reader=reader, **extra) as h:
+    async with scenario_harness(scenario, root, planner, reader, **extra) as h:
         runner = Runner(scenario, h, planner, mode)
         try:
             await runner.run()

@@ -1,0 +1,30 @@
+id: S54b_yes_after_side_question_cancel
+title: Cancel card pending; the assistant asks a side question, so the reminder refuses typed grants; "yes" goes to the planner, a stale "cancel it" and a bare "ok" never grant, and no cancel call is made
+category: [repeated confirmation, adversarial input]
+seed: 54
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: a cancel or a reschedule never reaches `book`, so the provider's key dedupe does not apply
+steps:
+  - say: "Please cancel my AC servicing."
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - say: "actually, can I keep it instead?"
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: reminder, status: pending, typed_grant_ok: false}
+  - type_confirm: {text: "yes"}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_trace: {model.call: 1, approval.granted: 0}
+  - expect_card: {kind: reminder, typed_grant_ok: true}
+  - type_confirm: {text: "cancel it", visible: original}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_trace: {approval.granted: 0}
+  - type_confirm: {text: "ok"}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_trace: {model.call: 0, approval.granted: 0}
+  - expect_card: {kind: reminder, status: pending}
+  - expect_world: {cancel: 0}
+expect:
+  invariants: [default]

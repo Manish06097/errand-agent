@@ -11,7 +11,8 @@ Routes:
   typed-grant check (8.3);
 - `POST /api/approvals/{id}/decision` is the only button grant path, and decline (M4);
 - `POST /api/messages/{id}/rendered` records the client's render ack (M4);
-- `POST /api/conversations/{id}/actions` takes `select_slot` and `refresh_hold` (M4),
+- `POST /api/conversations/{id}/actions` takes `select_slot` and `refresh_hold` (M4) and
+  `check_now` (N1: 409 `nothing_to_check` when no intent waits on the provider),
   idempotent on `client_action_id`;
 - `GET /api/runs/{id}/events` is the run's SSE stream with replay from `Last-Event-ID`;
   `card` and `card.update` events are trace records too, so they replay.
@@ -49,10 +50,12 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from errand import faults
 from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
 from errand.api import dev_routes, web_routes
+from errand.api.reconciler import Reconciler
 from errand.api.runs import (
     Answer,
     ClientMsgIdReused,
@@ -74,6 +77,7 @@ from errand.config import (
     LimitSettings,
     ModelSettings,
     PathSettings,
+    ReconcilerSettings,
     TraceSettings,
 )
 from errand.domain.messages import MessageBody
@@ -125,6 +129,7 @@ class AppConfig:
     user_id: str | None = None
     approval_settings: ApprovalSettings | None = None
     booking_settings: BookingSettings | None = None
+    reconciler: ReconcilerSettings | None = None
     # Tests replace the per-user consequential lock (the S28 backstop test runs two
     # executes with no lock at all).
     consequential: Any = None
@@ -170,7 +175,7 @@ class ActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     client_action_id: str = Field(min_length=1, max_length=100)
-    kind: Literal["select_slot", "refresh_hold"]
+    kind: Literal["select_slot", "refresh_hold", "check_now"]
     payload: dict[str, str] = Field(default_factory=dict)
 
 
@@ -272,6 +277,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings = AgentSettings()
+        faults.configure()  # an unknown fault point refuses to start (9.9)
         model_settings = config.model_settings or ModelSettings()
         limits = config.limits or LimitSettings()
         data_dir = config.data_dir or PathSettings().data_dir
@@ -340,9 +346,14 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             )
             app.state.manager = manager
             app.state.user_id = user_id
+            reconciler = Reconciler(manager, config.reconciler or ReconcilerSettings())
+            app.state.reconciler = reconciler
+            await reconciler.startup()  # before the first request is served (9.7)
+            reconciler.start_periodic()
             try:
                 yield
             finally:
+                await reconciler.stop()
                 await manager.shutdown()
 
     app = FastAPI(title=SERVICE, lifespan=lifespan)

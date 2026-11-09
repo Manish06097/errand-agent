@@ -51,7 +51,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.runtime import Runtime
 from pydantic import ValidationError
 
-from errand.agent import ask_guard, brief_ops, invalidation, steering, timewin
+from errand.agent import ask_guard, brief_ops, invalidation, pinned, steering, timewin
+from errand.agent.changes.validate import check_change_proposal
 from errand.agent.deps import RunDeps
 from errand.agent.planner_tools import (
     ASK_OPTION_MAX_CHARS,
@@ -63,6 +64,7 @@ from errand.agent.planner_tools import (
     GetProviderArgs,
     NotCoveredArg,
     ProposeBookingArgs,
+    ProposeCancelArgs,
     UpdateBriefArgs,
 )
 from errand.agent.records import open_bookings, state_extras
@@ -74,6 +76,7 @@ from errand.agent.transitions import transition
 from errand.agent.validation import Rejected, check_book_proposal
 from errand.context.builder import build_context
 from errand.domain import aliases
+from errand.domain.booking_refs import BOOKING_REF, assign
 from errand.domain.brief import AskRecord, BriefField, TimeWindowExpr
 from errand.domain.errand import Errand, Phase
 from errand.domain.inbound import UserMessage
@@ -179,6 +182,9 @@ class PlannerLoop:
         self.notes = list(notes or [])
         self.searched = False
         self.booking_providers: set[str] = set()
+        # B1, B2, ... of the list_bookings view this run issued (N1): the only way a
+        # proposal names a booking, and valid for this run only.
+        self.booking_refs: dict[str, BookingItem] = {}
         self.card_changes: list[CardChange] = []
 
     # ------------------------------------------------------------------ loop
@@ -312,6 +318,10 @@ class PlannerLoop:
                 return self._ask_user(args)
             if name == "propose_booking":
                 return await self._propose_booking(args)
+            if name == "propose_cancel":
+                return await self._propose_cancel(args)
+            if name == "propose_reschedule":
+                return await self._propose_reschedule(args)
             if name in TOOLS:
                 # Not a planner tool: let the gateway refuse it, so its allowlist is the
                 # control that is exercised, not just this branch.
@@ -389,7 +399,10 @@ class PlannerLoop:
         # what the context builder labels stale, and the planner may not open from it.
         if shortlist is not None and shortlist.brief_version != self.errand.brief.version:
             shortlist = None
+        pinned_id = brief_ops.pinned(self.errand.brief)
         allowed = set(shortlist.provider_ids() if shortlist else []) | self.booking_providers
+        if pinned_id is not None:
+            allowed.add(pinned_id)
         if parsed.provider_id not in allowed:
             self._reject("get_provider", "not_in_shortlist_or_bookings")
             return views.render_error(
@@ -406,6 +419,19 @@ class PlannerLoop:
         # Raw reviews go to the quarantined reader and nowhere else; the view carries
         # only its enum digest (None when the read was refused or failed).
         read = await self.deps.reader.read(result)
+        if pinned_id == result.provider_id:
+            # The provider the user chose by history may never appear in a search; its slots
+            # that fit the window get handles, so propose_booking can name one (7.3).
+            shortlist = pinned.with_pinned(
+                shortlist,
+                result,
+                brief_version=self.errand.brief.version,
+                window=window,
+                digest=read.digest,
+                now=self.deps.clock.now(),
+                tz=self.deps.tz,
+            )
+            self.errand = self.errand.model_copy(update={"shortlist": shortlist})
         view = views.provider_view(
             result, window=window, shortlist=shortlist, tz=self.deps.tz, digest=read.digest
         )
@@ -423,6 +449,7 @@ class PlannerLoop:
         if not isinstance(result, ListBookingsOut):
             return views.render_error("unavailable"), True
         self.booking_providers |= {b.provider_id for b in result.bookings}
+        self.booking_refs = assign(result.bookings, views.BOOKINGS_MAX)
         return views.render(views.bookings_view(result, self.deps.tz)), False
 
     # ------------------------------------------------------------------ brief tools
@@ -441,8 +468,15 @@ class PlannerLoop:
         quotes: dict[str, list[str]] = {}
         for item in parsed.evidence:
             quotes.setdefault(item.field, []).append(item.quote)
+        pin: brief_ops.PinOutcome | None = None
+        if parsed.set.provider_pref is not None:
+            pinned_or_error = await self._pin(parsed.set.provider_pref, quotes)
+            if isinstance(pinned_or_error, str):
+                return pinned_or_error, True
+            pin = pinned_or_error
         sets: list[brief_ops.FieldValue] = []
         values = parsed.set.model_dump(exclude_none=True)
+        values.pop("provider_pref", None)  # handled above, by code
         for name in values:
             value: Any = getattr(parsed.set, name)
             if name == "window":
@@ -452,7 +486,7 @@ class PlannerLoop:
         if parsed.not_covered is not None and not sets and not clears:
             return self._out_of_coverage(parsed.not_covered)
         outcome = brief_ops.apply_patch(
-            self.errand.brief,
+            pin.brief if pin is not None else self.errand.brief,
             sets=sets,
             clears=clears,
             message_text=self.inbound.text,
@@ -460,9 +494,14 @@ class PlannerLoop:
             turn=self.inbound.turn_no,
             now=self.deps.clock.now(),
             tz=self.deps.tz,
+            earlier_messages=await self._earlier_user_messages()
+            if any(fv.name is BriefField.WINDOW for fv in sets)
+            else (),
         )
-        set_names = [fv.name.value for fv in sets]
+        set_names = [fv.name.value for fv in sets] + (["provider_pref"] if pin else [])
         clear_names = [fv.name.value for fv in clears]
+        if pin is not None and outcome.applied:
+            outcome.set_fields = [*pin.set_fields, *outcome.set_fields]
         if not outcome.applied:
             tracer.emit(
                 "brief.patch",
@@ -522,6 +561,25 @@ class PlannerLoop:
                 "missing": [f.value for f in gaps],
             }
         ), False
+
+    async def _earlier_user_messages(self) -> list[str]:
+        """The user's messages of this errand before the current one (9.9): from the
+        message of the run that created the errand (its id is `e_<run_id>`), so a message
+        from an earlier errand in the same chat is never evidence for this one."""
+        first_run = self.errand.errand_id.removeprefix("e_")
+        async with self.deps.db.session() as repos:
+            history = await repos.messages.list_for_conversation(self.deps.conversation_id)
+        texts: list[str] = []
+        started = False
+        for m in history:
+            if m.message_id == self.inbound.message_id:
+                break
+            if m.role != "user":
+                continue
+            started = started or m.run_id == first_run
+            if started and isinstance(m.body, dict) and isinstance(m.body.get("text"), str):
+                texts.append(m.body["text"])
+        return texts
 
     def _check_not_covered(self, claim: NotCoveredArg) -> str | None:
         """A tool error if `not_covered` is not what it says, else None (7.3, coverage)."""
@@ -648,6 +706,127 @@ class PlannerLoop:
         return _End(
             Proposal(action="book", provider_id=parsed.provider_id, slot_ref=parsed.slot_ref)
         )
+
+    async def _pin(self, ref: str, quotes: Mapping[str, list[str]]) -> brief_ops.PinOutcome | str:
+        """`provider_pref` is a list_bookings handle; code resolves it to the provider, reads
+        the provider's area from `get_provider`, and pins (7.3). A tool error (the string)
+        if the handle is not from this run's view or the evidence is not the user's."""
+        deps = self.deps
+        booking = self.booking_refs.get(ref) if BOOKING_REF.fullmatch(ref) else None
+        if booking is None:
+            self._reject("update_brief", "unknown_booking_ref", field="provider_pref")
+            return views.render_error(
+                "unknown_booking_ref",
+                detail=(
+                    f"{ref!r} is not a handle from a list_bookings result in this turn; "
+                    "call list_bookings first"
+                ),
+            )
+        found = await deps.tools.call(
+            Caller.PLANNER, "get_provider", {"provider_id": booking.provider_id}
+        )
+        if not isinstance(found, GetProviderOut):
+            return views.render_error("unavailable", detail="the provider could not be read")
+        spans = quotes.get("provider_pref") or []
+        outcome = brief_ops.pin_from_history(
+            self.errand.brief,
+            booking=booking,
+            provider_area=found.area,
+            quote=spans[0] if spans else None,
+            message_text=self.inbound.text,
+            message_id=self.inbound.message_id,
+            turn=self.inbound.turn_no,
+        )
+        if not outcome.applied:
+            deps.tracer.emit(
+                "brief.patch",
+                fields={"set": ["provider_pref"], "clear": []},
+                evidence_ok=False,
+                what={"message_id": self.inbound.message_id, "applied": False},
+                reason="; ".join(outcome.errors)[:500],
+            )
+            deps.tracer.emit(
+                "guard.evidence_rejected",
+                detail={
+                    "tool": "update_brief",
+                    "fields": ["provider_pref"],
+                    "message_id": self.inbound.message_id,
+                    "problems": len(outcome.errors),
+                },
+            )
+            return views.render_error(
+                "patch_rejected",
+                problems=outcome.errors,
+                user_message=self.inbound.text,
+                detail="nothing was changed; quote the user's words exactly",
+            )
+        return outcome
+
+    async def _change_target(
+        self, tool: str, args: Mapping[str, Any]
+    ) -> tuple[str, bool] | BookingItem:
+        """The booking a propose_cancel or propose_reschedule names, checked: the handle is
+        from this run's view, and the booking is the user's, confirmed, upcoming, with no
+        change already working on it, in a fresh list (N1)."""
+        try:
+            parsed = ProposeCancelArgs.model_validate(dict(args))
+        except ValidationError:
+            return views.render_error("invalid_arguments", expected={"booking_ref": "B1"}), True
+        deps = self.deps
+        if not BOOKING_REF.fullmatch(parsed.booking_ref):
+            self._reject(tool, "bad_booking_ref")
+            return views.render_error(
+                "bad_booking_ref", detail=f"{parsed.booking_ref!r} is not a handle such as B1"
+            ), True
+        booking = self.booking_refs.get(parsed.booking_ref)
+        if booking is None:
+            self._reject(tool, "unknown_booking_ref")
+            return views.render_error(
+                "unknown_booking_ref",
+                detail=(
+                    f"{parsed.booking_ref} is not in a list_bookings result from this turn; "
+                    "call list_bookings first"
+                ),
+            ), True
+        listed = await deps.tools.call(Caller.PROPOSER, "list_bookings", {"user_id": deps.user_id})
+        if not isinstance(listed, ListBookingsOut):
+            return views.render_error("unavailable", detail="bookings could not be read"), True
+        async with deps.db.session() as repos:
+            live = await repos.intents.live_targets(deps.user_id)
+            waiting = await repos.intents.awaiting_provider(deps.conversation_id)
+        verdict = check_change_proposal(
+            self.errand,
+            booking.booking_id,
+            listed.bookings,
+            now=deps.clock.now(),
+            live_targets=live,
+            awaiting_provider=waiting,
+        )
+        if isinstance(verdict, Rejected):
+            self._reject(tool, verdict.code)
+            return views.render_error(verdict.code, detail=verdict.message), True
+        return verdict.booking
+
+    async def _propose_cancel(self, args: Mapping[str, Any]) -> tuple[str, bool] | _End:
+        target = await self._change_target("propose_cancel", args)
+        if isinstance(target, tuple):
+            return target
+        return _End(Proposal(action="cancel", booking_id=target.booking_id))
+
+    async def _propose_reschedule(self, args: Mapping[str, Any]) -> tuple[str, bool] | _End:
+        target = await self._change_target("propose_reschedule", args)
+        if isinstance(target, tuple):
+            return target
+        if self.errand.brief.window is None:
+            self._reject("propose_reschedule", "no_window")
+            return views.render_error(
+                "no_window",
+                detail=(
+                    "the new day is not set; record the user's day with update_brief (window) "
+                    "or ask the user which day"
+                ),
+            ), True
+        return _End(Proposal(action="reschedule", booking_id=target.booking_id))
 
 
 def _field_value(name: str, value: Any, quotes: Mapping[str, list[str]]) -> brief_ops.FieldValue:

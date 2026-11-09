@@ -45,6 +45,15 @@ class LeasesRepo:
             return None
         return lease
 
+    async def take_over(self, key: str) -> None:
+        """Startup takeover: whoever held `key` is dead (one API process per data
+        directory), so bump the epoch and expire the row without waiting for the TTL. The
+        next `acquire` is then an ordinary one by a new holder and bumps the epoch again,
+        so anything the dead holder fenced is fenced out for good."""
+        await self._conn.execute(
+            "UPDATE leases SET epoch = epoch + 1, expires_at = 0 WHERE key = ?", (key,)
+        )
+
     async def renew(self, lease: Lease, now_ms: int, ttl_ms: int) -> Lease | None:
         cur = await self._conn.execute(
             "UPDATE leases SET expires_at = ? WHERE key = ? AND holder = ? AND epoch = ?",

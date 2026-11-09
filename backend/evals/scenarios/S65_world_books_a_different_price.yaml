@@ -1,5 +1,5 @@
 id: S65_world_books_a_different_price
-title: The world books 150 rupees above the held quote; the book answer and the status disagree with what was approved, so it is not BOOKED_VERIFIED, the intent needs attention, and the user is told what the provider recorded (the cancel card is M9)
+title: The world books 150 rupees above the held quote; the book answer and the status disagree with what was approved, so it is not BOOKED_VERIFIED, the intent needs attention, and the user is told what the provider recorded; asked to cancel it, the agent offers a cancel card through the real path, and nothing is cancelled until that card is approved
 category: [booking_correctness]
 seed: 65
 world:
@@ -27,5 +27,15 @@ steps:
       - {table: action_intents, where: {state: needs_attention}, count: 1}
       - {table: known_bookings, where: {}, count: 0}
       - {table: approvals, where: {action: cancel}, count: 0}
+  - expect_notice: cancel
+  - click_action: {kind: cancel}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - expect_world: {cancel: 0}
+  - expect_rows:
+      - {table: approvals, where: {action: cancel, status: pending}, count: 1}
+  - approve: {}
+  - expect_outcome: CANCELLED_VERIFIED
+  - expect_cancel: {calls: 2, same_key: true, booking_status: cancelled}
 expect:
   invariants: [default]

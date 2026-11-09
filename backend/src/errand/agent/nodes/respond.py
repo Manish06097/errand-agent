@@ -30,7 +30,8 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from errand.agent import cards, invalidation
+from errand.agent import cards, critical, invalidation, recovery
+from errand.agent.changes import render as changes_render
 from errand.agent.claim_guard import BOOKING_ID, guard
 from errand.agent.deps import RunDeps
 from errand.agent.records import live_approval, verified_records
@@ -38,9 +39,7 @@ from errand.agent.state import CardChange, ThreadState
 from errand.agent.templates import (
     NOT_BOOKED_TEXT,
     SLOT_TAKEN_TEXT,
-    clock_hhmm,
     internal_error,
-    pending_text,
     provider_cancelled_text,
     render,
     requote_text,
@@ -49,7 +48,7 @@ from errand.agent.templates import (
 from errand.clock import to_ms
 from errand.domain.brief import BriefField
 from errand.domain.errand import Errand, Phase
-from errand.domain.inbound import UserMessage
+from errand.domain.inbound import Recover, UserMessage
 from errand.domain.messages import (
     KIND_OF,
     ActionCard,
@@ -57,7 +56,6 @@ from errand.domain.messages import (
     MessageBody,
     NoticeAction,
     OutcomeNotice,
-    PendingFacts,
 )
 from errand.domain.outcomes import (
     ActionFailed,
@@ -65,6 +63,8 @@ from errand.domain.outcomes import (
     Ask,
     Booked,
     CardReady,
+    Changed,
+    ChangeFailed,
     ConfirmHint,
     Declined,
     HoldFailed,
@@ -135,6 +135,20 @@ class _Respond:
 
     async def run(self) -> RunOutcome:
         deps = self.deps
+        # An exit with an open intent is PENDING_VERIFICATION whatever else it was (15.1).
+        left_open = await critical.exit_critical_section(
+            deps.db,
+            conversation_id=deps.conversation_id,
+            intent_ids=deps.intents,
+            now_ms=to_ms(deps.clock.now()),
+            tracer=deps.tracer,
+            reason="limit",
+        )
+        if left_open is not None:
+            if not isinstance(self.state.result, PendingCheck):
+                self.state = self.state.model_copy(update={"result": left_open})
+            if self.errand is not None and self.errand.phase is Phase.EXECUTING:
+                self.errand = self.errand.model_copy(update={"phase": Phase.NEEDS_ATTENTION})
         live = await live_approval(deps)
         outcome, bodies = await self._render(live)
         pending = live if live is not None and live.status == "pending" else None
@@ -170,7 +184,7 @@ class _Respond:
             and self._cited_is_ours()
         ):
             return f"Booked: {self.cited_booking}, confirmed with the provider."
-        return cards.status_line(phase)
+        return cards.status_line(phase, self.errand.kind)
 
     def _cited_is_ours(self) -> bool:
         """The cited booking belongs to this errand: same service as its brief, or the brief
@@ -269,7 +283,7 @@ class _Respond:
 
     def _verified_this_run(self) -> set[str]:
         result = self.state.result
-        return {result.booking_id} if isinstance(result, Booked) else set()
+        return {result.booking_id} if isinstance(result, Booked | Changed) else set()
 
     async def _card_of(self, approval_id: str) -> ActionCard | None:
         async with self.deps.db.session() as repos:
@@ -305,6 +319,15 @@ class _Respond:
                     NoticeAction(kind="options", label="See options"),
                 )
             ]
+        if isinstance(result, Changed):
+            inbound = self.state.inbound
+            return await changes_render.render_changed(
+                self.deps,
+                result,
+                after_restart=isinstance(inbound, Recover) and inbound.after_restart,
+            )
+        if isinstance(result, ChangeFailed):
+            return changes_render.render_failed(result)
         if isinstance(result, Booked):
             card = await self._card_of(result.approval_id)
             assert card is not None
@@ -312,26 +335,15 @@ class _Respond:
                 # No status answer said `confirmed`, so this is not a *_VERIFIED outcome (INV-04).
                 text = provider_cancelled_text(card.provider_name, card.slot_label)
                 return RunOutcome.NOTIFIED, [notice(RunOutcome.NOTIFIED, text)]
-            return RunOutcome.BOOKED_VERIFIED, [cards.booked_card(card, result.booking_id)]
+            inbound = self.state.inbound
+            after_restart = isinstance(inbound, Recover) and inbound.after_restart
+            return RunOutcome.BOOKED_VERIFIED, [
+                cards.booked_card(card, result.booking_id, after_restart=after_restart)
+            ]
         if isinstance(result, ActionFailed):
             return RunOutcome.ACTION_FAILED, [_failed(result)]
         if isinstance(result, PendingCheck):
-            pending = OutcomeNotice(
-                outcome=RunOutcome.PENDING_VERIFICATION,
-                text=pending_text(result, self.deps.tz),
-                pending=PendingFacts(
-                    reason=result.reason
-                    if result.reason != "status_not_confirmed"
-                    else "status_unavailable",
-                    intent_id=result.intent_id,
-                    lapse_at=result.lapse_at,
-                    lapse_label=clock_hhmm(result.lapse_at, self.deps.tz)
-                    if result.lapse_at
-                    else None,
-                    booking_id=result.booking_id,
-                    recorded=result.detail or None,
-                ),
-            )
+            pending = critical.pending_notice(result, self.deps.tz)
             return RunOutcome.PENDING_VERIFICATION, [pending]
         if isinstance(result, OverBudget):
             self.asked = True
@@ -364,6 +376,8 @@ class _Respond:
                     "I couldn't check your bookings just now; nothing was booked. "
                     "Tap the button again to retry."
                 )
+            elif result.reason == recovery.NOTHING_TO_CHECK:
+                text = "There is nothing left to check: that booking is already settled."
             elif result.reason in ("consumed", "not_consumable"):
                 text = "Already approved: that booking is in progress or done."
             else:
@@ -467,11 +481,6 @@ def _failed(result: ActionFailed) -> OutcomeNotice:
             NoticeAction(
                 kind="refresh_hold", label="Get a fresh quote", approval_id=result.approval_id
             )
-        )
-    elif result.reason == "never_sent":
-        text = (
-            "The booking was interrupted before it was sent, so nothing was booked. "
-            "Please ask again."
         )
     else:
         text = "That approval can't be used any more, so nothing was booked."

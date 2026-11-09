@@ -1,0 +1,33 @@
+id: S26_reschedule_onto_a_conflict_slot
+title: The new slot is refused with slot_conflict; the booking stays where it was, the approval is spent, the next free times that day are offered as buttons and nothing is retried on its own; a click cards one of them, a second approval moves the booking, exactly once
+category: [reschedule, tool_failure]
+seed: 7
+world:
+  reschedule_conflict_slots: ["A2@2026-11-14T14:00+05:30"]
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: a cancel or a reschedule never reaches `book`, so the provider's key dedupe does not apply
+steps:
+  - say: "Move my AC servicing to Saturday."
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - approve: {}
+  - expect_outcome: ACTION_FAILED
+  - expect_transcript: {last_includes: ["Nothing was moved", "free times that day"]}
+  - expect_move: {calls: 1, applied: 0, unchanged: true}
+  - expect_rows:
+      - {table: approvals, where: {status: consumed}, count: 1}
+      - {table: action_intents, where: {state: failed}, count: 1}
+  - click_slot: S1
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - expect_move: {calls: 1, applied: 0, unchanged: true}
+  - approve: {}
+  - expect_outcome: RESCHEDULED_VERIFIED
+  - expect_move: {calls: 2, applied: 1, weekday: 6, same_key: false}
+  - expect_rows:
+      - {table: action_intents, where: {state: succeeded}, count: 1}
+expect:
+  invariants: [default]

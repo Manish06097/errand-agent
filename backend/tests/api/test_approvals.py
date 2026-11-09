@@ -272,10 +272,13 @@ async def test_ui_actions_are_idempotent_on_client_action_id(tmp_path: Path) -> 
         run_id = first.json()["run_id"]
         await h.finish(run_id)
         again = await h.client.post(url, json=body)
-        other = await h.client.post(url, json={**body, "kind": "check_now"})
+        other = await h.client.post(
+            url, json={"client_action_id": "check-1", "kind": "check_now", "payload": {}}
+        )
         rec = await h.records()
     assert again.status_code == first.status_code == 202 and again.json()["run_id"] == run_id
-    assert other.status_code == 422  # not an M4 action
+    # check_now (N1) with no intent waiting on the provider: 409, nothing started
+    assert other.status_code == 409 and other.json()["error"] == "nothing_to_check"
     assert len(rec.runs) == 2 and ops(rec.op_log, "hold_slot") == 1
 
 

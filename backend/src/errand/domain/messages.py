@@ -124,6 +124,8 @@ class NoticeAction(_Body):
         "refresh_hold",
         "raise_budget",
         "options",
+        "check_now",
+        "cancel",
         "quick_reply",
     ]
     label: str
@@ -164,6 +166,8 @@ class OutcomeNotice(_Body):
     still_needed: list[BriefField] = Field(default_factory=list)
     # Set on PENDING_VERIFICATION notices (M5).
     pending: PendingFacts | None = None
+    # select_slot buttons a failed reschedule offers: the next free slots that day (N1).
+    alternatives: list[SlotOption] = Field(default_factory=list)
     status_line: str | None = None
 
 
@@ -209,6 +213,9 @@ class ActionCard(_Body):
     decline_label: str = "Decline"
     nearby: list[NearbyBooking] = Field(default_factory=list)
     material: Material
+    # A reschedule's other eligible slots (N1): each is a select_slot button that cards
+    # that slot instead. Empty on a booking or a cancel.
+    alternatives: list[SlotOption] = Field(default_factory=list)
     status_line: str | None = None
     brief: list[BriefChip] = Field(default_factory=list)
 

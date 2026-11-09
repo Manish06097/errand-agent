@@ -8,7 +8,8 @@ import { Button } from "./ui/button";
 import { Sheet } from "./ui/sheet";
 
 // Only rendered when GET /api/meta says the API runs with ERRAND_DEV=1. "Kill agent
-// mid-booking" is not here: it needs M6's fault points and supervisor restart.
+// mid-booking" is not here: the demo shows a timeout, not a kill. "Reconcile now" runs the
+// periodic re-check of what waits on the provider.
 export function DevDrawer() {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -74,6 +75,9 @@ export function DevDrawer() {
             onClick={() => run("Next book", () => api.dev.nextBook("timeout_booked"))}
           >
             Next book times out after success
+          </Button>
+          <Button data-testid="dev-reconcile" onClick={() => run("Reconcile", api.dev.reconcile)}>
+            Reconcile now
           </Button>
           <section className="flex flex-col gap-2">
             <label htmlFor="dev-booking" className="text-xs font-medium">

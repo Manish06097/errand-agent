@@ -45,6 +45,7 @@ from typing import Any
 from langgraph.runtime import Runtime
 
 from errand.agent import cards
+from errand.agent.changes import execute as changes_execute
 from errand.agent.deps import RunDeps
 from errand.agent.nodes.booking import BookingPath
 from errand.agent.records import emit_swept
@@ -69,6 +70,7 @@ from errand.domain.outcomes import (
 from errand.domain.slots import HoldRef
 from errand.domain.windows import slot_label
 from errand.execution import intents as drafts
+from errand.faults import fault_point
 from errand.store.agent_db import Repos
 from errand.store.repos.approvals import ApprovalRow
 from errand.store.repos.intents import AttemptRow, IntentRow
@@ -82,6 +84,8 @@ TERMINAL_INTENT = frozenset({"succeeded", "failed"})
 async def execute(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     deps = runtime.context
     assert state.errand is not None and isinstance(state.inbound, ApprovalGranted)
+    if await changes_execute.action_of(deps, state.inbound.approval_id) != "book":
+        return await changes_execute.run_node(deps, state)  # cancel, reschedule (N1)
     with deps.tracer.node("execute", phase_before=state.errand.phase.value) as span:
         run = _Execute(deps, state.errand, state.inbound.approval_id)
         try:
@@ -263,6 +267,7 @@ class _Execute:
             )
             return AlreadyHandled(approval_id=self.approval_id, reason=token.reason)
 
+        deps.intents.add(intent_row.intent_id)
         tracer = deps.tracer
         tracer.emit(
             "approval.consumed",
@@ -281,6 +286,7 @@ class _Execute:
             state="prepared",
         )
         self._move(Phase.EXECUTING, "approval_granted")
+        fault_point("after_intent_write")
         return await self._send(token, row, approved, intent_row, attempt, held.epoch)
 
     # ------------------------------------------------------------------ sending
@@ -477,8 +483,9 @@ class _Execute:
         async with deps.db.session() as repos:
             attempts = await repos.intents.attempts(intent.intent_id)
         last = attempts[-1]
-        if last.state == "prepared":
-            return await self._abandon_unsent(intent, last)
+        # A `prepared` attempt (the process died between the guard transaction and the
+        # send) goes to verify like the others: status first, and if the provider has
+        # never seen the key, verify sends it once (9.4 step 6, S36).
         if self.errand.phase is Phase.AWAITING_APPROVAL:
             self._move(Phase.EXECUTING, "approval_granted")
         return BookCalled(
@@ -487,27 +494,6 @@ class _Execute:
             attempt_id=last.attempt_id,
             answer="unknown",
         )
-
-    async def _abandon_unsent(self, intent: IntentRow, attempt: Any) -> StepResult:
-        """M4 stopgap (8.7): a `prepared` attempt is provably unsent (it moves to
-        `in_flight` in its own committed step before `book` goes out). Architecture 9.4
-        sends it once with the same key; that crash recovery is M6's. Until then it is
-        closed, never left for the next state change to skip: the attempt is
-        `not_applied` ("never_sent"), the intent `failed`, and the user is told nothing
-        was booked and can ask again."""
-        deps = self.deps
-        now_ms = to_ms(deps.clock.now())
-        async with deps.db.transaction() as repos:
-            await repos.intents.move_attempt(
-                attempt.attempt_id,
-                frm=("prepared",),
-                to="not_applied",
-                fence_epoch=attempt.fence_epoch,
-                now_ms=now_ms,
-                last_error="never_sent",
-            )
-        await self.path.fail_intent(intent.intent_id, "never_sent")
-        return ActionFailed(approval_id=self.approval_id, reason="never_sent")
 
     async def _invalidate_and_requote(
         self, row: ApprovalRow, reason: str, new_fp: str | None

@@ -46,6 +46,7 @@ from typing import Any, Literal
 from langgraph.runtime import Runtime
 
 from errand.agent import cards
+from errand.agent.changes import verify as changes_verify
 from errand.agent.deps import RunDeps
 from errand.agent.nodes.booking import BookingPath
 from errand.agent.state import ThreadState
@@ -98,6 +99,8 @@ class Comparison:
 async def verify(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     deps = runtime.context
     assert state.errand is not None and isinstance(state.result, BookCalled)
+    if await changes_verify.is_change(deps, state.result.intent_id):
+        return await changes_verify.run_node(deps, state)  # cancel, reschedule (N1)
     with deps.tracer.node("verify", phase_before=state.errand.phase.value) as span:
         check = _Verify(deps, state.errand, state.result)
         try:
@@ -192,6 +195,14 @@ class _Verify:
                 )
             if hold_live is False:
                 return await self._lapsed(attempt, intent, status)
+            if attempt.state == "prepared":
+                # Provably never sent (the `in_flight` commit comes before the call), and the
+                # provider has no record of the key: this is the first send, not a retry.
+                outcome = await self._send_prepared(attempt, intent, status)
+                if isinstance(outcome, BookCalled):
+                    self.called = outcome
+                    continue
+                return outcome
             if self._may_retry(intent):
                 outcome = await self._retry(attempt, intent, status)
                 if isinstance(outcome, BookCalled):
@@ -479,6 +490,47 @@ class _Verify:
             return settled
         return await self.path.refused(intent.intent_id, self.called.approval_id, settled)
 
+    async def _send_prepared(
+        self, attempt: AttemptRow, intent: IntentRow, status: BookingStatusOut
+    ) -> BookCalled | StepResult:
+        """9.4 step 6: a `prepared` attempt whose key the provider has never seen is sent
+        once, with its own key, on its own hold (S36). Not a same-key retry: the budget
+        is untouched. The `in_flight` move is committed before the call, as for any send."""
+        deps = self.deps
+        self._trace_not_found(attempt, status, True, "send_prepared")
+        async with deps.db.transaction() as repos:
+            moved = await repos.intents.move_attempt(
+                attempt.attempt_id,
+                frm=("prepared",),
+                to="in_flight",
+                fence_epoch=attempt.fence_epoch,
+                now_ms=to_ms(deps.clock.now()),
+                add_calls=1,
+            )
+            sent_row = await repos.intents.get_attempt(attempt.attempt_id)
+        if not moved or sent_row is None:
+            return await self._unresolved(attempt, "fenced_off", "")
+        deps.tracer.emit(
+            "intent.in_flight",
+            intent_id=intent.intent_id,
+            attempt=attempt.n,
+            idempotency_key=attempt.idempotency_key,
+            hold_id=attempt.hold_id,
+            state="in_flight",
+        )
+        token = await service.token_for_consumed(
+            deps.db, approval_id=self.called.approval_id, intent_id=intent.intent_id
+        )
+        if token is None:
+            return await self._unresolved(sent_row, "status_unavailable", "no consumed approval")
+        sent = await self.path.send(token, intent.intent_id, sent_row)
+        settled = await self.path.settle(
+            intent.intent_id, sent_row, sent, epoch=attempt.fence_epoch
+        )
+        if isinstance(settled, BookCalled):
+            return settled
+        return await self.path.refused(intent.intent_id, self.called.approval_id, settled)
+
     async def _wait(self, attempt: AttemptRow, status: BookingStatusOut) -> StepResult:
         """The wait rule: the request may still land, so nothing is reported as failed and
         nothing more is sent. The reconciler (M6) turns it definitive when the hold lapses."""
@@ -492,7 +544,9 @@ class _Verify:
         attempt: AttemptRow,
         status: BookingStatusOut,
         hold_live: bool,
-        decision: Literal["same_key_retry", "report_not_applied", "wait_for_lapse"],
+        decision: Literal[
+            "same_key_retry", "report_not_applied", "wait_for_lapse", "send_prepared"
+        ],
     ) -> None:
         self.deps.tracer.emit(
             "status.check",

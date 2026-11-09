@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from typing import Literal
@@ -25,6 +25,8 @@ from errand.domain.brief import (
     BudgetFact,
     ErrandKind,
     Provenance,
+    ProviderPref,
+    ProviderPrefFact,
     ServiceFact,
     TextFact,
     TimeWindowExpr,
@@ -32,13 +34,15 @@ from errand.domain.brief import (
 )
 from errand.domain.errand import Errand
 from errand.domain.windows import slot_fits
-from errand.world.contracts import Area, Service
+from errand.world.contracts import Area, BookingItem, Service
 
 F = BriefField
 
 REQUIRED: Mapping[ErrandKind, tuple[BriefField, ...]] = {
     ErrandKind.BOOK: (F.SERVICE, F.AREA, F.WINDOW, F.BUDGET),
-    ErrandKind.RESCHEDULE: (F.TARGET_BOOKING, F.NEW_WINDOW),
+    # The new day is the brief's `window` (N1, 9.9): one path for dates, so update_brief's
+    # evidence check and timewin apply to a reschedule exactly as to a booking.
+    ErrandKind.RESCHEDULE: (F.TARGET_BOOKING, F.WINDOW),
     ErrandKind.CANCEL: (F.TARGET_BOOKING,),
     ErrandKind.REBOOK: (F.TARGET_BOOKING, F.WINDOW),
 }
@@ -53,9 +57,23 @@ def is_filled(brief: Brief, name: BriefField) -> bool:
     return getattr(brief, name.value) is not None
 
 
+def pinned(brief: Brief) -> str | None:
+    """The provider id the user chose by history ("the same electrician as last time"), if
+    any: the user has chosen the provider, not asked for a comparison (7.3)."""
+    pref = brief.provider_pref
+    if pref is not None and pref.prov.source == "booking_history":
+        return pref.value.prefer_id
+    return None
+
+
 def missing(brief: Brief, kind: ErrandKind) -> list[BriefField]:
-    """Required fields with no value, in REQUIRED order."""
-    return [f for f in REQUIRED[kind] if not is_filled(brief, f)]
+    """Required fields with no value, in REQUIRED order. A pinned provider needs no budget:
+    the card shows the held quote next to the last price, and the click approves that
+    exact price (a budget is the user's constraint; none is invented from the last one)."""
+    gaps = [f for f in REQUIRED[kind] if not is_filled(brief, f)]
+    if kind is ErrandKind.BOOK and pinned(brief) is not None:
+        gaps = [f for f in gaps if f is not F.BUDGET]
+    return gaps
 
 
 # ---------------------------------------------------------------- evidence
@@ -79,6 +97,7 @@ def check_evidence(
     name: BriefField,
     value: object,
     more_quotes: Sequence[str] = (),
+    earlier: Sequence[str] = (),
 ) -> EvidenceCheck:
     """Is the quote real evidence for `name = value` in the user's current message?
 
@@ -96,24 +115,39 @@ def check_evidence(
     A clear (`value` None) needs the span only. `more_quotes` are further spans for the
     same field (a window phrase and its "not before 10" are often two pieces of one
     sentence); each must pass the span rule, and the value rules read all of them.
+
+    `earlier` are the user's earlier messages of the same errand (9.9). Only a window's
+    `not_before` / `not_after` may cite them: "not before 10 a.m." said before the day was
+    known cannot be stored (a window needs a day phrase), and the user will not say it
+    twice. The window phrase and the day part still have to come from the current message,
+    so a quote that sits only in an earlier message is refused for everything else.
     """
     spans: list[str] = []
+    bounds: list[str] = []
     haystack = normalise(message)
+    use_earlier = name is F.WINDOW and value is not None
+    earlier_text = [normalise(m) for m in earlier] if use_earlier else []
     for raw in (quote, *more_quotes):
         q = normalise(raw)
         if len(q) < MIN_EVIDENCE_CHARS:
             return EvidenceCheck(False, f"the quote for {name.value} is shorter than 4 characters")
-        if q not in haystack:
+        if q in haystack:
+            spans.append(q)
+        elif any(q in text for text in earlier_text):
+            bounds.append(q)
+        else:
             return EvidenceCheck(False, f"the quote for {name.value} is not in the user's message")
-        spans.append(q)
     if value is None:
         return EvidenceCheck(True)
-    reason = _value_problem(name, value, " ; ".join(spans))
+    reason = _value_problem(name, value, " ; ".join(spans), " ; ".join(bounds))
     return EvidenceCheck(False, reason) if reason else EvidenceCheck(True)
 
 
-def _value_problem(name: BriefField, value: object, span: str) -> str | None:
-    """Why the spans do not give the value, or None when they do."""
+def _value_problem(
+    name: BriefField, value: object, span: str, earlier_span: str = ""
+) -> str | None:
+    """Why the spans do not give the value, or None when they do. `earlier_span` holds
+    quotes from earlier messages; only a window's time bounds read it."""
     if name is F.BUDGET:
         if value == "none":
             if not evidence.has_no_limit(span):
@@ -128,7 +162,7 @@ def _value_problem(name: BriefField, value: object, span: str) -> str | None:
         # window (carry_over) is not in the patch, so it is not checked here.
         if value.part_of_day is not None and value.part_of_day not in evidence.day_parts(span):
             return f"window: {span!r} does not say {value.part_of_day}; a day part needs its words"
-        times = evidence.parse_times(span)
+        times = evidence.parse_times(f"{span} ; {earlier_span}" if earlier_span else span)
         for label, wanted in (("not_before", value.not_before), ("not_after", value.not_after)):
             if wanted is not None and wanted not in times:
                 return f"window: {span!r} does not give {label} {wanted:%H:%M}"
@@ -176,8 +210,10 @@ def apply_patch(
     turn: int,
     now: datetime,
     tz: tzinfo,
+    earlier_messages: Sequence[str] = (),
 ) -> PatchOutcome:
-    """Check every value, then merge all or nothing."""
+    """Check every value, then merge all or nothing. `earlier_messages` are the user's
+    earlier messages of this errand (see `check_evidence`)."""
     errors: list[str] = []
     facts: dict[BriefField, ServiceFact | AreaFact | TextFact | WindowFact | BudgetFact | None] = {}
     tagged = [(item, False) for item in sets] + [(item, True) for item in clears]
@@ -191,7 +227,9 @@ def apply_patch(
         if item.quote is None:
             errors.append(f"no evidence quote for {item.name.value}")
             continue
-        check = check_evidence(item.quote, message_text, item.name, item.value, item.more_quotes)
+        check = check_evidence(
+            item.quote, message_text, item.name, item.value, item.more_quotes, earlier_messages
+        )
         if not check.ok:
             errors.append(check.reason or "evidence rejected")
             continue
@@ -452,6 +490,8 @@ def known_lines(brief: Brief) -> list[str]:
 
 def render_value(fact: object) -> str:
     value = getattr(fact, "value", None)
+    if isinstance(value, ProviderPref):
+        return f"the same provider as last time ({value.prefer_id})"
     label = getattr(value, "label", None)
     if isinstance(label, str):
         return label
@@ -465,3 +505,95 @@ def _source(prov: Provenance) -> str:
         return f" (from {prov.source})"
     quote = prov.evidence if len(prov.evidence) <= 60 else prov.evidence[:57] + "..."
     return f' (from the user: "{quote}")'
+
+
+# ---------------------------------------------------------------- history (7.3)
+
+_LAST = r"(?:last|previous|earlier|before)"
+HISTORY_REFERENCE = re.compile(
+    rf"\blast time\b|\bagain\b|\bsame\b[^.?!]{{0,40}}\b(?:as|like)\b[^.?!]{{0,15}}\b{_LAST}\b"
+    rf"|\bsame\b[^.?!]{{0,20}}\b{_LAST}\b",
+    re.I,
+)
+
+
+@dataclass
+class PinOutcome:
+    brief: Brief
+    applied: bool
+    set_fields: list[BriefField] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+def pin_from_history(
+    brief: Brief,
+    *,
+    booking: BookingItem,
+    provider_area: Area,
+    quote: str | None,
+    message_text: str,
+    message_id: str,
+    turn: int,
+    budget_source: Callable[[Service], BudgetFact | None] | None = None,
+) -> PinOutcome:
+    """Pin the provider of one of the user's own bookings ("the same electrician as last
+    time"), by code (7.3, 10.7).
+
+    The evidence is the user's words: a span of the current message that carries a history
+    reference ("last time", "again", "the same ... as last time") or the provider's name.
+    The booking comes from the planner's `list_bookings` view of this run, resolved by
+    code from its handle. Then code applies 7.3: the service is the booking's, the area is
+    the provider's, `provider_pref` names the provider, and the budget stays unasked.
+    `budget_source` is where a remembered ceiling for the service plugs in (N2); with none
+    (the default) no budget is invented.
+    """
+    if quote is None:
+        return PinOutcome(brief, False, errors=["no evidence quote for provider_pref"])
+    check = check_evidence(quote, message_text, F.PROVIDER_PREF, None)
+    if not check.ok:
+        return PinOutcome(brief, False, errors=[check.reason or "evidence rejected"])
+    names_provider = normalise(booking.provider_name) in normalise(quote)
+    if not (HISTORY_REFERENCE.search(quote) or names_provider):
+        return PinOutcome(
+            brief,
+            False,
+            errors=[
+                "the quote for provider_pref carries no reference to a past booking "
+                '("last time", "again", "the same ... as before") and does not name the provider'
+            ],
+        )
+    if brief.service is not None and brief.service.value != booking.service:
+        return PinOutcome(
+            brief,
+            False,
+            errors=[
+                f"that booking is {booking.service.value}, but the request is for "
+                f"{brief.service.value.value}"
+            ],
+        )
+    prov = Provenance(
+        source="booking_history",
+        message_id=message_id,
+        booking_id=booking.booking_id,
+        evidence=quote,
+    )
+    facts: dict[str, ServiceFact | AreaFact | ProviderPrefFact | BudgetFact] = {
+        "service": ServiceFact(value=booking.service, prov=prov, set_at_turn=turn),
+        "area": AreaFact(value=provider_area, prov=prov, set_at_turn=turn),
+        "provider_pref": ProviderPrefFact(
+            value=ProviderPref(prefer_id=booking.provider_id), prov=prov, set_at_turn=turn
+        ),
+    }
+    if budget_source is not None and brief.budget_max_inr is None:
+        remembered = budget_source(booking.service)
+        if remembered is not None:
+            facts["budget_max_inr"] = remembered
+    changed = [
+        F(name)
+        for name, fact in facts.items()
+        if getattr(brief, name) is None or getattr(brief, name).value != fact.value
+    ]
+    if not changed:
+        return PinOutcome(brief, True)
+    pinned_brief = brief.model_copy(update={**facts, "version": brief.version + 1})
+    return PinOutcome(pinned_brief, True, set_fields=changed)
