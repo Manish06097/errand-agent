@@ -16,6 +16,7 @@ import httpx
 
 from errand.clock import CLOCK_HEADER, ClockMode, TrackingClock, from_ms
 from errand.world.engine import WorldHost
+from errand.world.rng import BookOutcome
 from errand.world.scenario import ScenarioConfig
 from errand.world.store import BookingRow, EventRow, OperationRow, OpLogRow
 
@@ -28,6 +29,8 @@ class WorldInspector(Protocol):
     async def tick(self) -> list[EventRow]: ...
 
     async def fire_provider_cancel(self, booking_id: str) -> EventRow: ...
+
+    async def force_next_book(self, outcome: BookOutcome) -> None: ...
 
     async def events(self) -> list[EventRow]: ...
 
@@ -59,6 +62,9 @@ class InProcessInspector:
 
     async def fire_provider_cancel(self, booking_id: str) -> EventRow:
         return self._host.world.fire_provider_cancel(booking_id)
+
+    async def force_next_book(self, outcome: BookOutcome) -> None:
+        self._host.world.force_next_book(outcome)
 
     async def events(self) -> list[EventRow]:
         return self._host.world.events()
@@ -135,6 +141,9 @@ class HttpInspector:
     async def fire_provider_cancel(self, booking_id: str) -> EventRow:
         data = await self._request("POST", "/dev/world/events", {"booking_id": booking_id})
         return EventRow(**data)
+
+    async def force_next_book(self, outcome: BookOutcome) -> None:
+        await self._request("POST", "/dev/world/force_book", {"outcome": outcome})
 
     async def events(self) -> list[EventRow]:
         return [EventRow(**e) for e in await self._request("GET", "/dev/world/events")]
