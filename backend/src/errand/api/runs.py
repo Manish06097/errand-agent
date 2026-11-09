@@ -551,9 +551,9 @@ class RunManager:
         client: dict[str, Any] | None = None,
     ) -> Admission:
         now = self.clock.now()
-        counters = RunCounters(
-            started_at=now, deadline_at=now + timedelta(seconds=self.limits.run_deadline_s)
-        )
+        real_model = self.model_settings.model_mode in ("live", "record")
+        deadline_s = self.limits.live_run_deadline_s if real_model else self.limits.run_deadline_s
+        counters = RunCounters(started_at=now, deadline_at=now + timedelta(seconds=deadline_s))
         run_input = {
             "thread_id": conversation_id,
             "user_id": user_id,

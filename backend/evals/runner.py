@@ -95,6 +95,7 @@ from evals.dsl import (
 )
 from evals.policies import hostile, reference
 from evals.policies import reader as reader_doubles
+from evals.replay import ReplayRun
 from evals.simuser import SimUser, SimUserFailure
 
 APPROVAL_CARDS = ("action", "reminder")
@@ -192,8 +193,10 @@ class Harness:
         limits: LimitSettings | None = None,
         consequential: Any = None,
         clock_mode: ClockMode = "sim",
+        model_settings: ModelSettings | None = None,
         booking: BookingSettings | None = None,
     ) -> None:
+        self.model_settings = model_settings or ModelSettings(model_mode="scripted")
         self.clock_mode = clock_mode
         # The provider's dedupe is declared once, in the scenario's world block; the agent's
         # `booking.provider_dedupes_keys` follows it. The retry budget comes from the
@@ -228,7 +231,7 @@ class Harness:
                 model_factory=self.model_factory,
                 reader_factory=self.reader_factory,
                 ids=SequentialIds(),
-                model_settings=ModelSettings(model_mode="scripted"),
+                model_settings=self.model_settings,
                 limits=self.limits,
                 tz=IST,
                 approval_settings=ApprovalSettings(),
@@ -405,6 +408,7 @@ async def harness(
     limits: LimitSettings | None = None,
     consequential: Any = None,
     clock_mode: ClockMode = "sim",
+    model_settings: ModelSettings | None = None,
     booking: BookingSettings | None = None,
 ) -> AsyncIterator[Harness]:
     async with Harness(
@@ -417,6 +421,7 @@ async def harness(
         limits,
         consequential,
         clock_mode,
+        model_settings,
         booking,
     ) as h:
         yield h
@@ -424,11 +429,11 @@ async def harness(
 
 @asynccontextmanager
 async def scenario_harness(
-    scenario: Scenario, root: Path, planner: Policy, reader: Policy
+    scenario: Scenario, root: Path, planner: Policy, reader: Policy, **extra: Any
 ) -> AsyncIterator[Harness]:
     """In process by default; against real processes for a scenario that crashes the API."""
     if scenario.crash_at is None:
-        async with harness(root, scenario.world_config(), planner, reader=reader) as h:
+        async with harness(root, scenario.world_config(), planner, reader=reader, **extra) as h:
             yield h
         return
     if scenario.model != "scripted:reference":
@@ -1570,7 +1575,15 @@ def _actual(
     return f"runs {' -> '.join(parts)}; world {world}; {inv}"
 
 
-def _notes(scenario: Scenario, records: invariants.Records) -> str:
+def trace_name(
+    scenario: Scenario, replay: ReplayRun | None = None, mode: Dedupe | None = None
+) -> str:
+    """The directory under evals/out that holds this row's traces: `<id>.replay` for a
+    replay row, else the dedupe-mode folder."""
+    return f"{scenario.id}.replay" if replay else trace_dir(scenario, mode)
+
+
+def _notes(scenario: Scenario, records: invariants.Records, replay: ReplayRun | None = None) -> str:
     model_calls = tool_calls = reader_calls = max_est = 0
     cost = 0.0
     for record in records.all_records():
@@ -1592,6 +1605,8 @@ def _notes(scenario: Scenario, records: invariants.Records) -> str:
         f"claims_checked={notes.get('claims_checked', 'not checked')}; "
         f"inv03_books={notes.get('inv03_books_checked', 'not checked')}; "
         f"inv03_resends={notes.get('inv03_resends_checked', 'not checked')}; "
+        f"inv03_liveness={notes.get('inv03_liveness_checked', 'not checked')}; "
+        f"inv03_bounds={notes.get('inv03_count_bounds_checked', 'not checked')}; "
         "never_mind=vacuous until M6; "
         f"attempts_checked={notes.get('attempts_checked', 'not checked')}; "
         f"attempts_unsettled={notes.get('attempts_unsettled', 'not checked')}; "
@@ -1600,7 +1615,7 @@ def _notes(scenario: Scenario, records: invariants.Records) -> str:
         f"model_calls={model_calls}; reader_calls={reader_calls}; tool_calls={tool_calls}; "
         f"max_est_tokens={max_est}; "
         f"cost_usd={cost:.6f}; review_texts_checked={reviews}; {checked}"
-        f"trace=backend/evals/out/{trace_dir(scenario)}/"
+        f"trace=backend/evals/out/{trace_name(scenario, replay)}/"
     )
 
 
@@ -1611,8 +1626,13 @@ def trace_dir(scenario: Scenario, mode: Dedupe | None = None) -> str:
     return label.replace("[dedupe=", ".dedupe-").rstrip("]")
 
 
-def save_traces(scenario: Scenario, root: Path, mode: Dedupe | None = None) -> None:
-    dest = Path(os.environ.get(TRACE_DIR_ENV) or OUT) / trace_dir(scenario, mode)
+def save_traces(
+    scenario: Scenario,
+    root: Path,
+    replay: ReplayRun | None = None,
+    mode: Dedupe | None = None,
+) -> None:
+    dest = Path(os.environ.get(TRACE_DIR_ENV) or OUT) / trace_name(scenario, replay, mode)
     if dest.exists():
         shutil.rmtree(dest)
     if (root / "traces").exists():
@@ -1624,9 +1644,11 @@ async def run_scenario(
     root: Path,
     policy: Policy | None = None,
     on_records: Callable[[invariants.Records], None] | None = None,
+    replay: ReplayRun | None = None,
     mode: Dedupe | None = None,
 ) -> ScenarioResult:
-    """One run of `scenario` in one dedupe mode (the first it declares, unless given)."""
+    """One run of `scenario` in one dedupe mode (the first it declares, unless given),
+    scripted or, with `replay`, on a cassette."""
     mode = mode or scenario.modes()[0]
     scenario = scenario.for_mode(mode)
     expectations = [d for d in (describe(s, mode) for s in scenario.steps) if d]
@@ -1637,7 +1659,8 @@ async def run_scenario(
     failures: list[str] = []
     planner = policy or PLANNERS[scenario.model]
     reader = reader_doubles.READERS[scenario.reader]
-    async with scenario_harness(scenario, root, planner, reader) as h:
+    extra = replay.harness_kwargs() if replay else {}
+    async with scenario_harness(scenario, root, planner, reader, **extra) as h:
         runner = Runner(scenario, h, planner, mode)
         try:
             await runner.run()
@@ -1652,19 +1675,21 @@ async def run_scenario(
     violations = invariants.check(records, names)
     failures += runner.failures
     failures += [f"{name}: {v}" for name, vs in violations.items() for v in vs]
-    save_traces(scenario, root, mode)
+    if replay:
+        failures += replay.extra_failures(records)
+    save_traces(scenario, root, replay, mode)
     actual = _actual(runner.runs, op_log, violations)
     checks = [f for f in failures if not f.startswith("INV-")]
     if checks:
         actual += f"; {len(checks)} expectation(s) failed"
     return ScenarioResult(
-        scenario=scenario.label(mode),
+        scenario=replay.scenario_id(scenario) if replay else scenario.label(mode),
         category=", ".join(scenario.category),
-        model_mode=scenario.model_mode,
+        model_mode=replay.model_mode if replay else scenario.model_mode,
         world=scenario.world_label(),
         expected=expected,
         actual=actual,
         passed=not failures,
-        notes=_notes(scenario, records),
+        notes=(replay.notes(records) if replay else "") + _notes(scenario, records, replay),
         failures=failures,
     )

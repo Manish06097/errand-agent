@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -289,8 +290,7 @@ def _append_run_end(path: Path, run: Run, recovered_by: str | None, now: datetim
         records = trace.records
         if trace.truncated_tail is not None:
             # A record cut off by the crash: drop the fragment, so the new line starts clean.
-            with path.open("r+b") as f:
-                f.truncate(path.stat().st_size - len(trace.truncated_tail))
+            os.truncate(path, path.stat().st_size - len(trace.truncated_tail))
     if any(r["type"] == "run.end" for r in records):
         return
     start = next((r for r in records if r["type"] == "run.start"), None)

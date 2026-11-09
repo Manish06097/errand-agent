@@ -282,6 +282,7 @@ class _Preparer:
             candidate=verdict.candidate,
             slot=held_slot,
             search_price_inr=handle.search_price_inr,
+            hold_id=hold.hold_id,
             hold_expires_at=from_ms(hold.expires_at),
             expires_at=expires,
             nearby=nearby,

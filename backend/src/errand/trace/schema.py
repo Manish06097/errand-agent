@@ -256,6 +256,8 @@ class StatusCheck(Envelope):
     # because the book answer that carried the price never arrived (a timeout).
     price_unverified: bool | None = None
     mismatch: list[str] | None = None
+    # The comparison could not be finished (list_bookings unavailable). Never a mismatch.
+    check_incomplete: bool | None = None
 
 
 class BudgetRecord(Envelope):

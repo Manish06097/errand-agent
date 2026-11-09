@@ -21,6 +21,7 @@ import httpx
 
 from errand.clock import CLOCK_HEADER, Clock, ClockMode, TrackingClock
 from errand.tools.client import HttpTransport, InProcessTransport, WorldClient
+from errand.tools.inspector import HttpInspector, InProcessInspector, WorldInspector
 from errand.tools.timeouts import ToolTimeouts
 from errand.world.engine import WorldHost
 
@@ -52,10 +53,16 @@ class WorldAccess:
     client: WorldClient
     clock: Clock
     aclose: Callable[[], Awaitable[None]] = _noop
+    # Dev access to the same world (the /api/dev routes). Never handed to the agent.
+    inspector: WorldInspector | None = None
 
 
 def in_process(host: WorldHost, timeouts: ToolTimeouts | None = None) -> WorldAccess:
-    return WorldAccess(client=InProcessTransport(host, timeouts), clock=HostClock(host))
+    return WorldAccess(
+        client=InProcessTransport(host, timeouts),
+        clock=HostClock(host),
+        inspector=InProcessInspector(host),
+    )
 
 
 def open_in_process(path: Path, timeouts: ToolTimeouts | None = None) -> WorldAccess:
@@ -107,4 +114,5 @@ async def over_http(
 
         clock.advance_hook = advance
     transport = HttpTransport(base_url, timeouts, clock=clock, http=http)
-    return WorldAccess(client=transport, clock=clock, aclose=http.aclose)
+    inspector = HttpInspector(base_url, clock, http=http)
+    return WorldAccess(client=transport, clock=clock, aclose=http.aclose, inspector=inspector)

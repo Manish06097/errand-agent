@@ -80,7 +80,7 @@ from errand.world.contracts import (
     encode,
     hold_is_live,
 )
-from errand.world.rng import book_outcome, draw
+from errand.world.rng import BookOutcome, book_outcome, draw
 from errand.world.scenario import ScenarioConfig
 from errand.world.store import (
     BookingRow,
@@ -93,6 +93,8 @@ from errand.world.store import (
     ReviewRow,
     WorldStore,
 )
+
+FORCED_NEXT_META = "forced_next_book"
 
 
 class WorldClosed(RuntimeError):
@@ -266,6 +268,27 @@ class World:
     def fire_provider_cancel(self, booking_id: str) -> EventRow:
         with self.store.tx():
             return events.fire_now(self.store, booking_id, self.now_ms())
+
+    def force_next_book(self, outcome: BookOutcome) -> None:
+        """Dev drawer: the next `book` that reaches the outcome draw answers `outcome`.
+
+        A queue in the world's meta table, read ahead of the scenario's `forced` list
+        and consumed one per book. Loading a scenario would reset the store, and with
+        it the booking in progress, so this is its own narrow route. Test and dev only:
+        it is reachable through the inspector, never through WorldClient.
+        """
+        with self.store.tx():
+            queue = json.loads(self.store.get_meta(FORCED_NEXT_META) or "[]")
+            queue.append(outcome)
+            self.store.set_meta(FORCED_NEXT_META, json.dumps(queue))
+
+    def _pop_forced_next(self) -> BookOutcome | None:
+        queue = json.loads(self.store.get_meta(FORCED_NEXT_META) or "[]")
+        if not queue:
+            return None
+        self.store.set_meta(FORCED_NEXT_META, json.dumps(queue[1:]))
+        outcome: BookOutcome = queue[0]
+        return outcome
 
     def events(self) -> list[EventRow]:
         return self.store.all_events()
@@ -655,7 +678,10 @@ class World:
         forced = self.scenario.world.book.forced
         used = int(self.store.get_meta("forced_book_used") or "0")
         u: float | None = None
-        if used < len(forced):
+        pushed = self._pop_forced_next()
+        if pushed is not None:
+            outcome = pushed
+        elif used < len(forced):
             outcome = forced[used]
             self.store.set_meta("forced_book_used", str(used + 1))
         else:

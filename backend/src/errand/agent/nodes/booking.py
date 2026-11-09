@@ -120,18 +120,14 @@ class BookingPath:
     async def rehold_used(self, row: ApprovalRow) -> bool:
         """Whether this approval was already moved to a replacement hold.
 
-        Read from agent.sqlite: the card records the expiry of the hold it was issued on,
-        and `approvals.bound_hold_id` is the hold it is bound to now. A re-hold changes
-        the second and leaves the first, so a different expiry means the one automatic
-        re-hold per approval is spent.
+        Identity, read from agent.sqlite: the stored card (`approvals.card_json`, never
+        rewritten) carries `hold_id`, the hold it was issued on; `bound_hold_id` is the hold
+        the approval is bound to now. A re-hold moves the second, so a different one means
+        the one automatic re-hold per approval is spent. A card without `hold_id` (a pre-M5
+        row) counts as already re-held: no automatic re-hold, a fresh card.
         """
-        if row.bound_hold_id is None:
-            return False
-        card = ActionCard.model_validate_json(row.card_json)
-        async with self.deps.db.session() as repos:
-            bound = await repos.holds.get_by_hold_id(row.bound_hold_id)
-        issued = to_ms(datetime.fromisoformat(card.hold_expires_at))
-        return bound is not None and bound.expires_at != issued
+        issued = ActionCard.model_validate_json(row.card_json).hold_id
+        return issued is None or row.bound_hold_id != issued
 
     # ------------------------------------------------------------------ sending
 

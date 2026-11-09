@@ -8,7 +8,10 @@ them. What a pass finds decides:
   and the price whenever `book` answered with one (after a timeout it did not, and the
   record says `price_unverified`). A match makes the attempt `applied`, the intent
   `succeeded`, upserts `known_bookings`: COMPLETED, BOOKED_VERIFIED. A difference makes
-  the intent `needs_attention` and tells the user exactly what the provider recorded;
+  the intent `needs_attention` and tells the user exactly what the provider recorded (the
+  slot and provider by name, the price). A check that could not be finished (the list of
+  bookings unavailable) is not a difference: it is its own reason, `check_incomplete`,
+  with no `mismatch` on the trace, the intent `needs_attention` and nothing called booked;
 - `cancelled_by_provider`: the booking was applied and then cancelled. The attempt is
   `applied`, the intent `succeeded`, `known_bookings` is upserted, and in the same
   transaction a `followup_jobs` row (booking, `provider_cancel`, `detected`) is written.
@@ -17,11 +20,14 @@ them. What a pass finds decides:
 - `not_found` after an ambiguous `book`, with the hold lapsed by the world clock: from
   then on a late request can only get `hold_expired`, so it is definitive. The attempt is
   `not_applied`, the intent `failed`, ACTION_FAILED with a fresh-quote action;
-- `not_found`, hold live: the same-key retry (step 7) while the budget allows it, the
-  provider declares it dedupes keys and the errand is not abandoned. One transaction sets
-  `same_key_retries + 1`, the attempt `in_flight` and `calls + 1`, and commits; only then
-  does `book` go out again, on the same hold with the same key. The answer is classified
-  like the first one and never trusted alone: the pass runs again;
+- `not_found` after a clean `confirmed` from `book` is a contradiction, not an ambiguity:
+  no retry and no failure report, the same `check_incomplete` state for a person;
+- `not_found`, hold live, after an ambiguous `book` (a timeout, a 5xx, a malformed answer,
+  or an attempt found `in_flight` after a crash): the same-key retry (step 7) while the
+  budget allows it, the provider declares it dedupes keys and the errand is not abandoned.
+  One transaction sets `same_key_retries + 1`, the attempt `in_flight` and `calls + 1`, and
+  commits; only then does `book` go out again, on the same hold with the same key. The
+  answer is classified like the first one and never trusted alone: the pass runs again;
 - `not_found`, hold live, no retry allowed: the wait rule. The attempt stays `unknown`,
   the intent `needs_attention`, PENDING_VERIFICATION naming when the hold lapses;
 - the status unavailable after 4 checks: the same state, and no `book` is ever sent while
@@ -33,6 +39,7 @@ The consequential lock taken in `execute` is released here, whatever happens.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
@@ -48,6 +55,7 @@ from errand.approvals.fingerprint import parse_material
 from errand.clock import from_ms, to_ms
 from errand.domain.errand import Errand, Phase
 from errand.domain.material import BookMaterial
+from errand.domain.messages import ActionCard
 from errand.domain.outcomes import (
     ActionFailed,
     BookCalled,
@@ -56,6 +64,7 @@ from errand.domain.outcomes import (
     Replan,
     StepResult,
 )
+from errand.domain.windows import slot_label
 from errand.store.repos.intents import AttemptRow, IntentRow
 from errand.store.repos.known_bookings import KnownBooking
 from errand.tools.errors import ToolError
@@ -64,6 +73,27 @@ from errand.world.contracts import BookingStatusOut, ListBookingsOut, hold_is_li
 
 # Simulated seconds waited before each of the (at most) 4 checks of a pass.
 BACKOFF_S = (0.5, 1.0, 2.0, 4.0)
+
+
+@dataclass(frozen=True)
+class Approved:
+    """What the card the user approved called the provider and the slot."""
+
+    provider_name: str
+    slot_label: str
+
+
+@dataclass
+class Comparison:
+    """What the provider recorded against what the user approved.
+
+    `differences` are real, user-readable differences ("a price of ... instead of ...").
+    `incomplete` means a read needed for the comparison failed, so the check could not be
+    finished; it says nothing about the booking and is never a difference.
+    """
+
+    differences: list[str] = field(default_factory=list)
+    incomplete: bool = False
 
 
 async def verify(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
@@ -148,8 +178,20 @@ class _Verify:
                     hold_live=hold_live,
                     decision="escalate",
                 )
+                return await self._unresolved(attempt, "material_mismatch", _status_phrase(status))
+            if self.called.answer == "confirmed":
+                # `book` said confirmed and the provider has no record under the key: a
+                # contradiction, so nothing is retried and nothing is reported failed.
+                deps.tracer.emit(
+                    "status.check",
+                    idempotency_key=key,
+                    result=status.model_dump(mode="json"),
+                    hold_live=hold_live,
+                    decision="escalate",
+                    check_incomplete=True,
+                )
                 return await self._unresolved(
-                    attempt, "material_mismatch", f"the provider shows it as {status.status}"
+                    attempt, "check_incomplete", "not_found_after_confirmed"
                 )
             if hold_live is False:
                 return await self._lapsed(attempt, intent, status)
@@ -205,9 +247,11 @@ class _Verify:
         return hold_is_live(self.deps.clock.now(), from_ms(attempt.hold_expires_at))
 
     def _may_retry(self, intent: IntentRow) -> bool:
+        """Step 6 allows the same-key retry only after an ambiguous call."""
         s = self.deps.booking_settings
         return (
-            s.provider_dedupes_keys
+            self.called.answer == "unknown"
+            and s.provider_dedupes_keys
             and intent.same_key_retries < s.max_same_key_retries
             and not self.abandoned
         )
@@ -225,11 +269,14 @@ class _Verify:
         deps = self.deps
         key = attempt.idempotency_key
         cancelled = status.status == "cancelled_by_provider"
-        mismatch = await self._compare(material, status)
+        comparison = await self._compare(material, status, await self._approved())
+        mismatch = comparison.differences
+        # A real difference outranks an unfinished check: the user hears what differs.
+        incomplete = comparison.incomplete and not mismatch
         price_unverified = self.called.price_inr is None
         decision: Literal["report_success", "report_provider_cancelled", "escalate"] = (
             "escalate"
-            if mismatch
+            if mismatch or incomplete
             else "report_provider_cancelled"
             if cancelled
             else "report_success"
@@ -242,6 +289,7 @@ class _Verify:
             decision=decision,
             price_unverified=price_unverified or None,
             mismatch=mismatch or None,
+            check_incomplete=incomplete or None,
         )
         assert status.booking_id is not None
         if mismatch:
@@ -249,6 +297,14 @@ class _Verify:
                 attempt,
                 "material_mismatch",
                 "; ".join(mismatch),
+                applied=True,
+                booking_id=status.booking_id,
+            )
+        if incomplete:
+            return await self._unresolved(
+                attempt,
+                "check_incomplete",
+                "list_bookings_unavailable",
                 applied=True,
                 booking_id=status.booking_id,
             )
@@ -318,34 +374,53 @@ class _Verify:
             cancelled_by_provider=cancelled,
         )
 
-    async def _compare(self, material: BookMaterial, status: BookingStatusOut) -> list[str]:
-        """What the provider recorded that differs from what the user approved."""
+    async def _approved(self) -> Approved | None:
+        async with self.deps.db.session() as repos:
+            row = await repos.approvals.get(self.called.approval_id)
+        if row is None:
+            return None
+        card = ActionCard.model_validate_json(row.card_json)
+        return Approved(card.provider_name, card.slot_label)
+
+    async def _compare(
+        self, material: BookMaterial, status: BookingStatusOut, card: Approved | None
+    ) -> Comparison:
+        """What the provider recorded that differs from what the user approved, in words the
+        user can read: the slot and the provider by name, the price in rupees."""
+        deps = self.deps
         called = self.called
-        problems: list[str] = []
+        out = Comparison()
         if called.booking_id is not None and status.booking_id != called.booking_id:
-            problems.append(f"booking {status.booking_id}, but book answered {called.booking_id}")
+            out.differences.append("a booking number that does not match the confirmation it gave")
         start = datetime.fromisoformat(material.slot_start)
         end = datetime.fromisoformat(material.slot_end)
         if status.slot is None or status.slot.start != start or status.slot.end != end:
-            problems.append("a different slot")
+            approved = f" instead of the {card.slot_label} you approved" if card else ""
+            recorded = f" ({slot_label(status.slot, deps.tz)})" if status.slot else ""
+            out.differences.append(f"a different slot{recorded}{approved}")
         if called.price_inr is not None and called.price_inr != material.quoted_price_inr:
-            problems.append(
+            out.differences.append(
                 f"a price of {cards.rupees(called.price_inr)} instead of the "
                 f"{cards.rupees(material.quoted_price_inr)} you approved"
             )
         try:
-            listed = await self.deps.tools.call(
-                Caller.VERIFIER, "list_bookings", {"user_id": self.deps.user_id}, critical=True
+            listed = await deps.tools.call(
+                Caller.VERIFIER, "list_bookings", {"user_id": deps.user_id}, critical=True
             )
         except ToolError:
             listed = None
         if not isinstance(listed, ListBookingsOut):
-            problems.append("the provider could not be checked")
-        else:
-            mine = next((b for b in listed.bookings if b.booking_id == status.booking_id), None)
-            if mine is None or mine.provider_id != material.provider_id:
-                problems.append("a different provider")
-        return problems
+            out.incomplete = True
+            return out
+        mine = next((b for b in listed.bookings if b.booking_id == status.booking_id), None)
+        if mine is None:
+            out.differences.append("a booking that is not in your list of bookings")
+        elif mine.provider_id != material.provider_id:
+            approved = (
+                f" instead of {card.provider_name}, the provider you approved" if card else ""
+            )
+            out.differences.append(f"a booking with {mine.provider_name}{approved}")
+        return out
 
     # ------------------------------------------------------------------ not found
 
@@ -486,7 +561,9 @@ class _Verify:
     async def _unresolved(
         self,
         attempt: AttemptRow,
-        reason: Literal["status_unavailable", "material_mismatch", "hold_live", "fenced_off"],
+        reason: Literal[
+            "status_unavailable", "material_mismatch", "check_incomplete", "hold_live", "fenced_off"
+        ],
         detail: str,
         *,
         applied: bool = False,
@@ -508,7 +585,15 @@ class _Verify:
                 attempt.intent_id,
                 frm=("open", "needs_attention"),
                 to="needs_attention",
-                result_json=json.dumps({"reason": reason, "detail": detail}),
+                # booking_id is set when the provider did book something (applied): M9's
+                # cancel card for a booking that differs reads it from here.
+                result_json=json.dumps(
+                    {
+                        "reason": reason,
+                        "detail": detail,
+                        **({"booking_id": booking_id} if booking_id else {}),
+                    }
+                ),
                 now_ms=now_ms,
             )
         deps.tracer.emit(
@@ -528,3 +613,11 @@ class _Verify:
             lapse_at=lapse_at,
             booking_id=booking_id,
         )
+
+
+def _status_phrase(status: BookingStatusOut) -> str:
+    """What the provider recorded when its answer is neither a booking nor `not_found`."""
+    if status.status == "confirmed":
+        return "a confirmation without a booking number"
+    # Not "cancelled": the claim guard and INV-04 read that word as a cancel claim.
+    return "the booking as no longer active"

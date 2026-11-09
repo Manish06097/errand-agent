@@ -9,6 +9,7 @@ and the wording of every new sentence against the claim guard and INV-04.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from errand.agent.claim_guard import guard
 from errand.agent.nodes import verify as verify_node
 from errand.clock import IST
 from errand.config import BookingSettings
+from errand.domain.messages import ActionCard
 from errand.domain.outcomes import PendingCheck
 from errand.execution import executor
 from errand.world.contracts import BookError
@@ -250,6 +252,9 @@ async def test_the_one_re_hold_per_approval_is_read_from_the_database(tmp_path: 
             row = await repos.approvals.get(card["approval_id"])
         assert row is not None
         path = BookingPath(deps=_DepsWithDb(h.manager.db), errand=None)  # type: ignore[arg-type]
+        assert (
+            ActionCard.model_validate_json(row.card_json).hold_id == row.bound_hold_id is not None
+        )
         assert await path.rehold_used(row) is False
         async with h.manager.db.transaction() as repos:
             old = await repos.holds.get_by_hold_id(row.bound_hold_id or "")
@@ -271,6 +276,54 @@ async def test_the_one_re_hold_per_approval_is_read_from_the_database(tmp_path: 
             )
             moved = await repos.approvals.get(row.approval_id)
         assert moved is not None and await path.rehold_used(moved) is True
+        # Identity, not expiry: the same expiry on the replacement changes nothing.
+        async with h.manager.db.transaction() as repos:
+            await repos.conn.execute(
+                "UPDATE holds SET expires_at = ? WHERE hold_id = 'H-moved'", (old.expires_at,)
+            )
+            same_expiry = await repos.approvals.get(row.approval_id)
+        assert same_expiry is not None and await path.rehold_used(same_expiry) is True
+        # A card without the field (a pre-M5 row) counts as already re-held: fail safe.
+        legacy = json.loads(row.card_json)
+        del legacy["hold_id"]
+        async with h.manager.db.transaction() as repos:
+            await repos.conn.execute(
+                "UPDATE approvals SET card_json = ?, bound_hold_id = ? WHERE approval_id = ?",
+                (json.dumps(legacy), row.bound_hold_id, row.approval_id),
+            )
+            old_card = await repos.approvals.get(row.approval_id)
+        assert old_card is not None and await path.rehold_used(old_card) is True
+
+
+async def test_a_clean_confirmed_followed_by_not_found_is_a_contradiction_not_a_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """9.4 step 6 allows the same-key retry only after an ambiguous call. `book` answered
+    `confirmed`; the status then says `not_found`: nothing is sent again, nothing is
+    reported failed, and the user is told the check is unfinished."""
+    from errand.tools import gateway
+    from errand.world.contracts import BookingStatusOut
+
+    real = gateway.ToolGateway.call
+
+    async def call(self: Any, caller: Any, tool: Any, args: Any, **kw: Any) -> Any:
+        if caller is gateway.Caller.VERIFIER and tool == "get_booking_status":
+            return BookingStatusOut(status="not_found")
+        return await real(self, caller, tool, args, **kw)
+
+    monkeypatch.setattr(gateway.ToolGateway, "call", call)
+    async with harness(tmp_path, world("success")) as h:
+        view = await approve(h)
+        rec = await h.records()
+        notice = await _last_notice(h)
+    assert view.outcome == "PENDING_VERIFICATION"
+    assert ops(rec.op_log, "book") == 1
+    assert [i["state"] for i in rec.intents] == ["needs_attention"]
+    assert [i["same_key_retries"] for i in rec.intents] == [0]
+    assert notice["pending"]["reason"] == "check_incomplete"
+    assert "couldn't finish checking" in notice["text"]
+    checks = [r for r in rec.all_records() if r["type"] == "status.check"]
+    assert checks and all(not r.get("mismatch") for r in checks)
 
 
 class _DepsWithDb:
@@ -288,9 +341,14 @@ async def test_an_abandoned_errand_gets_no_retry() -> None:
     check = verify_node._Verify.__new__(verify_node._Verify)
     check.deps = SimpleNamespace(booking_settings=BookingSettings())  # type: ignore[assignment]
     intent: Any = SimpleNamespace(same_key_retries=0)
+    check.called = SimpleNamespace(answer="unknown")  # type: ignore[assignment]
     check.abandoned = False
     assert check._may_retry(intent) is True
     check.abandoned = True
+    assert check._may_retry(intent) is False
+    # The design allows the retry only after an ambiguous answer, never after a clean one.
+    check.abandoned = False
+    check.called = SimpleNamespace(answer="confirmed")  # type: ignore[assignment]
     assert check._may_retry(intent) is False
     assert Phase.ABANDONED.value == "abandoned"
 
@@ -310,6 +368,9 @@ def _claims(text: str) -> list[str]:
 
 
 _TEXTS = [
+    templates.pending_text(
+        PendingCheck(approval_id="a", intent_id="i", reason="check_incomplete"), IST
+    ),
     templates.pending_text(
         PendingCheck(
             approval_id="a",
@@ -340,6 +401,187 @@ _TEXTS = [
     templates.requote_text("material_changed", None) or "",
     templates.provider_cancelled_text("Ravi Plumbing", "Thu 13 Nov 09:00"),
 ]
+
+
+def _verify_with(
+    book: dict[str, Any], listed: Any
+) -> tuple[verify_node._Verify, list[tuple[str, str]]]:
+    """A _Verify over a fake gateway whose list_bookings answers `listed` (or raises it)."""
+    from types import SimpleNamespace
+
+    from errand.domain.outcomes import BookCalled
+
+    asked: list[tuple[str, str]] = []
+
+    class Tools:
+        async def call(self, caller: Any, tool: str, args: Any, **kw: Any) -> Any:
+            asked.append((caller.value, tool))
+            if isinstance(listed, Exception):
+                raise listed
+            return listed
+
+    check = verify_node._Verify.__new__(verify_node._Verify)
+    check.deps = SimpleNamespace(tools=Tools(), user_id="u_1", tz=IST)  # type: ignore[assignment]
+    check.called = BookCalled(approval_id="a", intent_id="i", attempt_id="t", **book)
+    return check, asked
+
+
+def _material() -> Any:
+    from errand.domain.material import BookMaterial
+    from errand.world.contracts import Service
+
+    return BookMaterial(
+        user_id="u_1",
+        provider_id="P1",
+        service=Service.PLUMBER,
+        slot_start="2026-11-13T09:00:00+05:30",
+        slot_end="2026-11-13T10:00:00+05:30",
+        quoted_price_inr=1350,
+    )
+
+
+def _slot(hour: int) -> Any:
+    from datetime import datetime
+
+    from errand.world.contracts import Slot
+
+    return Slot(
+        start=datetime.fromisoformat(f"2026-11-13T{hour:02d}:00:00+05:30"),
+        end=datetime.fromisoformat(f"2026-11-13T{hour + 1:02d}:00:00+05:30"),
+    )
+
+
+def _listed(provider_id: str, provider_name: str, booking_id: str = "B-2") -> Any:
+    from errand.world.contracts import BookingItem, ListBookingsOut, Service
+
+    return ListBookingsOut(
+        bookings=[
+            BookingItem(
+                booking_id=booking_id,
+                provider_id=provider_id,
+                provider_name=provider_name,
+                service=Service.PLUMBER,
+                slot=_slot(9),
+                status="confirmed",
+            )
+        ]
+    )
+
+
+_CONFIRMED = {"answer": "confirmed", "booking_id": "B-2", "price_inr": 1350}
+_APPROVED = verify_node.Approved("Ravi Plumbing", "Fri 13 Nov, 09:00-10:00")
+_OK = _listed("P1", "Ravi Plumbing")
+
+
+def _comparison_cases() -> list[Any]:
+    from errand.world.contracts import BookingStatusOut
+
+    ok = BookingStatusOut(status="confirmed", booking_id="B-2", slot=_slot(9))
+    return [
+        pytest.param(_CONFIRMED, ok, _OK, "b-id-ok", id="matches"),
+        pytest.param(
+            {**_CONFIRMED, "booking_id": "B-1"}, ok, _OK, "a booking number", id="booking_id"
+        ),
+        pytest.param(
+            _CONFIRMED,
+            BookingStatusOut(status="confirmed", booking_id="B-2", slot=_slot(10)),
+            _OK,
+            "10:00-11:00",
+            id="slot",
+        ),
+        pytest.param(
+            _CONFIRMED,
+            BookingStatusOut(status="confirmed", booking_id="B-2"),
+            _OK,
+            "a different slot instead of the",
+            id="slot_missing",
+        ),
+        pytest.param({**_CONFIRMED, "price_inr": 1600}, ok, _OK, "₹1,600", id="price"),
+        pytest.param(
+            _CONFIRMED, ok, _listed("P9", "Sharma Plumbing"), "Sharma Plumbing", id="provider"
+        ),
+        pytest.param(
+            _CONFIRMED, ok, _listed("P1", "Ravi Plumbing", "B-7"), "not in your list", id="unlisted"
+        ),
+    ]
+
+
+@pytest.mark.parametrize(("book", "status", "listed", "expect"), _comparison_cases())
+async def test_every_difference_names_what_the_provider_recorded(
+    book: dict[str, Any], status: Any, listed: Any, expect: str
+) -> None:
+    check, _ = _verify_with(book, listed)
+    found = await check._compare(_material(), status, _APPROVED)
+    if expect == "b-id-ok":
+        assert found.differences == [] and found.incomplete is False
+        return
+    assert found.incomplete is False and len(found.differences) == 1
+    text = templates.pending_text(
+        PendingCheck(
+            approval_id="a",
+            intent_id="i",
+            reason="material_mismatch",
+            detail="; ".join(found.differences),
+            booking_id="B-2",
+        ),
+        IST,
+    )
+    assert expect in text, text
+    for internal in ("book answered", "could not be checked", "recorded the provider"):
+        assert internal not in text
+    assert guard(text, [], IST).removed == [] and _claims(text) == [], text
+    if "slot" in found.differences[0]:
+        assert "you approved" in text or "instead of" in text
+    if expect == "Sharma Plumbing":
+        assert "instead of Ravi Plumbing" in text
+
+
+async def test_a_list_failure_is_an_incomplete_check_with_its_own_sentence() -> None:
+    from errand.tools.errors import ToolTransient
+    from errand.world.contracts import BookingStatusOut
+
+    ok = BookingStatusOut(status="confirmed", booking_id="B-2", slot=_slot(9))
+    check, asked = _verify_with(_CONFIRMED, ToolTransient("list_bookings", 503, b""))
+    found = await check._compare(_material(), ok, _APPROVED)
+    assert found.differences == [] and found.incomplete is True
+    assert asked == [("verifier", "list_bookings")]
+    text = templates.pending_text(
+        PendingCheck(
+            approval_id="a",
+            intent_id="i",
+            reason="check_incomplete",
+            booking_id="B-2",
+        ),
+        IST,
+    )
+    assert "couldn't finish checking" in text and "recorded" not in text
+    assert guard(text, [], IST).removed == [] and _claims(text) == [], text
+
+
+@pytest.mark.parametrize(
+    "detail",
+    ["the booking as no longer active", "a confirmation without a booking number"],
+)
+def test_the_odd_status_answers_read_as_what_the_provider_recorded(detail: str) -> None:
+    text = templates.pending_text(
+        PendingCheck(approval_id="a", intent_id="i", reason="material_mismatch", detail=detail),
+        IST,
+    )
+    assert text.startswith(f"The provider recorded {detail},")
+    assert guard(text, [], IST).removed == [] and _claims(text) == [], text
+
+
+def test_the_phrases_verify_writes_for_an_odd_status_are_the_ones_tested_above() -> None:
+    from errand.world.contracts import BookingStatusOut
+
+    assert (
+        verify_node._status_phrase(BookingStatusOut(status="cancelled"))
+        == "the booking as no longer active"
+    )
+    assert (
+        verify_node._status_phrase(BookingStatusOut(status="confirmed"))
+        == "a confirmation without a booking number"
+    )
 
 
 @pytest.mark.parametrize("text", _TEXTS)

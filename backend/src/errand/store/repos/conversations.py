@@ -85,3 +85,31 @@ class ConversationsRepo:
             (user_id,),
         ) as cur:
             return [_row(r) for r in await cur.fetchall()]
+
+    async def list_with_previews(
+        self, user_id: str, limit: int = 100
+    ) -> list[tuple[Conversation, str | None]]:
+        """The user's newest conversations, each with its first user message (the sidebar
+        preview). One query, scoped to this user's conversations and bounded by `limit`."""
+        columns = ", ".join(f"c.{name.strip()}" for name in _COLUMNS.split(","))
+        async with self._conn.execute(
+            f"""
+            WITH recent AS (
+              SELECT {columns} FROM conversations c WHERE c.user_id = ?
+              ORDER BY c.last_activity_at DESC, c.conversation_id LIMIT ?
+            ), first_user AS (
+              SELECT m.conversation_id,
+                     json_extract(m.body_json, '$.text') AS text,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY m.conversation_id ORDER BY m.created_at, m.message_id
+                     ) AS rn
+              FROM messages m
+              WHERE m.role = 'user' AND m.conversation_id IN (SELECT conversation_id FROM recent)
+            )
+            SELECT recent.*, f.text AS preview FROM recent
+            LEFT JOIN first_user f ON f.conversation_id = recent.conversation_id AND f.rn = 1
+            ORDER BY recent.last_activity_at DESC, recent.conversation_id
+            """,
+            (user_id, limit),
+        ) as cur:
+            return [(_row(r), r["preview"]) for r in await cur.fetchall()]

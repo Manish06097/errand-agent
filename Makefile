@@ -35,7 +35,9 @@ help:
 	@echo "make evals        offline eval suite; regenerates docs/EVAL_TABLE.md"
 	@echo "make langfuse-up  self-hosted Langfuse on ERRAND_LANGFUSE_PORT (default 3100);"
 	@echo "                  make dev then sends traces to it. make langfuse-down stops it"
-	@echo "make e2e | record   not built yet"
+	@echo "make e2e          Playwright: brings up its own stack (scripted planner, fresh data"
+	@echo "                  dir, ERRAND_DEV=1), runs web/e2e and tears it down"
+	@echo "make record SCENARIO=S01   record the scenario's cassette with the real key (prints cost)"
 
 setup:
 	uv sync --locked --project backend
@@ -62,16 +64,22 @@ check:
 	cd backend && uv run --frozen pytest tests -m slow -n 3 --dist loadfile
 	$(PNPM) typecheck
 	$(PNPM) lint
+	$(UV) python scripts/gen_api_types.py --check
 
 evals:
 	uv sync --locked --project backend
 	$(UV) python scripts/run_evals.py --write-report
 
 e2e:
-	@echo "make e2e: not built yet, lands in M7" >&2; exit 2
+	uv sync --locked --project backend
+	$(PNPM) install --frozen-lockfile
+	$(PNPM) exec playwright install chromium
+	$(PNPM) e2e
 
 record:
-	@echo "make record: not built yet, lands in M7" >&2; exit 2
+	@test -n "$(SCENARIO)" || { echo "usage: make record SCENARIO=S01" >&2; exit 2; }
+	uv sync --locked --project backend
+	$(UV) python scripts/record_cassette.py $(SCENARIO)
 
 langfuse-up:
 	$(UV) python scripts/langfuse_stack.py up

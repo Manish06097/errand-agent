@@ -35,7 +35,6 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
-import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -55,7 +54,7 @@ from errand import faults
 from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
-from errand.api import dev_reconcile
+from errand.api import dev_routes, web_routes
 from errand.api.reconciler import Reconciler
 from errand.api.runs import (
     Answer,
@@ -358,8 +357,6 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 await manager.shutdown()
 
     app = FastAPI(title=SERVICE, lifespan=lifespan)
-    if os.environ.get("ERRAND_DEV") == "1":
-        dev_reconcile.register(app)
 
     @app.middleware("http")
     async def agent_clock_header(
@@ -540,6 +537,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         ):
             yield event
 
+    web_routes.register(app)
+    dev_routes.register(app)
     return app
 
 

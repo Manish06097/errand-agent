@@ -143,7 +143,9 @@ class PendingFacts(_Body):
     the actions and their routes, and the notice carries facts only until then.
     """
 
-    reason: Literal["hold_live", "status_unavailable", "material_mismatch", "fenced_off"]
+    reason: Literal[
+        "hold_live", "status_unavailable", "material_mismatch", "check_incomplete", "fenced_off"
+    ]
     intent_id: str
     # hold_live (the wait rule): when the hold lapses by the world clock, ISO with +05:30,
     # and the same time as the user reads it ("09:12", IST).
@@ -202,6 +204,9 @@ class ActionCard(_Body):
     search_price_inr: int
     quoted_price_inr: int  # the held quote: this is the price approved
     price_delta_inr: int  # quoted minus search price
+    # The hold the card was issued on; approvals.card_json is never rewritten, so this is the
+    # record the one automatic re-hold is measured against. Absent on pre-M5 cards.
+    hold_id: str | None = None
     hold_expires_at: str  # world clock
     expires_at: str  # the approval's own expiry, agent clock
     button_label: str  # "Book for ₹1,350"
