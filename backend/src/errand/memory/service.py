@@ -15,11 +15,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
+from datetime import tzinfo
 from typing import Any
 
 import aiosqlite
 
-from errand.memory import mask, redaction
+from errand.memory import inference, mask, redaction
 from errand.memory.evidence import Checked, EvidenceRefused, ValueCheck, check_explicit
 from errand.memory.evidence import value_in_quote as default_value_check
 from errand.memory.hmac_key import hmac_hex
@@ -700,6 +701,30 @@ class MemoryService:
                 )
                 changed += 1
         return changed
+
+    async def run_inference(
+        self, *, user_id: str, tz: tzinfo, run_id: str | None = None
+    ) -> list[Json]:
+        """After a completed errand: the two rules over the user's booking records.
+
+        Returns the suggestions that were written (declined ones are not listed).
+        """
+        async with self._db.session() as repos:
+            bookings = await repos.known_bookings.for_user(user_id)
+        written: list[Json] = []
+        for cand in inference.candidates(bookings, tz):
+            got = await self.suggest(
+                user_id=user_id,
+                key=cand.key,
+                scope=cand.scope,
+                value=cand.value,
+                rule=cand.rule,
+                booking_ids=cand.booking_ids,
+                run_id=run_id,
+            )
+            if got is not None and got["declined"] is None:
+                written.append(got["memory"])
+        return written
 
     # ----------------------------------------------------------------------- run usage
 
