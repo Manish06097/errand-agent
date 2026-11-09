@@ -494,6 +494,9 @@ class PlannerLoop:
             turn=self.inbound.turn_no,
             now=self.deps.clock.now(),
             tz=self.deps.tz,
+            earlier_messages=await self._earlier_user_messages()
+            if any(fv.name is BriefField.WINDOW for fv in sets)
+            else (),
         )
         set_names = [fv.name.value for fv in sets] + (["provider_pref"] if pin else [])
         clear_names = [fv.name.value for fv in clears]
@@ -558,6 +561,25 @@ class PlannerLoop:
                 "missing": [f.value for f in gaps],
             }
         ), False
+
+    async def _earlier_user_messages(self) -> list[str]:
+        """The user's messages of this errand before the current one (9.9): from the
+        message of the run that created the errand (its id is `e_<run_id>`), so a message
+        from an earlier errand in the same chat is never evidence for this one."""
+        first_run = self.errand.errand_id.removeprefix("e_")
+        async with self.deps.db.session() as repos:
+            history = await repos.messages.list_for_conversation(self.deps.conversation_id)
+        texts: list[str] = []
+        started = False
+        for m in history:
+            if m.message_id == self.inbound.message_id:
+                break
+            if m.role != "user":
+                continue
+            started = started or m.run_id == first_run
+            if started and isinstance(m.body, dict) and isinstance(m.body.get("text"), str):
+                texts.append(m.body["text"])
+        return texts
 
     def _check_not_covered(self, claim: NotCoveredArg) -> str | None:
         """A tool error if `not_covered` is not what it says, else None (7.3, coverage)."""

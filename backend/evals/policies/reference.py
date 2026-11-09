@@ -135,6 +135,26 @@ def window_value(text: str) -> tuple[dict[str, Any], str] | None:
     return window, quote
 
 
+def _bounds_from_earlier(
+    window: dict[str, Any], evidence: list[dict[str, str]], view: TurnView
+) -> None:
+    """A time bound the user said before the day ("not before 10 a.m.", then "tomorrow",
+    9.9): the day answer sets the window, and the bound is taken from the earlier message
+    of this errand, quoted from there. A bound the answer itself gives wins."""
+    users = [
+        ln.removeprefix("user: ") for ln in view.recent.splitlines() if ln.startswith("user: ")
+    ]
+    for key, pattern in (("not_before", _NOT_BEFORE), ("not_after", _NOT_AFTER)):
+        if window[key] is not None:
+            continue
+        for line in reversed(users):
+            found = pattern.search(line)
+            if found is not None:
+                window[key] = hhmm(found.group(1))
+                evidence.append({"field": "window", "quote": found.group(0)})
+                break
+
+
 def uncovered_place(text: str) -> str | None:
     """ "HSR Layout" in "a plumber in HSR Layout": a capitalised place that is not a covered
     area."""
@@ -180,6 +200,8 @@ def extract(text: str, view: TurnView) -> Patch:
     found = window_value(text)
     if found is not None:
         put("window", found[0], found[1])
+        if "window" in values:
+            _bounds_from_earlier(values["window"], evidence, view)
     if _NO_BUDGET.search(text):
         match = _NO_BUDGET.search(text)
         assert match is not None

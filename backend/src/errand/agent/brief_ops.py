@@ -97,6 +97,7 @@ def check_evidence(
     name: BriefField,
     value: object,
     more_quotes: Sequence[str] = (),
+    earlier: Sequence[str] = (),
 ) -> EvidenceCheck:
     """Is the quote real evidence for `name = value` in the user's current message?
 
@@ -114,24 +115,39 @@ def check_evidence(
     A clear (`value` None) needs the span only. `more_quotes` are further spans for the
     same field (a window phrase and its "not before 10" are often two pieces of one
     sentence); each must pass the span rule, and the value rules read all of them.
+
+    `earlier` are the user's earlier messages of the same errand (9.9). Only a window's
+    `not_before` / `not_after` may cite them: "not before 10 a.m." said before the day was
+    known cannot be stored (a window needs a day phrase), and the user will not say it
+    twice. The window phrase and the day part still have to come from the current message,
+    so a quote that sits only in an earlier message is refused for everything else.
     """
     spans: list[str] = []
+    bounds: list[str] = []
     haystack = normalise(message)
+    use_earlier = name is F.WINDOW and value is not None
+    earlier_text = [normalise(m) for m in earlier] if use_earlier else []
     for raw in (quote, *more_quotes):
         q = normalise(raw)
         if len(q) < MIN_EVIDENCE_CHARS:
             return EvidenceCheck(False, f"the quote for {name.value} is shorter than 4 characters")
-        if q not in haystack:
+        if q in haystack:
+            spans.append(q)
+        elif any(q in text for text in earlier_text):
+            bounds.append(q)
+        else:
             return EvidenceCheck(False, f"the quote for {name.value} is not in the user's message")
-        spans.append(q)
     if value is None:
         return EvidenceCheck(True)
-    reason = _value_problem(name, value, " ; ".join(spans))
+    reason = _value_problem(name, value, " ; ".join(spans), " ; ".join(bounds))
     return EvidenceCheck(False, reason) if reason else EvidenceCheck(True)
 
 
-def _value_problem(name: BriefField, value: object, span: str) -> str | None:
-    """Why the spans do not give the value, or None when they do."""
+def _value_problem(
+    name: BriefField, value: object, span: str, earlier_span: str = ""
+) -> str | None:
+    """Why the spans do not give the value, or None when they do. `earlier_span` holds
+    quotes from earlier messages; only a window's time bounds read it."""
     if name is F.BUDGET:
         if value == "none":
             if not evidence.has_no_limit(span):
@@ -146,7 +162,7 @@ def _value_problem(name: BriefField, value: object, span: str) -> str | None:
         # window (carry_over) is not in the patch, so it is not checked here.
         if value.part_of_day is not None and value.part_of_day not in evidence.day_parts(span):
             return f"window: {span!r} does not say {value.part_of_day}; a day part needs its words"
-        times = evidence.parse_times(span)
+        times = evidence.parse_times(f"{span} ; {earlier_span}" if earlier_span else span)
         for label, wanted in (("not_before", value.not_before), ("not_after", value.not_after)):
             if wanted is not None and wanted not in times:
                 return f"window: {span!r} does not give {label} {wanted:%H:%M}"
@@ -194,8 +210,10 @@ def apply_patch(
     turn: int,
     now: datetime,
     tz: tzinfo,
+    earlier_messages: Sequence[str] = (),
 ) -> PatchOutcome:
-    """Check every value, then merge all or nothing."""
+    """Check every value, then merge all or nothing. `earlier_messages` are the user's
+    earlier messages of this errand (see `check_evidence`)."""
     errors: list[str] = []
     facts: dict[BriefField, ServiceFact | AreaFact | TextFact | WindowFact | BudgetFact | None] = {}
     tagged = [(item, False) for item in sets] + [(item, True) for item in clears]
@@ -209,7 +227,9 @@ def apply_patch(
         if item.quote is None:
             errors.append(f"no evidence quote for {item.name.value}")
             continue
-        check = check_evidence(item.quote, message_text, item.name, item.value, item.more_quotes)
+        check = check_evidence(
+            item.quote, message_text, item.name, item.value, item.more_quotes, earlier_messages
+        )
         if not check.ok:
             errors.append(check.reason or "evidence rejected")
             continue
