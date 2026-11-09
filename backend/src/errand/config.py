@@ -59,7 +59,7 @@ class LimitSettings(BaseSettings):
     # The wall clock per run when the planner is the real model (15.1): ceil(2 x p95 of a
     # planning turn) from the M7 live runs. Applied in live and record modes only; evals
     # keep run_deadline_s. M13 owns the enforcement.
-    live_run_deadline_s: float = Field(default=24.0, gt=0)
+    live_run_deadline_s: float = Field(default=23.0, gt=0)
 
 
 class ReaderSettings(BaseSettings):

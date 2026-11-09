@@ -175,7 +175,7 @@ Second review found two more, each reproduced through a real Tracer with JSONL a
 - Dev drawer trigger sits in the chat header, not fixed at the corner (it collided with Next's own dev indicator).
 
 **Deviations to rule on.**
-- `live_run_deadline_s` is 24 s, as the rule says, and it breaks the reader live. The reader is skipped (`error: deadline`) when less run time is left than its 20 s timeout; with 24 s that is true after about 4 s, so on a cold reader cache every reader call is skipped and no digest reaches the shortlist. I ran it: fresh data dir, live, S01 opener, four `reader.call` records, all `error: deadline`. With a warm cache (cache hits are not deadline-gated) nothing shows. Proposal: the live deadline must cover the reader, so ceil(2 x p95) + reader timeout (44 s), or the reader's rule compares against the run backstop. It is one line either way; I kept the rule's value because you set it.
+- `live_run_deadline_s` is 23 s (the first 13 turns said 24; three more turns moved p95 from 11.59 s to 11.48 s), as the rule says, and it breaks the reader live. The reader is skipped (`error: deadline`) when less run time is left than its 20 s timeout; with 23 s that is true after about 3 s, so on a cold reader cache every reader call is skipped and no digest reaches the shortlist. I ran it: fresh data dir, live, S01 opener, four `reader.call` records, all `error: deadline`. With a warm cache (cache hits are not deadline-gated) nothing shows. Proposal: the live deadline must cover the reader, so ceil(2 x p95) + reader timeout (43 s), or the reader's rule compares against the run backstop. It is one line either way; I kept the rule's value because you set it.
 - `run_backstop_s` (90 s) is now above the live deadline by a wide margin and the deadline is below the 60 s planner timeout; M13 owns both.
 - Two mutations from the brief do not turn the double-click e2e red as worded. A second decision POST cannot reach `consume`: `grant` refuses a non-pending row first, so removing `status = 'granted'` from `consume` changes nothing a POST can see (the unit test `test_consume_takes_exactly_one_granted_row_and_only_then_mints` does turn red). The e2e turns red when the `grant` guard goes (the second POST then answers 500 instead of 200 `already_approved`), which is the layer a POST reaches.
 - The typed-grant e2e first stayed green under the `Date.now()` mutation: the dev clock had the agent clock behind the wall clock that day, which only M4F's future-stamp refusal catches. The test now advances the agent clock a day first, so it is red whatever the time of day.
@@ -185,15 +185,15 @@ Second review found two more, each reproduced through a real Tracer with JSONL a
 
 **Live run.** `ERRAND_MODEL_MODE=live make dev` on 9270/9271/9272, one S01 conversation in the browser with the trace panel open: Opus 5.5 planned (3 model calls, 3.6 s, 1.0 s and 3.8 s), Haiku read four providers, the shortlist showed P9's "Reviews unverified" badge and the hidden-review notice, I picked the first slot and approved, `BOOKED_VERIFIED`. Screenshot: `docs/engineering/m7_live_run.png`.
 
-| Live planning turns (13: one S01 opener in the browser, 12 more through the API: opener, "cheapest?", "Thursday instead?" in 4 conversations) | |
+| Live planning turns (16: one S01 opener in the browser, 12 through the API (opener, "cheapest?", "Thursday instead?" in 4 conversations), 3 more from the deadline probe below) | |
 |---|---|
-| latency p50 / p95 / max (run.start to run.end) | 7.44 s / 11.59 s / 12.01 s |
-| cost per turn p50 / p95 | $0.0213 / $0.0313 |
-| total cost of the 13 turns | $0.2703 |
-| `live_run_deadline_s` = ceil(2 x p95) | 24 |
+| latency p50 / p95 / max (run.start to run.end) | 6.91 s / 11.48 s / 12.01 s |
+| cost per turn p50 / p95 | $0.0215 / $0.0310 |
+| total cost of the 16 turns | $0.3353 |
+| `live_run_deadline_s` = ceil(2 x p95) | 23 |
 | S01 cassette (`make record SCENARIO=S01`: 3 planner calls, 4 reader calls) | $0.0338, 11.7 s planner time |
 
-Total live and record spend: about $0.35 against the $3 limit.
+Total live and record spend: about $0.40 against the $3 limit (the 16 turns, the cassette, the cold-cache probe and the screenshot run). `uv run --frozen --project backend errand-trace stats` reads the 16 turns in `data/traces`.
 
 **Verified.** `make check`: green in 80 s wall on 9270/9271/9272 after merging main (M4F): 715 passed and 3 skipped in 11.9 s, then the slow set, 238 passed and 1 skipped in 53.9 s, then web typecheck, web lint and the types-drift line; the one baseline failure, BUG-M4F-1's test, is green now that M4F is merged. `make evals`: 34/34 (33 scripted plus `S01_happy_path_plumber[replay]`), run twice, the two tables differ only in the Generated line; `env -u ANTHROPIC_API_KEY make evals` green. `make e2e`: 8 passed in 22.7 s and 8 passed in 21.5 s, two consecutive runs, each on a fresh data directory (the suite also covers the dev drawer, a queued message during a hanging booking, and the 390 px layout). `errand chat` from a fresh clone with no `web/node_modules`: `printf '<opener>\n1\n' | uv run --project backend errand chat --api http://127.0.0.1:9271` in a clone at 5f07b8f with no `web/node_modules`, against the scripted stack: the card with `[1] Book for ₹500`, then `[verified]` and the booking B-5713; `tests/cli/test_chat.py` drives the same flow as a subprocess, by number and by typing "book it" on the offset clock. Mutations, each red: `Date.now()` stamps (typed-grant e2e: `routed_as` was `resume`), ActionCard ignoring the 409 (stale-card e2e: no `card-note`), a route reading the trace file directly (`test_the_trace_routes_read_through_the_reader` and the static scan), a dev route reachable with `ERRAND_DEV` unset (two tests), the reader miss swallowed again (the BUG-M7-1 repro), a card field renamed without regenerating the types (`gen_api_types.py --check`), `grant` without `status = 'pending'` (double-click e2e); `consume` without `status = 'granted'` is caught by the unit test, not the e2e (see deviations).
 

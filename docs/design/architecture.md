@@ -1389,7 +1389,7 @@ Pending and dismissed rows are rule-inferred with typed values and booking-id ev
 | world tool calls per run (incl. retries) | 16 | `ToolGateway` |
 | reprompts per run | 1 | `plan` |
 | SystemNote replans per run | 1 | routing |
-| wall clock per run | 60 s simulated in evals; 24 s live and in record mode (`live_run_deadline_s`: 13 live planning turns in M7 gave p50 7.4 s and p95 11.6 s, and 2 x p95 rounded up is 24) | checked before every node, model call and tool call outside the critical section |
+| wall clock per run | 60 s simulated in evals; 23 s live and in record mode (`live_run_deadline_s`: 16 live planning turns in M7 gave p50 6.9 s and p95 11.5 s, and 2 x p95 rounded up is 23) | checked before every node, model call and tool call outside the critical section |
 | per-tool timeout | see the timeout table below | `ToolGateway` |
 | critical-section grace | 20 s | `execute`/`verify` under `asyncio.shield` |
 | cost per run | $0.40 | `LLMGateway`; not applied inside the critical section |
