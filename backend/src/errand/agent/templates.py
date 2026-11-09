@@ -229,6 +229,11 @@ def pending_text(result: PendingCheck, tz: tzinfo) -> str:
             f"The provider recorded {result.detail}{which}, so I'm not treating this one as "
             "final. I'll sort it out with you here."
         )
+    if result.reason == "check_incomplete":
+        return (
+            "I couldn't finish checking the booking with the provider, so I'm not treating "
+            "this one as final. I'll keep checking and update you here."
+        )
     safe = "The provider hasn't confirmed yet, and it can't end up as two bookings."
     if result.reason == "hold_live" and result.lapse_at:
         when = clock_hhmm(result.lapse_at, tz)

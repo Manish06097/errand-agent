@@ -229,6 +229,7 @@ class PendingCheck(_Result):
     reason: Literal[
         "status_not_confirmed",
         "material_mismatch",
+        "check_incomplete",
         "fenced_off",
         "status_unavailable",
         "hold_live",

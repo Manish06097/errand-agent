@@ -100,7 +100,9 @@ class PendingFacts(_Body):
     the actions and their routes, and the notice carries facts only until then.
     """
 
-    reason: Literal["hold_live", "status_unavailable", "material_mismatch", "fenced_off"]
+    reason: Literal[
+        "hold_live", "status_unavailable", "material_mismatch", "check_incomplete", "fenced_off"
+    ]
     intent_id: str
     # hold_live (the wait rule): when the hold lapses by the world clock, ISO with +05:30,
     # and the same time as the user reads it ("09:12", IST).
