@@ -34,8 +34,11 @@ async def test_export_writes_every_run_of_the_thread_in_order(
     out = tmp_path / "timeout_after_success.jsonl"
     assert cli.main(["export", "--thread", thread, "--out", str(out), "--data-dir", str(root)]) == 0
     assert "records from 2 runs" in capsys.readouterr().err
-    records = read_trace(out).records
+    exported = read_trace(out).records
     assert read_trace(out).truncated_tail is None
+    # the header first, the conversation totals last, the runs between them as written
+    assert (exported[0]["type"], exported[-1]["type"]) == ("export.header", "conversation.totals")
+    records = exported[1:-1]
     runs = [r["run_id"] for r in records]
     assert runs == sorted(runs) and set(runs) == {"r_0001", "r_0002"}
     assert [r["type"] for r in records if r["type"] == "run.end"] == ["run.end", "run.end"]
@@ -58,6 +61,7 @@ async def test_export_goes_to_stdout_and_escapes_non_ascii(
     text = capsys.readouterr().out
     assert text.isascii() and "\\u20b9" in text  # the rupee sign, escaped
     assert all(json.loads(line)["thread_id"] == thread for line in text.splitlines())
+    assert text.splitlines()[0].startswith('{"v":1,"type":"export.header"')
 
 
 async def test_show_reads_the_export_cleanly(

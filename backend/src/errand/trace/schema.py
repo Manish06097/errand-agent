@@ -373,6 +373,52 @@ def _record_types() -> frozenset[str]:
 
 RECORD_TYPES: frozenset[str] = _record_types()
 
+
+class ExportHeader(BaseModel):
+    """First record of `errand-trace export` (N4, 16.3). Written by the exporter, never by
+    a Tracer, so it is not in `RECORD_TYPES` and carries no span envelope."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    v: Literal[1] = 1
+    type: Literal["export.header"]
+    thread_id: str
+    run_ids: list[str]
+    # The code that produced the runs: `run_records` when the run.start records name it,
+    # else `exporting_checkout` (the SHA of the checkout that ran the export).
+    git_sha: str | None
+    git_sha_source: Literal["run_records", "exporting_checkout"]
+    model_mode: str  # the `mode` of the model.call records, or "none" when there are none
+    clock_mode: Literal["sim", "system_offset"]
+    exported_at: str
+
+
+class ConversationTotals(BaseModel):
+    """Last record of an export: the run totals again, summed across the file's runs from
+    its own records (Decimal for cost, as the tracer sums run.end)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    v: Literal[1] = 1
+    type: Literal["conversation.totals"]
+    thread_id: str
+    runs: NonNegativeInt
+    model_calls: NonNegativeInt
+    reader_calls: NonNegativeInt
+    tool_calls: NonNegativeInt
+    tokens_in: NonNegativeInt
+    tokens_out: NonNegativeInt
+    cost_usd: NonNegativeFloat
+
+
+# What an exported file may hold: every trace record plus the two export records.
+EXPORT_ADAPTER: TypeAdapter[TraceRecord | ExportHeader | ConversationTotals] = TypeAdapter(
+    Annotated[
+        TraceRecord | ExportHeader | ConversationTotals,
+        Field(discriminator="type"),
+    ]
+)
+
 # Records that must survive a crash of the process right after they were written.
 FSYNC_PREFIXES = ("approval.", "intent.")
 FSYNC_TYPES = frozenset({"run.end"})
