@@ -1017,6 +1017,13 @@ Recorded when M5 built sections 9.2 to 9.4; where one differs from the text abov
 - **The follow-up job id** is `fj_<booking_id>_provider_cancel`; the unique (booking_id, event_kind) index is the dedupe.
 - **`errand-trace export --thread`** reads every run through `trace/reader.py`, orders them by their first record, and escapes non-ASCII.
 
+**Lead review, round 1** (rulings on the points the build flagged):
+- **Wording versus the claim guard: accepted.** "It can't end up as two bookings", "pulled out" and "changed the slot" stand, and the guard's word lists stay as they are in M5. M14 owns the provider-cancel notification and will need "cancelled by the provider" in plain words; that is a guard change for M14 to bring with its own sentences and tests.
+- **`hold_expired` on the first send with a changed quote: accepted, no `approval.invalidated`.** The approval is `consumed`, and an invalidation record on a consumed row would say something that did not happen. The failed intent (`hold_expired`) and the `Requote` reason on the new card are the record. The `approval.hold_rebound` on the attempt-2 branch is a trace fact only: `approvals.bound_hold_id` stays on the consumed hold, and the one-re-hold bound on that branch is structural (attempt 1 only).
+- **Provider cancellation ends `NOTIFIED`: accepted.** INV-04 is right to forbid a `*_VERIFIED` outcome when no status said `confirmed`.
+- **INV-01's caught-mismatch exception: accepted, on one condition.** It may excuse only a booking whose `status.check` recorded a difference the provider actually made. An incomplete check (the provider list unavailable) is not a mismatch and must not open the exception.
+- **`VERIFYING -> COMPARING`: accepted.**
+
 ---
 
 ## 10. LLM responsibilities vs code responsibilities
