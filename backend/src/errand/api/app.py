@@ -55,7 +55,11 @@ from errand.agent.brief_ops import INVALIDATES, missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
 from errand.api import dev_routes, followup_routes, web_routes
-from errand.api.memory_routes import MEMORY_ACTIONS, memory_chat_action
+from errand.api.memory_routes import (
+    MEMORY_ACTIONS,
+    memory_chat_action,
+    resolve_memory_body,
+)
 from errand.api.memory_routes import mount as mount_memory_routes
 from errand.api.reconciler import Reconciler
 from errand.api.runs import (
@@ -500,9 +504,14 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         snapshot = await manager.graph.aget_state(run_config(conversation_id))
         async with manager.db.session() as repos:
             eligible = await repos.memories.eligible_ids(conversation.user_id)
+            memory_rows = (
+                {r.memory_id: r for r in await repos.memories.for_user(conversation.user_id)}
+                if any(m.body.get("type") in MEMORY_BODY_TYPES for m in messages)
+                else {}
+            )
         return {
             "conversation_id": conversation_id,
-            "messages": [_message_view(m, approvals) for m in messages],
+            "messages": [_message_view(m, approvals, memory_rows) for m in messages],
             "runs": [
                 {"run_id": r.run_id, "status": r.status, "outcome": r.outcome, "trigger": r.trigger}
                 for r in runs
@@ -635,17 +644,26 @@ def _no_transport() -> None:
     return None
 
 
+MEMORY_BODY_TYPES = frozenset(
+    {"memory_saved", "memory_suggestion", "memory_update", "memory_forget", "memory_list"}
+)
+
+
 def _answer(answer: Answer) -> JSONResponse:
     return JSONResponse(answer.body, status_code=answer.status)
 
 
-def _message_view(m: Any, approvals: dict[str, Any]) -> dict[str, Any]:
+def _message_view(
+    m: Any, approvals: dict[str, Any], memory_rows: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """A transcript row as the client renders it. An approval card's body is the stored
     `card_json` (what code fingerprinted), and its current status rides beside it."""
     body = m.body
     approval = approvals.get(m.approval_id) if m.approval_id else None
     if approval is not None and body.get("type") == "action":
         body = approval.card
+    if body.get("type") in MEMORY_BODY_TYPES:
+        body = resolve_memory_body(body, memory_rows or {})
     view: dict[str, Any] = {
         "message_id": m.message_id,
         "role": m.role,

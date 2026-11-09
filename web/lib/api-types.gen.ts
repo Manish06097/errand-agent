@@ -955,6 +955,7 @@ export interface components {
          * @description What `propose_forget` renders. The forget is the user's click, never the model's.
          */
         MemoryForgetChip: {
+            memory?: components["schemas"]["ResolvedMemory"] | null;
             /** Memory Id */
             memory_id: string;
             /**
@@ -970,8 +971,12 @@ export interface components {
         MemoryListCard: {
             /** Memory Ids */
             memory_ids?: string[];
+            /** Preferences */
+            preferences?: components["schemas"]["ResolvedMemory"][] | null;
             /** Suggestion Ids */
             suggestion_ids?: string[];
+            /** Suggestions */
+            suggestions?: components["schemas"]["ResolvedMemory"][] | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -1005,6 +1010,7 @@ export interface components {
          * @description "Saved: home area" with Undo. References the row; the value is resolved at read time.
          */
         MemorySavedChip: {
+            memory?: components["schemas"]["ResolvedMemory"] | null;
             /** Memory Id */
             memory_id: string;
             /**
@@ -1018,6 +1024,7 @@ export interface components {
          * @description One per errand that produced a suggestion: Keep and Dismiss.
          */
         MemorySuggestionChip: {
+            memory?: components["schemas"]["ResolvedMemory"] | null;
             /** Memory Id */
             memory_id: string;
             /**
@@ -1035,6 +1042,7 @@ export interface components {
             end: number;
             /** Key */
             key: string;
+            memory?: components["schemas"]["ResolvedMemory"] | null;
             /** Memory Id */
             memory_id: string;
             /** Scope */
@@ -1310,6 +1318,26 @@ export interface components {
              * @constant
              */
             v: 1;
+        };
+        /**
+         * ResolvedMemory
+         * @description A memory row as the chat shows it, resolved at read time (never stored). `label` is
+         *     the display value, and only while the row is one the user may be shown: active, or
+         *     pending for the Keep and Dismiss chip. A forgotten, rejected or superseded row has none.
+         */
+        ResolvedMemory: {
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Label */
+            label?: string | null;
+            /** Memory Id */
+            memory_id: string;
+            /** Scope */
+            scope: string;
+            /** Status */
+            status: string;
         };
         /**
          * RunEvent

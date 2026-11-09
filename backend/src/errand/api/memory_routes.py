@@ -10,6 +10,7 @@ fetch on `pagehide` can send it without a body.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Query, Request
@@ -24,6 +25,7 @@ from errand.memory.service import (
     MemoryRefused,
     MemoryService,
     RouteMismatch,
+    view,
 )
 
 router = APIRouter()
@@ -257,3 +259,43 @@ async def _value_of_chip(db: Any, chip: dict[str, Any]) -> Any | None:
     if any(r.kind == "forgotten" and r.start < chip["end"] for r in redactions):
         return None
     return value_from_span(chip["key"], text[chip["start"] : chip["end"]])
+
+
+# --------------------------------------------------------------- chips at read time (17.3)
+
+_SHOWN = ("active", "pending_confirmation")
+_SINGLE = ("memory_saved", "memory_suggestion", "memory_update", "memory_forget")
+
+
+def resolved(row: Any) -> dict[str, Any]:
+    """A row for the chat. The display value only while the user may be shown it."""
+    label = None
+    if row.status in _SHOWN and row.value is not None:
+        label = view(row)["label"]
+    return {
+        "memory_id": row.memory_id,
+        "key": row.key,
+        "scope": row.scope,
+        "kind": row.kind,
+        "status": row.status,
+        "label": label,
+    }
+
+
+def resolve_memory_body(body: dict[str, Any], rows: Mapping[str, Any]) -> dict[str, Any]:
+    """The stored reference chip with its row resolved at read time (status and, while
+    eligible, the display value); a list card with the rows still active and the
+    suggestions still pending. The stored body is untouched."""
+    kind = body.get("type")
+    if kind in _SINGLE:
+        row = rows.get(str(body.get("memory_id")))
+        return {**body, "memory": resolved(row)} if row is not None else body
+    if kind == "memory_list":
+        got = [rows[i] for i in body.get("memory_ids", []) if i in rows]
+        sug = [rows[i] for i in body.get("suggestion_ids", []) if i in rows]
+        return {
+            **body,
+            "preferences": [resolved(r) for r in got if r.status == "active"],
+            "suggestions": [resolved(r) for r in sug if r.status == "pending_confirmation"],
+        }
+    return body

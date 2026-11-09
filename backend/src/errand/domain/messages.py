@@ -269,11 +269,29 @@ class OutcomeCard(_Body):
     status_line: str | None = None
 
 
+class ResolvedMemory(_Body):
+    """A memory row as the chat shows it, resolved at read time (never stored). `label` is
+    the display value, and only while the row is one the user may be shown: active, or
+    pending for the Keep and Dismiss chip. A forgotten, rejected or superseded row has none."""
+
+    memory_id: str
+    key: str
+    scope: str
+    kind: str
+    status: str
+    label: str | None = None
+
+
+def _unset(value: object) -> bool:
+    return value is None
+
+
 class MemorySavedChip(_Body):
     """ "Saved: home area" with Undo. References the row; the value is resolved at read time."""
 
     type: Literal["memory_saved"] = "memory_saved"
     memory_id: str
+    memory: ResolvedMemory | None = Field(default=None, exclude_if=_unset)
 
 
 class MemorySuggestionChip(_Body):
@@ -281,6 +299,7 @@ class MemorySuggestionChip(_Body):
 
     type: Literal["memory_suggestion"] = "memory_suggestion"
     memory_id: str
+    memory: ResolvedMemory | None = Field(default=None, exclude_if=_unset)
 
 
 class MemoryOfferChip(_Body):
@@ -305,6 +324,7 @@ class MemoryUpdateChip(_Body):
     source_message_id: str
     start: int
     end: int
+    memory: ResolvedMemory | None = Field(default=None, exclude_if=_unset)
 
 
 class MemoryForgetChip(_Body):
@@ -312,6 +332,7 @@ class MemoryForgetChip(_Body):
 
     type: Literal["memory_forget"] = "memory_forget"
     memory_id: str
+    memory: ResolvedMemory | None = Field(default=None, exclude_if=_unset)
 
 
 class MemoryListCard(_Body):
@@ -320,6 +341,9 @@ class MemoryListCard(_Body):
     type: Literal["memory_list"] = "memory_list"
     memory_ids: list[str] = Field(default_factory=list)
     suggestion_ids: list[str] = Field(default_factory=list)
+    # Resolved at read time: the rows still active and the suggestions still pending.
+    preferences: list[ResolvedMemory] | None = Field(default=None, exclude_if=_unset)
+    suggestions: list[ResolvedMemory] | None = Field(default=None, exclude_if=_unset)
 
 
 MessageBody = Annotated[
