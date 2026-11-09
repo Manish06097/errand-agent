@@ -112,6 +112,15 @@ def internal_error(run_id: str) -> OutcomeNotice:
     )
 
 
+def run_interrupted() -> OutcomeNotice:
+    """The message of a run the process died in (15.2); the verified or failed result, if
+    there is one, comes from the recovery run that follows it."""
+    return OutcomeNotice(
+        outcome=RunOutcome.RUN_INTERRUPTED,
+        text="I was interrupted; here is where things stand.",
+    )
+
+
 def recommendation_line(text: str) -> str | None:
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
     if not line:
@@ -319,6 +328,12 @@ def requote_text(reason: str | None, detail: str | None) -> str | None:
         return (
             "Something changed since you approved, so nothing was booked. "
             "Please check the updated card."
+        )
+    if reason == "grant_not_executed":
+        # The reconciler expired a grant no run acted on (a restart, N1).
+        return (
+            "I restarted before I could act on your approval, so nothing was booked. "
+            "Here is a fresh quote."
         )
     return None
 

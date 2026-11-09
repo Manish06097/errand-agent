@@ -10,7 +10,8 @@ changes the default world.
 - `POST /api/dev/scenario` loads one into a fresh world store (or resets the current);
 - `POST /api/dev/clock/advance` moves the world clock, and with it the agent clock;
 - `POST /api/dev/next-book` forces the next `book` outcome ("times out after success");
-- `GET /api/dev/bookings` and `POST /api/dev/provider-cancel` ("provider cancels booking").
+- `GET /api/dev/bookings` and `POST /api/dev/provider-cancel` ("provider cancels booking");
+- `POST /api/dev/reconciler/tick` re-checks what waits on the provider ("Reconcile now").
 """
 
 from __future__ import annotations
@@ -182,6 +183,19 @@ async def provider_cancel(body: CancelIn, request: Request) -> Any:
         return JSONResponse({"error": "unknown_booking"}, status_code=404)
     event = await inspector.fire_provider_cancel(body.booking_id)
     return {"event_id": str(getattr(event, "event_id", ""))}
+
+
+class ReconcileOut(BaseModel):
+    recovery_runs: list[str]
+    skipped_busy: list[str]
+
+
+@router.post("/reconciler/tick", response_model=ReconcileOut)
+async def reconcile_now(request: Request) -> ReconcileOut:
+    """ "Reconcile now": the periodic task's re-check of `needs_attention` intents, run for
+    every conversation, answered once the recovery runs it started have ended (N1)."""
+    report = await request.app.state.reconciler.tick(wait=True)
+    return ReconcileOut(recovery_runs=report.recovery_runs, skipped_busy=report.skipped_busy)
 
 
 def register(app: FastAPI) -> None:

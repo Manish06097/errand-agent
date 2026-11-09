@@ -127,17 +127,30 @@ async def test_an_exception_in_a_node_ends_the_run_cleanly(
         trace = rec.traces[run_id]
         # The thread is not wedged: the next message runs normally.
         after = await h.say("hello again")
+        unsettled = None
+        if node == "verify":
+            # The open intent is the reconciler's: one tick settles it (the booking exists).
+            await h.app.state.reconciler.tick()
+            await h.manager.wait_idle()
+            async with h.manager.db.session() as repos:
+                unsettled = [i.state for i in await repos.intents.unresolved_for_user("u_demo")]
         rec_after = await h.records()
 
-    assert view.outcome == "INTERNAL_ERROR"
+    # A node that fails with a booking intent open is not INTERNAL_ERROR: the provider may
+    # have acted, so the run ends PENDING_VERIFICATION and the reconciler settles it (15.1).
+    expected = "PENDING_VERIFICATION" if node == "verify" else "INTERNAL_ERROR"
+    assert view.outcome == expected
     assert [r["type"] for r in trace].count("run.end") == 1
     notice = view.notice()
-    assert notice is not None and run_id in notice["text"]
-    assert "Nothing was booked or changed" in notice["text"]
+    assert notice is not None
+    if expected == "INTERNAL_ERROR":
+        assert run_id in notice["text"]
+        assert "Nothing was booked or changed" in notice["text"]
     errors = [r for r in trace if r["type"] == "error" and "boom" in r["message"]]
     assert len(errors) == 1
     expected_where = "run_manager" if node == "respond" else f"node:{node}"
     assert errors[0]["where"] == expected_where
     assert node in errors[0]["message"]
     assert after.outcome not in (None, "INTERNAL_ERROR")
+    assert unsettled in (None, [])
     assert invariants.inv07_one_end_per_run(rec_after) == []

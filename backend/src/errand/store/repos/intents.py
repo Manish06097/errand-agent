@@ -66,6 +66,17 @@ class AttemptRow:
     updated_at: int
 
 
+# An intent still waiting on the provider: an attempt it may or may not have seen, or a
+# check that could not be finished (M5's `check_incomplete`, which N1's reconciler keeps
+# re-checking: "I'll keep checking and update you here").
+_WAITING = (
+    "EXISTS (SELECT 1 FROM intent_attempts a WHERE a.intent_id = i.intent_id "
+    "AND a.state IN ('prepared', 'in_flight', 'unknown')) "
+    "OR (i.state = 'needs_attention' "
+    "AND json_extract(i.result_json, '$.reason') = 'check_incomplete')"
+)
+
+
 def _intent(row: Any) -> IntentRow:
     return IntentRow(*(row[i] for i in range(15)))
 
@@ -214,3 +225,53 @@ class IntentsRepo:
             (to, result_json, now_ms, intent_id, *frm),
         )
         return cur.rowcount == 1
+
+    async def unresolved_for_conversation(self, conversation_id: str) -> list[IntentRow]:
+        async with self._conn.execute(
+            f"SELECT {_INTENT} FROM action_intents WHERE conversation_id = ? "
+            "AND state IN ('open', 'needs_attention') ORDER BY created_at, rowid",
+            (conversation_id,),
+        ) as cur:
+            return [_intent(r) for r in await cur.fetchall()]
+
+    async def recoverable(self) -> list[IntentRow]:
+        """Unresolved intents the reconciler can still settle: an attempt the world may or
+        may not have seen (`prepared`, `in_flight` or `unknown`), or a check that could not
+        be finished (`check_incomplete`: the booking was seen, the list was not). One
+        indexed read of our own tables; LangGraph's `next` is never consulted (9.7)."""
+        async with self._conn.execute(
+            f"SELECT {_INTENT} FROM action_intents i WHERE i.state IN ('open', 'needs_attention') "
+            f"AND ({_WAITING}) ORDER BY i.created_at, i.rowid"
+        ) as cur:
+            return [_intent(r) for r in await cur.fetchall()]
+
+    async def live_targets(self, user_id: str) -> set[str]:
+        """Booking ids a cancel or reschedule intent is still working on (the partial
+        unique index `one_live_action_per_target` enforces one per booking)."""
+        async with self._conn.execute(
+            "SELECT target_booking_id FROM action_intents WHERE user_id = ? "
+            "AND action IN ('cancel', 'reschedule') AND state IN ('open', 'needs_attention') "
+            "AND target_booking_id IS NOT NULL",
+            (user_id,),
+        ) as cur:
+            return {str(r[0]) for r in await cur.fetchall()}
+
+    async def succeeded_changes(self, user_id: str) -> list[IntentRow]:
+        """Cancel and reschedule intents that ended verified, oldest first."""
+        async with self._conn.execute(
+            f"SELECT {_INTENT} FROM action_intents WHERE user_id = ? "
+            "AND action IN ('cancel', 'reschedule') AND state = 'succeeded' "
+            "ORDER BY created_at, rowid",
+            (user_id,),
+        ) as cur:
+            return [_intent(r) for r in await cur.fetchall()]
+
+    async def awaiting_provider(self, conversation_id: str) -> bool:
+        """Is any intent of the conversation waiting on the provider's answer? A mismatch
+        the provider recorded is settled for this purpose: nothing is left to ask it."""
+        async with self._conn.execute(
+            "SELECT 1 FROM action_intents i WHERE i.conversation_id = ? "
+            f"AND i.state IN ('open', 'needs_attention') AND ({_WAITING}) LIMIT 1",
+            (conversation_id,),
+        ) as cur:
+            return await cur.fetchone() is not None

@@ -220,3 +220,33 @@ async def test_a_failed_list_bookings_skips_the_user_and_shows_as_watcher_lag(
         assert h.app.state.watcher.health.failing_users == []
         end = [r for r in read_trace(failed.trace).records if r["type"] == "run.end"]
         assert end[0]["failed_users"] == ["u_demo"] and end[0]["outcome"] is None
+
+
+async def test_the_reconciler_resumes_a_detected_job_without_reading_the_provider(
+    tmp_path: Path,
+) -> None:
+    """A job the process died on (detected, nothing delivered) is delivered by the
+    reconciler's follow-up pass, at startup and on a tick, with no provider read."""
+    async with booked(tmp_path) as (h, booking_id):
+        await h.inspector.fire_provider_cancel(booking_id)
+        watcher = h.app.state.watcher
+
+        async def dead(conversation_id: str, event: SystemEvent) -> None:
+            raise RuntimeError("the process died before the run started")
+
+        real = watcher.start
+        watcher.start = dead
+        detected = await watcher.tick()
+        assert detected.detected and not detected.delivered
+        watcher.start = real
+        reads_before = len([r for r in await h.op_log() if r["op"] == "list_bookings"])
+        report = await h.app.state.reconciler.tick(wait=True)
+        assert len(report.recovery_runs) == 1
+        async with h.manager.db.session() as repos:
+            assert [j.state for j in await repos.followups.in_state("notified")] == ["notified"]
+            assert await repos.notifications.count() == 1
+        assert len([r for r in await h.op_log() if r["op"] == "list_bookings"]) == reads_before + 2
+        # the run's own two reads (its same-service check, prepare_proposal's validation of
+        # the card) and no poll of the provider's bookings
+        again = await h.app.state.reconciler.tick(wait=True)
+        assert again.recovery_runs == []

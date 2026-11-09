@@ -46,6 +46,27 @@ async def s24(tmp_path: Path) -> Records:
     return await records_of("S24_status_unavailable_after_timeout", tmp_path / "s24")
 
 
+# The same three conversations stopped before the reconciler's tick: an attempt still
+# waits on the provider, which is what INV-18's clauses are about.
+@pytest.fixture
+async def s69p(tmp_path: Path) -> Records:
+    return await records_of(
+        "S69_timeout_not_booked_dedupe_off", tmp_path / "s69p", before_tick=True
+    )
+
+
+@pytest.fixture
+async def s68p(tmp_path: Path) -> Records:
+    return await records_of("S68_timeout_not_booked_twice", tmp_path / "s68p", before_tick=True)
+
+
+@pytest.fixture
+async def s24p(tmp_path: Path) -> Records:
+    return await records_of(
+        "S24_status_unavailable_after_timeout", tmp_path / "s24p", before_tick=True
+    )
+
+
 @pytest.fixture
 async def s65(tmp_path: Path) -> Records:
     return await records_of("S65_world_books_a_different_price", tmp_path / "s65")
@@ -71,16 +92,24 @@ def _insert_after(records: list[dict[str, Any]], anchor: dict[str, Any], *new: A
 
 
 def test_inv03_and_inv18_hold_and_count_what_they_checked(
-    s22: Records, s23: Records, s24: Records, s68: Records, s69: Records
+    s22: Records,
+    s23: Records,
+    s24: Records,
+    s68: Records,
+    s69: Records,
+    s24p: Records,
+    s69p: Records,
 ) -> None:
-    for rec in (s22, s23, s24, s68, s69):
+    for rec in (s22, s23, s24, s68, s69, s24p, s69p):
         assert fails("INV-03", rec) == [] and fails("INV-18", rec) == []
     assert s23.notes["inv03_books_checked"] == 2 and s23.notes["inv03_resends_checked"] == 1
     assert s22.notes["inv03_resends_checked"] == 0
     # What clauses 2 and 4 looked at: the one re-send's liveness, and one bound per key.
     assert s23.notes["inv03_liveness_checked"] == 1 and s23.notes["inv03_liveness_unreadable"] == 0
     assert s23.notes["inv03_count_bounds_checked"] == 1 and s22.notes["inv03_liveness_checked"] == 0
-    assert s24.notes["attempts_unsettled"] == 1 and s69.notes["attempts_unsettled"] == 1
+    assert s24p.notes["attempts_unsettled"] == 1 and s69p.notes["attempts_unsettled"] == 1
+    # after the reconciler's tick nothing is left waiting
+    assert s24.notes["attempts_unsettled"] == 0 and s69.notes["attempts_unsettled"] == 0
     assert s22.notes["attempts_unsettled"] == 0 and s22.notes["attempts_checked"] == 1
 
 
@@ -213,15 +242,15 @@ def test_inv03_fails_on_a_book_after_never_mind(s22: Records) -> None:
 # ---------------------------------------------------------------- INV-18
 
 
-def test_inv18_fails_when_the_intent_is_not_waiting_for_a_person(s24: Records) -> None:
-    doctored = copy.deepcopy(s24)
+def test_inv18_fails_when_the_intent_is_not_waiting_for_a_person(s24p: Records) -> None:
+    doctored = copy.deepcopy(s24p)
     for intent in doctored.intents:
         intent["state"] = "failed"
     assert any("its intent is failed, not needs_attention" in v for v in fails("INV-18", doctored))
 
 
-def test_inv18_fails_when_the_user_never_saw_pending_verification(s68: Records) -> None:
-    doctored = copy.deepcopy(s68)
+def test_inv18_fails_when_the_user_never_saw_pending_verification(s68p: Records) -> None:
+    doctored = copy.deepcopy(s68p)
     for m in doctored.messages:
         if m["body"].get("outcome") == "PENDING_VERIFICATION":
             m["body"]["outcome"] = "REPLIED"
@@ -267,8 +296,9 @@ def test_an_unchecked_provider_is_not_a_caught_mismatch_for_inv01(s65: Records) 
 def test_a_booking_that_differs_keeps_its_id_on_the_intent_for_the_cancel_card(
     s65: Records,
 ) -> None:
-    """S65 leaves no known_bookings row; M9 reads the id from the intent's result_json."""
-    (intent,) = s65.intents
+    """S65 leaves no known_bookings row; the cancel (N1) reads the id from the book intent's
+    result_json. The scenario then cancels it, which adds a second intent: the cancel's."""
+    (intent,) = (i for i in s65.intents if i["action"] == "book")
     result = json.loads(intent["result_json"])
     assert result["reason"] == "material_mismatch"
     made = [b["booking_id"] for b in s65.world_bookings if b["created_by_key"]]

@@ -35,6 +35,7 @@ from errand.domain.messages import ActionCard
 from errand.domain.outcomes import ActionFailed, BookCalled, Replan, StepResult
 from errand.domain.slots import HoldRef
 from errand.execution.executor import ConsequentialClient
+from errand.faults import fault_point
 from errand.store.repos.approvals import ApprovalRow
 from errand.store.repos.holds import HoldRow, hold_record_id_for
 from errand.store.repos.intents import AttemptRow, IntentRow
@@ -133,6 +134,7 @@ class BookingPath:
         """`book` for an attempt whose `in_flight` move is already committed."""
         assert attempt.hold_id is not None
         client = ConsequentialClient(self.deps.tools)
+        sent: Sent
         try:
             answer = await client.book(
                 token,
@@ -140,9 +142,11 @@ class BookingPath:
                 hold_id=attempt.hold_id,
                 idempotency_key=attempt.idempotency_key,
             )
+            sent = Sent(answer, None)
         except ToolError as exc:
-            return Sent(None, type(exc).__name__)
-        return Sent(answer, None)
+            sent = Sent(None, type(exc).__name__)
+        fault_point("after_world_book")
+        return sent
 
     async def settle(
         self, intent_id: str, attempt: AttemptRow, sent: Sent, *, epoch: int

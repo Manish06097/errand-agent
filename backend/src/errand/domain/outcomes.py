@@ -276,7 +276,6 @@ class ActionFailed(_Result):
         "provider_refused",
         "not_consumable",
         "duplicate",
-        "never_sent",
         "not_booked",
     ]
     fresh_quote: bool = False
@@ -321,6 +320,51 @@ class FollowupDone(_Result):
     kind: Literal["followup_done"] = "followup_done"
 
 
+# ---------------------------------------------------------------- cancel and reschedule (N1)
+#
+# The same intent and attempt flow as a booking, with no hold (9.5). `BookCalled` is also
+# what execute hands verify for these (the attempt to check); these are what comes back.
+
+
+class Changed(_Result):
+    """A cancel or reschedule that `list_bookings` shows: CANCELLED_VERIFIED or
+    RESCHEDULED_VERIFIED."""
+
+    kind: Literal["changed"] = "changed"
+    action: Literal["cancel", "reschedule"]
+    approval_id: str
+    intent_id: str
+    booking_id: str
+    # A cancel whose booking the provider had already cancelled: the end state the user
+    # asked for, reported as the provider's doing, never as ours.
+    by_provider: bool = False
+
+
+class SlotAlternative(_Result):
+    ref: str  # the handle a select_slot click names (S1, ...)
+    label: str  # "Sat 14 Nov, 10:00-11:00"
+    start: str  # ISO 8601 with +05:30
+    end: str
+
+
+class ChangeFailed(_Result):
+    """A cancel or reschedule that did not happen, and the plain reason."""
+
+    kind: Literal["change_failed"] = "change_failed"
+    action: Literal["cancel", "reschedule"]
+    approval_id: str
+    reason: Literal[
+        "booking_changed",  # the booking is not what the card showed any more
+        "still_confirmed",  # the provider could not be reached; list_bookings says unchanged
+        "slot_conflict",  # a reschedule onto a slot that is taken (definitive)
+        "provider_cancelled",  # a reschedule of a booking the provider cancelled
+        "rejected",  # the provider refused the request
+        "in_progress",  # another change to the booking got there first
+    ]
+    # Code-rendered buttons for the next free slots that day (slot_conflict), in order.
+    alternatives: list[SlotAlternative] = Field(default_factory=list)
+
+
 StepResult = Annotated[
     FollowupDone
     | CardReady
@@ -335,6 +379,8 @@ StepResult = Annotated[
     | Booked
     | ActionFailed
     | PendingCheck
-    | BookCalled,
+    | BookCalled
+    | Changed
+    | ChangeFailed,
     Field(discriminator="kind"),
 ]

@@ -41,9 +41,10 @@ async def live_approval(deps: RunDeps) -> ApprovalRow | None:
 def card_line(row: ApprovalRow) -> str:
     card = row.card
     state = "pending, waiting for the user" if row.status == "pending" else row.status
+    price = f", ₹{card['quoted_price_inr']:,}" if row.action == "book" else ""
     return (
-        f"{state}: {card['title']} ({card['provider_id']}), {card['slot_label']}, "
-        f"₹{card['quoted_price_inr']:,}. Only the user approves it, on the card."
+        f"{state}: {card['title']} ({card['provider_id']}), {card['slot_label']}{price}. "
+        "Only the user approves it, on the card."
     )
 
 
@@ -115,6 +116,25 @@ async def verified_records(deps: RunDeps, this_run: set[str]) -> list[Verified]:
                 slot_start=from_ms(b.slot_start),
                 kind="book",
                 this_run=b.booking_id in this_run,
+                source_intent_id=b.source_intent_id,
+            )
+        )
+    async with deps.db.session() as repos:
+        changes = await repos.intents.succeeded_changes(deps.user_id)
+    for intent in changes:
+        facts = json.loads(intent.result_json or "{}")
+        if not facts.get("booking_id") or facts.get("by_provider"):
+            continue  # the provider's own cancellation is not a claim we may make
+        out.append(
+            Verified(
+                booking_id=str(facts["booking_id"]),
+                provider_id=str(facts["provider_id"]),
+                provider_name=str(facts["provider_name"]),
+                service=str(facts["service"]),
+                slot_start=datetime.fromisoformat(str(facts["slot_start"])),
+                kind="cancel" if intent.action == "cancel" else "reschedule",
+                this_run=str(facts["booking_id"]) in this_run,
+                source_intent_id=intent.intent_id,
             )
         )
     return out

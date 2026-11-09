@@ -1,0 +1,27 @@
+id: S37_crash_after_world_book
+title: The agent dies right after the world committed the booking; after the restart the reconciler's status check confirms it, the user is told, and the world holds exactly one booking
+category: [restart, idempotency]
+seed: 37
+crash_at: after_world_book
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {}
+  - restart: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_transcript:
+      last_includes: ["I checked after a restart"]
+  - expect_world: {book: 1, get_booking_status: 1}
+  - expect_book_calls: {agent_calls: 1, world_rows: 1}
+  - expect_booking: {count: 1}
+  - type_confirm: {text: "book it"}
+  - expect_outcome: REPLIED
+  - expect_world: {book: 1}
+expect:
+  invariants: [default]

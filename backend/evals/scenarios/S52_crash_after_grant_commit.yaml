@@ -1,0 +1,29 @@
+id: S52_crash_after_grant_commit
+title: The agent dies right after the approval was granted and before anything consumed it; after the restart the grant is expired, nothing is booked, the user gets a fresh card, and approving that books once
+category: [restart, approval]
+seed: 52
+crash_at: after_grant_commit
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {expect_crash: true}
+  - restart: {}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_transcript:
+      includes: ["I restarted before I could act on your approval, so nothing was booked"]
+  - expect_card: {kind: action, status: pending}
+  - expect_world: {book: 0}
+  - expect_booking: {count: 0}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_world: {book: 1}
+  - expect_book_calls: {agent_calls: 1, world_rows: 1}
+  - expect_booking: {count: 1}
+expect:
+  invariants: [default]

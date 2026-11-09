@@ -44,12 +44,24 @@ export function visibleCardOf(conv: ConversationOut | undefined): VisibleCard | 
   return null;
 }
 
+// While the last thing said is "pending verification", the reconciler may settle it in the
+// background ("I'll update you here"), with no run of this page's own to stream: look again.
+const PENDING_POLL_MS = 3000;
+
+function waitingOnProvider(data: ConversationOut | undefined): boolean {
+  const last = [...(data?.messages ?? [])].reverse().find((m) => m.role === "assistant");
+  return (
+    last?.body.type === "notice" && last.body.outcome === "PENDING_VERIFICATION"
+  );
+}
+
 export function useChat(conversationId: string) {
   const qc = useQueryClient();
   const conv = useQuery({
     queryKey: ["conversation", conversationId],
     queryFn: () => api.conversation(conversationId),
     refetchOnWindowFocus: false,
+    refetchInterval: (query) => (waitingOnProvider(query.state.data) ? PENDING_POLL_MS : false),
   });
   const convRef = useRef<ConversationOut | undefined>(undefined);
   useEffect(() => {
@@ -233,7 +245,7 @@ export function useChat(conversationId: string) {
 
   const action = useCallback(
     async (
-      kind: "select_slot" | "refresh_hold" | "widen_followup" | "dismiss_followup",
+      kind: "select_slot" | "refresh_hold" | "check_now" | "widen_followup" | "dismiss_followup",
       payload: Record<string, string>,
     ) => {
       const result = await api.action(conversationId, {

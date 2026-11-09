@@ -1,5 +1,5 @@
 id: S24_status_unavailable_after_timeout
-title: Book times out after committing and the status endpoint is down for the first 4 checks; no book while the status is unknown, PENDING_VERIFICATION with no promised time (the reconciler's completion is M6)
+title: Book times out after committing and the status endpoint is down for the first 4 checks; no book while the status is unknown, PENDING_VERIFICATION with no promised time; a reconciler tick then asks again, finds it confirmed, and tells the user (one booking)
 category: [tool_failure, booking_timeout]
 seed: 24
 world:
@@ -26,5 +26,12 @@ steps:
   - expect_rows:
       - {table: action_intents, where: {state: needs_attention}, count: 1}
       - {table: intent_attempts, where: {state: unknown, calls: 1, status_checks: 4}, count: 1}
+  - reconciler_tick: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_world: {book: 1, get_booking_status: 5}
+  - expect_book_calls: {agent_calls: 1, world_rows: 1}
+  - expect_booking: {count: 1}
+  - expect_rows:
+      - {table: action_intents, where: {state: succeeded}, count: 1}
 expect:
   invariants: [default]

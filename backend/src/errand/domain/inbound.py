@@ -70,6 +70,9 @@ class SystemEvent(_Inbound):
 class Recover(_Inbound):
     type: Literal["recover"] = "recover"
     intent_id: str
+    # True when the reconciler found the intent at startup (the user is told "I checked
+    # after a restart"); False for its periodic re-check in a running process.
+    after_restart: bool = True
 
 
 Inbound = Annotated[

@@ -17,7 +17,7 @@ steps:
   - watcher_tick: {}
   - open_followup: {}
   - expect_approvals: ["consumed", "pending"]
-  - click_action: dismiss
+  - click_followup: dismiss
   - expect_approvals: ["consumed", "invalidated:followup_dismissed"]
   - expect_transcript: {last_includes: ["stopped looking"]}
   - expect_rows:

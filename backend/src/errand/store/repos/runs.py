@@ -97,11 +97,15 @@ class RunsRepo:
         )
         return cur.rowcount == 1
 
-    async def mark_recovered(self, run_id: str, now_ms: int) -> bool:
+    async def mark_recovered(
+        self, run_id: str, now_ms: int, outcome: str = "RUN_INTERRUPTED"
+    ) -> bool:
+        """A run the process died in: ended by the reconciler, with the outcome its
+        `run.end` carries."""
         cur = await self._conn.execute(
-            "UPDATE runs SET status = 'recovered', ended_at = ? "
+            "UPDATE runs SET status = 'recovered', outcome = ?, ended_at = ? "
             "WHERE run_id = ? AND status = 'running'",
-            (now_ms, run_id),
+            (outcome, now_ms, run_id),
         )
         return cur.rowcount == 1
 

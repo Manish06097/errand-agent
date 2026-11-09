@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal, NoReturn
 
+from errand.faults import fault_point
 from errand.store.agent_db import AgentDB, Repos
 from errand.store.repos.approvals import ApprovalRow
 
@@ -174,6 +175,8 @@ async def grant(
             )
         after = await repos.approvals.get(approval_id)
     assert after is not None
+    if ok:
+        fault_point("after_grant_commit")
     return GrantResult(GrantOutcome.GRANTED if ok else _why_not(after), after, swept)
 
 
@@ -247,6 +250,21 @@ async def consume(
     return ApprovalToken(
         _MINT, approval_id=approval_id, intent_id=intent_id, fingerprint=fingerprint
     )
+
+
+async def expire_unexecuted_grants(db: AgentDB) -> list[ApprovalRow]:
+    """Startup (9.7 as trimmed): every `granted` row no intent consumed ends `expired` with
+    reason `grant_not_executed`, and its `pending_resumes` row is closed. A grant is never
+    resumed after a restart: the user hears that nothing was booked and gets a fresh card.
+
+    Returns the rows as they were before, for the recovery run that tells the user.
+    """
+    async with db.transaction() as repos:
+        rows = await repos.approvals.unexecuted_grants()
+        for row in rows:
+            await repos.approvals.expire_unexecuted(row.approval_id)
+            await repos.approvals.delete_resume(row.approval_id)
+    return rows
 
 
 async def invalidate(db: AgentDB, approval_id: str, reason: str) -> bool:

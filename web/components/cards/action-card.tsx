@@ -122,6 +122,21 @@ export function ActionCard({
           </Button>
         </div>
       )}
+      {pending && live && (body.alternatives ?? []).length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2" data-testid="card-alternatives">
+          {(body.alternatives ?? []).map((slot) => (
+            <Button
+              key={slot.ref}
+              size="sm"
+              data-testid={`alternative-${slot.ref}`}
+              disabled={phase !== "idle"}
+              onClick={() => void chat.action("select_slot", { slot_ref: slot.ref })}
+            >
+              {slot.label}
+            </Button>
+          ))}
+        </div>
+      )}
       {note && (
         <p role="status" data-testid="card-note" className="mt-2 text-sm text-amber-800 dark:text-amber-300">
           {note}

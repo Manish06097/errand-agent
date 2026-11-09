@@ -18,7 +18,15 @@ import asyncio
 from errand.approvals.service import ApprovalToken, is_minted
 from errand.tools import consequential
 from errand.tools.gateway import ToolGateway
-from errand.world.contracts import BookError, BookOut
+from errand.world.contracts import (
+    BookError,
+    BookOut,
+    CancelError,
+    CancelOut,
+    RescheduleError,
+    RescheduleOut,
+    Slot,
+)
 
 
 class TokenRefused(PermissionError):
@@ -42,5 +50,47 @@ class ConsequentialClient:
         self._check(token, intent_id)
         call = asyncio.ensure_future(
             consequential.book(self._gateway, hold_id=hold_id, idempotency_key=idempotency_key)
+        )
+        return await asyncio.shield(call)
+
+    async def cancel(
+        self,
+        token: ApprovalToken,
+        *,
+        intent_id: str,
+        booking_id: str,
+        idempotency_key: str,
+        attempt: int = 1,
+    ) -> CancelOut | CancelError:
+        self._check(token, intent_id)
+        call = asyncio.ensure_future(
+            consequential.cancel(
+                self._gateway,
+                booking_id=booking_id,
+                idempotency_key=idempotency_key,
+                attempt=attempt,
+            )
+        )
+        return await asyncio.shield(call)
+
+    async def reschedule(
+        self,
+        token: ApprovalToken,
+        *,
+        intent_id: str,
+        booking_id: str,
+        slot: Slot,
+        idempotency_key: str,
+        attempt: int = 1,
+    ) -> RescheduleOut | RescheduleError:
+        self._check(token, intent_id)
+        call = asyncio.ensure_future(
+            consequential.reschedule(
+                self._gateway,
+                booking_id=booking_id,
+                slot=slot,
+                idempotency_key=idempotency_key,
+                attempt=attempt,
+            )
         )
         return await asyncio.shield(call)

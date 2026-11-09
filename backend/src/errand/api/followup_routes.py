@@ -24,6 +24,8 @@ from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel
 
+from errand.api import reconciler as reconciler_module
+from errand.api.reconciler import Reconciler
 from errand.api.runs import RunManager
 from errand.clock import to_ms
 
@@ -133,6 +135,22 @@ async def user_events(
         if once or await request.is_disconnected():
             return
         await asyncio.sleep(POLL_S)
+
+
+async def followup_pass(reconciler: Reconciler, startup: bool) -> list[str]:
+    """The reconciler's follow-up pass (9.7): resume every job a crash left `detected`
+    (delivery through the graph is idempotent) and lapse the ones whose window has passed.
+    It reads no provider: only the watcher's own tick lists bookings."""
+    watcher = getattr(reconciler.manager, "followup_watcher", None)
+    if watcher is None:
+        return []
+    result = await watcher.tick(poll=False)
+    return [*result.delivered, *result.lapsed]
+
+
+# Registered once, at import: it finds the watcher of whichever manager it is handed.
+if followup_pass not in reconciler_module.PASSES:
+    reconciler_module.PASSES.append(followup_pass)
 
 
 def register(app: FastAPI) -> None:

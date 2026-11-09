@@ -120,6 +120,28 @@ class BookingSettings(BaseSettings):
     provider_dedupes_keys: bool = True
 
 
+class ReconcilerSettings(BaseSettings):
+    """The reconciler (architecture 9.7 as trimmed, 9.9)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_RECONCILER_", extra="ignore")
+
+    # Real seconds between background re-checks of `needs_attention` intents in a running
+    # process. 0 turns the periodic task off; the evals set it to 0 and drive every tick
+    # themselves, so they stay deterministic.
+    interval_s: float = Field(default=30.0, ge=0)
+    # The periodic task asks the provider about an intent again only this long (agent
+    # clock) after the last answer, or at once when its hold has lapsed since: a pending
+    # message every 30 s would bury the conversation. An explicit tick (Check now, the dev
+    # drawer, the evals) never waits.
+    recheck_after_s: float = Field(default=120.0, ge=0)
+    # The periodic task stops asking about an intent this long (agent clock) after it was
+    # written: a contradiction the provider never resolves, or a status endpoint that never
+    # comes back, would otherwise get a new pending message every `recheck_after_s` for
+    # ever. The default is ten answers at the default cadence. A hold's lapse still fires
+    # its one check, and Check now, a restart and an explicit tick are never limited.
+    periodic_window_s: float = Field(default=1200.0, ge=0)
+
+
 class ReaderSettings(BaseSettings):
     """The quarantined review reader (architecture 10.1, 11, 15.1)."""
 

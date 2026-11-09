@@ -1,0 +1,27 @@
+id: S36_crash_after_intent_write
+title: The agent dies after the intent and its prepared attempt were written and before anything was sent; after the restart the status check finds the key unknown, the attempt is sent once with that same key, and the world holds one booking
+category: [restart, idempotency]
+seed: 36
+crash_at: after_intent_write
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {}
+  - expect_world: {book: 0}
+  - restart: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_transcript:
+      last_includes: ["I checked after a restart"]
+  - expect_world: {book: 1}
+  - expect_book_calls: {agent_calls: 1, world_rows: 1}
+  - expect_booking: {count: 1}
+  - expect_rows:
+      - {table: intent_attempts, where: {state: applied, calls: 1}, count: 1}
+expect:
+  invariants: [default]

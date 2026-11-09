@@ -30,7 +30,7 @@ steps:
       - {table: holds, count: 1}
   - expect_transcript: {last_includes: ["Up to ₹450", "More days", "Any time of day", "sort it myself"]}
   # one click widens one field, for this errand only
-  - click_action: widen
+  - click_followup: widen
     field: price
   - expect_card: {kind: action, status: pending}
   - expect_world: {search_providers: 3, hold_slot: 2, book: 1}

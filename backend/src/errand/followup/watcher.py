@@ -121,11 +121,14 @@ class Watcher:
 
     # ------------------------------------------------------------------ one tick
 
-    async def tick(self) -> TickResult:
+    async def tick(self, *, poll: bool = True) -> TickResult:
+        """One tick. `poll=False` skips the provider reads and only delivers and lapses what
+        the records already hold: that is the reconciler's pass (9.7), which resumes a job a
+        crash left `detected` without touching the world."""
         async with self._lock:
-            return await self._tick()
+            return await self._tick(poll)
 
-    async def _tick(self) -> TickResult:
+    async def _tick(self, poll: bool) -> TickResult:
         self._ticks += 1
         now = self.clock.now()
         run_id = f"w_{to_ms(now)}_{self._ticks}"
@@ -145,7 +148,7 @@ class Watcher:
                 counters=RunCounters(),
                 limits=ToolLimits(max_tool_calls=max(16, 4 * len(users) + 4)),
             )
-            for user_id in users:
+            for user_id in users if poll else []:
                 await self._watch_user(user_id, tools, tracer, result)
             delivery = await service.deliver_pending(
                 self.db, start=self.start, now=self.clock.now, tz=self.tz, tracer=tracer
@@ -156,9 +159,10 @@ class Watcher:
             )
         finally:
             self.health.last_tick_at = to_ms(self.clock.now())
-            if not result.failed_users:
-                self.health.last_ok_at = self.health.last_tick_at
-            self.health.failing_users = list(result.failed_users)
+            if poll:
+                if not result.failed_users:
+                    self.health.last_ok_at = self.health.last_tick_at
+                self.health.failing_users = list(result.failed_users)
             changes: list[dict[str, Any]] = [{"detected": j} for j in result.detected]
             tracer.end_run(
                 outcome=None,
@@ -170,6 +174,7 @@ class Watcher:
                 # A quiet tick leaves no trace at all.
                 with contextlib.suppress(OSError):
                     path.unlink()
+                    path.parent.rmdir()  # only when nothing else is in it
                 result.trace = None
         return result
 

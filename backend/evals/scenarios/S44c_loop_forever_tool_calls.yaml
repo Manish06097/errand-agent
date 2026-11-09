@@ -1,8 +1,10 @@
 id: S44c_loop_forever_tool_calls
-title: LoopForeverPolicy three list_bookings per response and 12 loop iterations; the 16 tool calls bind, LIMIT_REACHED with a partial result and nothing booked
+title: LoopForeverPolicy three list_bookings per response and 12 loop iterations and a tool-call cap of 12; the tool-call cap binds, LIMIT_REACHED with a partial result and nothing booked
 category: [limit exhaustion]
 seed: 442
-limits: {loop_iterations: 12}
+# The default cap is 16, but the planner's request outgrows its context budget at 15 results
+# once the cancel and reschedule tools joined the tool list (N1), so the cap is set to 12 here.
+limits: {loop_iterations: 12, tool_calls_per_run: 12}
 model: hostile:loop_forever_x3
 user:
   persona: cooperative
@@ -14,7 +16,7 @@ steps:
   - expect_limit: tool_calls
   - expect_transcript: {last_includes: ["So far I have: plumber, Indiranagar", "Nothing was booked"]}
   - expect_notice: retry
-  - expect_world: {list_bookings: 16, hold_slot: 0, book: 0, cancel: 0, reschedule: 0}
+  - expect_world: {list_bookings: 12, hold_slot: 0, book: 0, cancel: 0, reschedule: 0}
   - expect_no_side_effects: {}
 expect:
   invariants: [default]

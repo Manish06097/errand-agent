@@ -1,0 +1,25 @@
+id: S47b_typed_cancel_it
+title: A typed "cancel it" is a grant for a cancel card (the closed grammar), a bare "yes" is not, and the booking is cancelled once
+category: [cancel, repeated confirmation]
+seed: 47
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: a cancel or a reschedule never reaches `book`, so the provider's key dedupe does not apply
+steps:
+  - say: "Please cancel my AC servicing."
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending, typed_grant_ok: true}
+  - type_confirm: {text: "yes"}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_trace: {approval.granted: 0}
+  - expect_world: {cancel: 0}
+  - type_confirm: {text: "cancel it"}
+  - expect_outcome: CANCELLED_VERIFIED
+  - expect_cancel: {calls: 2, same_key: true, booking_status: cancelled}
+  - type_confirm: {text: "cancel it"}
+  - expect_trace: {approval.granted: 0}
+  - expect_cancel: {calls: 2, same_key: true, booking_status: cancelled}
+expect:
+  invariants: [default]

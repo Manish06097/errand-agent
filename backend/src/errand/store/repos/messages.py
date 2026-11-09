@@ -85,6 +85,14 @@ class MessagesRepo:
             raise RuntimeError("client_msg_id conflict but no existing row")
         return existing, False
 
+    async def assistant_for_run(self, run_id: str) -> list[Message]:
+        async with self._conn.execute(
+            f"SELECT {_COLUMNS} FROM messages WHERE run_id = ? AND role = 'assistant' "
+            "ORDER BY created_at, rowid",
+            (run_id,),
+        ) as cur:
+            return [_row(r) for r in await cur.fetchall()]
+
     async def upsert_assistant(self, message: Message) -> Message:
         """Write the assistant message for (run_id, kind), or overwrite it.
 

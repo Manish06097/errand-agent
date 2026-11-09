@@ -1,9 +1,9 @@
 id: S68_timeout_not_booked_twice
-title: Book times out unbooked and the same-key retry also times out unbooked; the retry budget is spent, no third book, PENDING_VERIFICATION naming when the hold lapses (the reconciler's completion is M6)
+title: Book times out unbooked and the same-key retry also times out unbooked; the retry budget is spent, no third book, PENDING_VERIFICATION naming when the hold lapses; after the hold has lapsed a reconciler tick makes it definitive (ACTION_FAILED, a fresh quote), and a booking exists only after a second grant
 category: [booking_timeout]
 seed: 68
 world:
-  book: {forced: [timeout_not_booked, timeout_not_booked]}
+  book: {forced: [timeout_not_booked, timeout_not_booked, success]}
 user:
   persona: cooperative
   goal:
@@ -27,5 +27,22 @@ steps:
   - expect_rows:
       - {table: action_intents, where: {state: needs_attention, same_key_retries: 1}, count: 1}
       - {table: intent_attempts, where: {state: unknown, calls: 2}, count: 1}
+  # a tick before the hold lapses changes nothing: the request could still land
+  - reconciler_tick: {}
+  - expect_outcome: PENDING_VERIFICATION
+  - expect_world: {book: 2}
+  - advance: 11m
+  - reconciler_tick: {}
+  - expect_outcome: ACTION_FAILED
+  - expect_transcript: {last_includes: ["nothing was booked", "fresh quote"]}
+  - expect_booking: {count: 0}
+  - refresh_hold: {}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - expect_booking: {count: 0}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_world: {book: 3}
+  - expect_booking: {count: 1}
 expect:
   invariants: [default]

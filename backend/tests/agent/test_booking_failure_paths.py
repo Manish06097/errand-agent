@@ -647,11 +647,12 @@ async def _last_notice(h: Harness) -> dict[str, Any]:
 
 async def test_the_pending_notice_carries_its_facts_for_the_card(tmp_path: Path) -> None:
     """`OutcomeNotice.pending` (additive, domain/messages.py): the shape M7's VerifyingCard
-    is built on. Facts only; there is no action to render until M6."""
+    is built on. The wait rule's notice offers "Check now" (N1); nothing else."""
     async with harness(tmp_path / "wait", world("timeout_not_booked", "timeout_not_booked")) as h:
         await approve(h)
         wait = await _last_notice(h)
-    assert wait["outcome"] == "PENDING_VERIFICATION" and wait["actions"] == []
+    assert wait["outcome"] == "PENDING_VERIFICATION"
+    assert [a["kind"] for a in wait["actions"]] == ["check_now"]
     assert wait["pending"]["reason"] == "hold_live"
     assert wait["pending"]["lapse_label"] == "08:10" and wait["pending"]["lapse_at"].endswith(
         "+05:30"

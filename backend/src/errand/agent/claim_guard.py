@@ -157,8 +157,13 @@ class Verified:
     provider_name: str
     service: str
     slot_start: datetime
+    # What was done to the booking: the verb a claim is matched against. A cancel or a
+    # reschedule that `list_bookings` showed is a record of its own (N1, 10.8).
     kind: Kind = "book"
     this_run: bool = False
+    # The intent that made the record, so a status line can tell this errand's own booking
+    # from another one of the same service on the thread.
+    source_intent_id: str | None = None
 
 
 @dataclass

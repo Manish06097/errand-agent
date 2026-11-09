@@ -1,0 +1,27 @@
+id: S36b_cancel_crash_after_intent_write
+title: The agent dies after a cancel's intent and its prepared attempt were written and before anything was sent; after the restart the list still shows the booking active, the attempt is sent with its own key, the default world 503s the first cancel and the same-key retry works (the token is read back from the consumed approval), the cancellation is verified through list_bookings, and the user is told after a restart
+category: [restart, cancel, idempotency]
+seed: 36
+crash_at: after_intent_write
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: a cancel or a reschedule never reaches `book`, so the provider's key dedupe does not apply
+steps:
+  - say: "Please cancel my AC servicing."
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - approve: {}
+  - expect_world: {cancel: 0}
+  - restart: {}
+  - expect_outcome: CANCELLED_VERIFIED
+  - expect_transcript:
+      last_includes: ["I checked after a restart"]
+  - expect_world: {cancel: 2}
+  - expect_cancel: {calls: 2, same_key: true, booking_status: cancelled}
+  - expect_booking: {count: 0}
+  - expect_rows:
+      - {table: intent_attempts, where: {state: applied, calls: 2}, count: 1}
+expect:
+  invariants: [default]

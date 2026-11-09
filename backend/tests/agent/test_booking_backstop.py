@@ -18,6 +18,7 @@ rather than our backstop.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -122,14 +123,14 @@ async def test_two_unlocked_executes_of_one_approval_book_once(
     assert invariants.inv01_side_effects_match_a_consumed_approval(rec) == []
 
 
-async def test_a_fenced_off_attempt_is_an_outcome_and_a_prepared_one_is_closed(
+async def test_a_fenced_off_attempt_is_an_outcome_and_a_prepared_one_is_sent_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The attempt cannot move to in_flight (another holder owns its epoch): that is a
     recorded PENDING_VERIFICATION, not an AssertionError, and nothing is sent. The attempt
-    stays `prepared`; when the approval is run again (a crash resume) re-entry closes it
-    as never sent instead of handing it to verify, which would skip it (8.7, M6 owns
-    sending it once with the same key)."""
+    stays `prepared`; when the approval is run again (a crash resume) re-entry hands it to
+    verify, which asks the provider first, finds the key unknown, and sends it once with
+    that same key (9.4 step 6, S36)."""
     world = ScenarioConfig(
         id="fenced", seed=28, world=WorldConfig(book=BookConfig(forced=["success"] * 2))
     )
@@ -179,6 +180,9 @@ async def test_a_fenced_off_attempt_is_an_outcome_and_a_prepared_one_is_closed(
             attempts = await repos.intents.attempts(intent.intent_id)
         rec = await h.records()
     outcome = next(r["outcome"] for r in rec.runs if r["run_id"] == admitted.run_id)
-    assert outcome == "ACTION_FAILED", outcome
-    assert [a.state for a in attempts] == ["not_applied"] and intent.state == "failed"
-    assert not [r for r in rec.op_log if r["op"] == "book"]
+    assert outcome == "BOOKED_VERIFIED", outcome
+    assert [a.state for a in attempts] == ["applied"] and intent.state == "succeeded"
+    books = [r for r in rec.op_log if r["op"] == "book"]
+    assert (
+        len(books) == 1 and len({json.loads(r["args_json"])["idempotency_key"] for r in books}) == 1
+    )

@@ -117,7 +117,15 @@ class ExpectSearchMatchesBrief(_Strict):
 
 class ExpectNotice(_Strict):
     expect_notice: Literal[
-        "retry", "narrow_search", "shorten", "answer", "refresh_hold", "raise_budget", "options"
+        "retry",
+        "narrow_search",
+        "shorten",
+        "answer",
+        "refresh_hold",
+        "raise_budget",
+        "options",
+        "check_now",
+        "cancel",
     ]
     names: list[BriefField] = Field(default_factory=list)
 
@@ -131,6 +139,9 @@ class Until(_Strict):
 
 
 class ApproveSpec(_Strict):
+    # The button press itself is expected to die with the API process (crash_at:
+    # after_grant_commit): the harness answers 599 and the process exits with code 1.
+    expect_crash: bool = False
     # stale: send the fingerprint of the card shown before the current one
     fingerprint: Literal["current", "stale"] = "current"
     # original: press the button on the first approval card of the conversation
@@ -190,6 +201,69 @@ class Advance(_Strict):
     advance: str
 
 
+class Restart(_Strict):
+    """Wait for the API to exit with code 1 (the scenario's `crash_at`), start it again on
+    the same data directory without the fault and wait until it serves. The reconciler
+    runs before the first request, so the recovery runs it started are in the transcript
+    when this step returns; the runner then reads them like any other run."""
+
+    restart: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReconcilerTick(_Strict):
+    """Run the reconciler's re-check of `needs_attention` intents now (the dev drawer's
+    "Reconcile now"): the evals set the periodic interval to 0 and drive every tick."""
+
+    reconciler_tick: dict[str, Any] = Field(default_factory=dict)
+
+
+class CheckNow(_Strict):
+    """The "Check now" button on a PENDING_VERIFICATION message. `expect_status` 409
+    asserts there was nothing to check."""
+
+    check_now: dict[str, Any] = Field(default_factory=dict)
+
+
+class CancelSpec(_Strict):
+    # world cancel ops (every call, the 503 ones included)
+    calls: int
+    # every call carried the same idempotency key
+    same_key: bool = True
+    # the target booking's status in the world's own store afterwards
+    booking_status: Literal["confirmed", "cancelled", "cancelled_by_provider"] | None = None
+
+
+class ExpectCancel(_Strict):
+    """What the world saw of the cancel, and where the booking ended up."""
+
+    expect_cancel: CancelSpec
+
+
+class MoveSpec(_Strict):
+    # world reschedule ops (every call), and how many of them the world applied
+    calls: int
+    applied: int | None = None
+    # the booking's ISO weekday in the world's own store afterwards (1 = Monday), or
+    # `unchanged` for "still where the scenario seeded it"
+    weekday: int | None = None
+    unchanged: bool = False
+    # every call carried the same idempotency key
+    same_key: bool = True
+
+
+class ExpectMove(_Strict):
+    """What the world saw of the reschedule, and where the booking ended up."""
+
+    expect_move: MoveSpec
+
+
+class ClickAction(_Strict):
+    """Press a button of the last run's notice, the way the web client does for a quick
+    reply: its label is sent as the user's message. `kind` is the NoticeAction kind."""
+
+    click_action: dict[str, str]
+
+
 class SwitchConversation(_Strict):
     """Make `name` the current conversation, creating it on first use. "main" is the one
     every scenario starts in."""
@@ -203,6 +277,10 @@ class CardSpec(_Strict):
     typed_grant_ok: bool | None = None
     price_delta_inr: int | None = None
     slot_hour: int | None = None
+    # the card's slot starts at or after this local hour ("not before 10")
+    slot_not_before_hour: int | None = None
+    # text (case-insensitive) every one of which some line of the card must contain
+    lines_include: list[str] = Field(default_factory=list)
     nearby: int | None = None
     # the price on the card is the held quote the world gave for its hold
     price_is_held_quote: bool | None = None
@@ -486,11 +564,11 @@ class OpenFollowup(_Strict):
     open_followup: dict[str, Any] = Field(default_factory=dict)
 
 
-class ClickAction(_Strict):
+class ClickFollowup(_Strict):
     """N3: a follow-up notice button. `widen` presses the named widening button, `dismiss`
     is "I'll sort it myself"."""
 
-    click_action: Literal["widen", "dismiss"]
+    click_followup: Literal["widen", "dismiss"]
     field: Literal["days", "price", "time"] | None = None
 
 
@@ -521,6 +599,12 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "refresh_hold": RefreshHold,
     "advance": Advance,
     "conversation": SwitchConversation,
+    "click_action": ClickAction,
+    "restart": Restart,
+    "reconciler_tick": ReconcilerTick,
+    "check_now": CheckNow,
+    "expect_cancel": ExpectCancel,
+    "expect_move": ExpectMove,
     "expect_card": ExpectCard,
     "expect_transcript": ExpectTranscript,
     "expect_booking": ExpectBooking,
@@ -543,7 +627,7 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "watcher_tick": WatcherTick,
     "expect_notification": ExpectNotification,
     "open_followup": OpenFollowup,
-    "click_action": ClickAction,
+    "click_followup": ClickFollowup,
     "expect_followup": ExpectFollowup,
 }
 
@@ -568,6 +652,12 @@ Step = (
     | RefreshHold
     | Advance
     | SwitchConversation
+    | ClickAction
+    | Restart
+    | ReconcilerTick
+    | CheckNow
+    | ExpectCancel
+    | ExpectMove
     | ExpectCard
     | ExpectTranscript
     | ExpectBooking
@@ -590,7 +680,7 @@ Step = (
     | WatcherTick
     | ExpectNotification
     | OpenFollowup
-    | ClickAction
+    | ClickFollowup
     | ExpectFollowup
 )
 
@@ -630,6 +720,7 @@ class FinalExpect(_Strict):
     max_real_s: float | None = Field(default=None, gt=0)
 
 
+CrashPoint = Literal["after_intent_write", "after_world_book", "after_grant_commit"]
 PlannerName = Literal[
     "scripted:reference",
     "scripted:injection_follower",
@@ -663,6 +754,9 @@ class Scenario(_Strict):
     model: PlannerName = "scripted:reference"
     # The scripted quarantined reader (evals/policies/reader.py).
     reader: ReaderName = "keyword"
+    # Run against real processes and kill the API at this fault point on its first start
+    # (ERRAND_FAULT); the steps then use `restart` (architecture 18.1, N1).
+    crash_at: CrashPoint | None = None
     world: WorldConfig = Field(default_factory=WorldConfig)
     faults: FaultsConfig = Field(default_factory=FaultsConfig)
     # LimitSettings fields only (strict): overrides for this scenario, to prove each cap binds.

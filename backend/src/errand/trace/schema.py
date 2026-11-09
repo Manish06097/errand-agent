@@ -82,6 +82,9 @@ class RunEnd(Envelope):
     # A watch run (no outcome): what the tick saw.
     changes: list[dict[str, Json]] | None = None
     failed_users: list[str] | None = None
+    # Set by the reconciler when it ends a run the process died in (N1): the recovery
+    # run that took the intent over, or None when no recovery run was needed.
+    recovered_by: str | None = None
 
 
 class NodeRecord(Envelope):
@@ -258,6 +261,7 @@ class StatusCheck(Envelope):
             "report_provider_cancelled",
             "report_not_applied",
             "wait_for_lapse",
+            "send_prepared",
             "escalate",
         ]
         | None

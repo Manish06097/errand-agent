@@ -158,6 +158,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dev/reconciler/tick": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Now
+         * @description "Reconcile now": the periodic task's re-check of `needs_attention` intents, run for
+         *     every conversation, answered once the recovery runs it started have ended (N1).
+         */
+        post: operations["reconcile_now_api_dev_reconciler_tick_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dev/scenario": {
         parameters: {
             query?: never;
@@ -356,6 +377,8 @@ export interface components {
              * @enum {string}
              */
             action: "book" | "cancel" | "reschedule";
+            /** Alternatives */
+            alternatives?: components["schemas"]["SlotOption"][];
             /** Approval Id */
             approval_id: string;
             /** Brief */
@@ -421,7 +444,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "select_slot" | "refresh_hold" | "widen_followup" | "dismiss_followup";
+            kind: "select_slot" | "refresh_hold" | "check_now" | "widen_followup" | "dismiss_followup";
             /** Payload */
             payload?: {
                 [key: string]: string;
@@ -894,7 +917,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "retry" | "narrow_search" | "shorten" | "answer" | "refresh_hold" | "raise_budget" | "options" | "quick_reply" | "widen_followup" | "dismiss_followup" | "select_slot";
+            kind: "retry" | "narrow_search" | "shorten" | "answer" | "refresh_hold" | "raise_budget" | "options" | "check_now" | "cancel" | "quick_reply" | "widen_followup" | "dismiss_followup" | "select_slot";
             /** Label */
             label: string;
             /** Reply */
@@ -972,6 +995,8 @@ export interface components {
         OutcomeNotice: {
             /** Actions */
             actions?: components["schemas"]["NoticeAction"][];
+            /** Alternatives */
+            alternatives?: components["schemas"]["SlotOption"][];
             outcome: components["schemas"]["RunOutcome"];
             pending?: components["schemas"]["PendingFacts"] | null;
             /** Status Line */
@@ -1031,6 +1056,13 @@ export interface components {
              * @enum {string}
              */
             type: "proactive";
+        };
+        /** ReconcileOut */
+        ReconcileOut: {
+            /** Recovery Runs */
+            recovery_runs: string[];
+            /** Skipped Busy */
+            skipped_busy: string[];
         };
         /** RenderedIn */
         RenderedIn: {
@@ -1622,6 +1654,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_now_api_dev_reconciler_tick_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileOut"];
                 };
             };
         };
