@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-09T07:01:06Z",
-  "git_sha": "f99b91da8d75",
+  "generated_at": "2026-11-09T07:17:02Z",
+  "git_sha": "6d79eed990cc",
   "model_mode": "scripted, hostile, replay",
   "seeds": "1-220",
   "passed": 92,
