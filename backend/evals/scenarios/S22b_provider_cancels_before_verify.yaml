@@ -29,5 +29,11 @@ steps:
       - {table: intent_attempts, where: {state: applied}, count: 1}
       - {table: known_bookings, where: {status: cancelled_by_provider}, count: 1}
       - {table: followup_jobs, where: {event_kind: provider_cancel, state: detected}, count: 1}
+  # the watcher's next tick delivers the job M5 left detected: a notice, one notification
+  - watcher_tick: {}
+  - expect_outcome: NOTIFIED
+  - expect_rows:
+      - {table: followup_jobs, where: {event_kind: provider_cancel, state: notified}, count: 1}
+      - {table: notifications, count: 1}
 expect:
   invariants: [default]

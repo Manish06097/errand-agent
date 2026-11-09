@@ -59,7 +59,16 @@ class KnownBookingsRepo:
             f"INSERT INTO known_bookings ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(booking_id) DO UPDATE SET status = excluded.status, "
             "slot_start = excluded.slot_start, slot_end = excluded.slot_end, "
-            "last_seen_at = excluded.last_seen_at",
+            "last_seen_at = excluded.last_seen_at, "
+            # The watcher may have mirrored the booking first, with no origin (BUG-N3-3):
+            # what the agent knows about where it came from fills the gap, and a value
+            # already there is never overwritten.
+            "origin_conversation_id = COALESCE(known_bookings.origin_conversation_id, "
+            "excluded.origin_conversation_id), "
+            "origin_brief_json = COALESCE(known_bookings.origin_brief_json, "
+            "excluded.origin_brief_json), "
+            "source_intent_id = COALESCE(known_bookings.source_intent_id, "
+            "excluded.source_intent_id)",
             (
                 b.booking_id,
                 b.user_id,
@@ -90,3 +99,35 @@ class KnownBookingsRepo:
         ) as cur:
             row = await cur.fetchone()
         return _row(row) if row else None
+
+    async def get(self, booking_id: str) -> KnownBooking | None:
+        async with self._conn.execute(
+            f"SELECT {_COLUMNS} FROM known_bookings WHERE booking_id = ?", (booking_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return _row(row) if row else None
+
+    async def mirror(self, b: KnownBooking) -> str | None:
+        """Mirror a provider-listed booking (the watcher, 14.1). A booking we made keeps its
+        origin conversation, brief and intent; a new one lands with those NULL. Returns the
+        status the mirror had before (None when the booking was not known)."""
+        before = await self.get(b.booking_id)
+        if before is None:
+            await self.upsert(b)
+        else:
+            await self.upsert(
+                KnownBooking(
+                    b.booking_id,
+                    before.user_id,
+                    b.provider_id,
+                    b.service,
+                    b.slot_start,
+                    b.slot_end,
+                    b.status,
+                    b.last_seen_at,
+                    before.origin_conversation_id,
+                    before.origin_brief_json,
+                    before.source_intent_id,
+                )
+            )
+        return before.status if before else None

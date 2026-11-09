@@ -31,5 +31,8 @@ export type VisibleCard = S["VisibleCard"];
 export type NewMessage = S["NewMessage"];
 export type DecisionIn = S["DecisionIn"];
 export type ActionIn = S["ActionIn"];
+export type NotificationOut = S["NotificationOut"];
+export type NotificationsOut = S["NotificationsOut"];
+export type ProactiveLine = S["ProactiveLine"];
 
 export type BodyOf<T extends MessageBody["type"]> = Extract<MessageBody, { type: T }>;

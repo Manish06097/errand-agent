@@ -1,0 +1,27 @@
+id: S41_cancelled_booking_already_started
+title: The provider cancels a booking whose slot has already started by the time the watcher looks; the job is ignored, with no conversation, no message and no notification
+category: [followup]
+seed: 41
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - world_event: {type: provider_cancelled, booking: last_booked}
+  # the watcher was down until after the visit's start
+  - advance: 72h
+  - watcher_tick: {}
+  - expect_followup: {watch_trace: true, delivered: 0}
+  - expect_notification: {count: 0}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: ignored}, count: 1}
+      - {table: notifications, count: 0}
+  - expect_world: {search_providers: 1, hold_slot: 1, book: 1}
+expect:
+  invariants: [default]

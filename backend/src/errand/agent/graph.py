@@ -2,8 +2,9 @@
 
 M4 wires the booking path:
 
-    START -> ingress -> plan | prepare_proposal | execute | verify | respond
+    START -> ingress -> plan | prepare_proposal | execute | verify | respond | followup
                  (verify: a Recover or check_now inbound, N1)
+    followup -> prepare_proposal (a replacement: the Rebook card) | respond (N3, no model)
     plan -> prepare_proposal (a validated proposal) | respond
     prepare_proposal -> respond | plan (one SystemNote replan per run)
     execute -> verify | prepare_proposal (a changed price or slot, a hold that could not be
@@ -42,8 +43,10 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from errand.agent.deps import RunDeps
+from errand.agent.node_guard import guard_node, route_guard
 from errand.agent.nodes.await_approval import await_approval
 from errand.agent.nodes.execute import execute, route_after_execute
+from errand.agent.nodes.followup import followup, route_after_followup
 from errand.agent.nodes.ingress import ingress, route_after_ingress
 from errand.agent.nodes.plan import plan, route_after_plan
 from errand.agent.nodes.prepare_proposal import prepare_proposal, route_after_prepare
@@ -65,25 +68,41 @@ def build_graph(checkpointer: BaseCheckpointSaver[Any]) -> Graph:
     g: StateGraph[ThreadState, RunDeps, ThreadState, ThreadState] = StateGraph(
         ThreadState, context_schema=RunDeps
     )
-    g.add_node("ingress", ingress)
-    g.add_node("plan", plan)
-    g.add_node("prepare_proposal", prepare_proposal)
-    g.add_node("execute", execute)
-    g.add_node("verify", verify)
-    g.add_node("respond", respond)
-    g.add_node("await_approval", await_approval)
+    nodes: dict[str, Any] = {
+        "ingress": ingress,
+        "followup": followup,
+        "plan": plan,
+        "prepare_proposal": prepare_proposal,
+        "execute": execute,
+        "verify": verify,
+        "respond": respond,
+        "await_approval": await_approval,
+    }
+    for name, fn in nodes.items():
+        g.add_node(name, guard_node(name, fn))
     g.add_edge(START, "ingress")
     g.add_conditional_edges(
-        "ingress", route_after_ingress, ["plan", "prepare_proposal", "execute", "verify", "respond"]
+        "ingress",
+        route_after_ingress,
+        ["plan", "prepare_proposal", "execute", "verify", "respond", "followup"],
     )
-    g.add_conditional_edges("plan", route_after_plan, ["prepare_proposal", "respond"])
-    g.add_conditional_edges("prepare_proposal", route_after_prepare, ["plan", "respond"])
     g.add_conditional_edges(
-        "execute", route_after_execute, ["verify", "prepare_proposal", "plan", "respond"]
+        "followup", route_guard(route_after_followup), ["prepare_proposal", "respond"]
     )
-    g.add_conditional_edges("verify", route_after_verify, ["plan", "respond"])
+    g.add_conditional_edges("plan", route_guard(route_after_plan), ["prepare_proposal", "respond"])
+    g.add_conditional_edges(
+        "prepare_proposal", route_guard(route_after_prepare), ["plan", "respond"]
+    )
+    g.add_conditional_edges(
+        "execute",
+        route_guard(route_after_execute),
+        ["verify", "prepare_proposal", "plan", "respond"],
+    )
+    g.add_conditional_edges("verify", route_guard(route_after_verify), ["plan", "respond"])
     g.add_conditional_edges("respond", route_after_respond, ["await_approval", END])
-    g.add_edge("await_approval", "ingress")
+    g.add_conditional_edges(
+        "await_approval", route_guard(lambda _s: "ingress"), ["ingress", "respond"]
+    )
     return g.compile(checkpointer=checkpointer)
 
 

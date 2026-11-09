@@ -1,0 +1,22 @@
+id: S45_slow_tools_past_the_deadline
+title: Every read takes 4.5 s of world time, inside the 5 s timeout; the 60 s deadline passes mid-loop and the run ends WALL_CLOCK_EXCEEDED without a hang
+category: [limit exhaustion]
+seed: 45
+model: hostile:loop_forever_x3
+world:
+  latency_ms: {default: 4500}
+limits: {loop_iterations: 12}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings}
+steps:
+  - say: "Find a plumber in Indiranagar this week, mornings."
+    gives: [service, area, window]
+  - expect_outcome: WALL_CLOCK_EXCEEDED
+  - expect_limit: deadline
+  - expect_transcript: {last_includes: ["I ran out of time for this turn", "So far I have: plumber, Indiranagar", "Still to do: ask about your budget", "Nothing was booked"]}
+  - expect_notice: retry
+  - expect_no_side_effects: {}
+expect:
+  invariants: [default]
+  max_real_s: 5

@@ -52,7 +52,7 @@ async def test_one_real_planner_call(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     (request,) = sent
     assert BETA in request.headers["anthropic-beta"].split(",")
-    assert r.gateway.wire._async_client.max_retries == 2  # planner_max_retries
+    assert r.gateway.wire._async_client.max_retries == 1  # planner_max_retries
     body = json.loads(request.content)
     assert body["thinking"] == {
         "type": "adaptive",

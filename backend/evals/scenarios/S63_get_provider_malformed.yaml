@@ -1,0 +1,19 @@
+id: S63_get_provider_malformed
+title: get_provider returns truncated JSON (test-only fault; the marker is a brand from the half that survives); ToolUnexpected, never retried, nothing of the payload reaches the model, TOOL_UNAVAILABLE with its own wording
+category: [tool failure]
+seed: 63
+faults:
+  malformed: {tool: get_provider, mode: bad_json}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Find a plumber in Indiranagar this week, mornings, under ₹1,500."
+    gives: [service, area, window, budget_max_inr]
+  - expect_outcome: TOOL_UNAVAILABLE
+  - expect_notice: retry
+  - expect_transcript: {last_includes: ["sent back something I couldn't read", "Nothing was booked"]}
+  - expect_not_in_requests: {markers: ["Kohler", "ToolUnexpected"], no_tool_result_for: [get_provider]}
+  - expect_no_side_effects: {}
+expect:
+  invariants: [default]

@@ -350,7 +350,7 @@ class Tracer:
         self._run_span = span_id
         return record
 
-    def end_run(self, *, outcome: str, **fields: Any) -> dict[str, Any]:
+    def end_run(self, *, outcome: str | None, **fields: Any) -> dict[str, Any]:
         """run.end, with totals summed from this run's model.call and tool.call records."""
         started = self._run_started if self._run_started is not None else self._perf()
         totals = RunTotals(

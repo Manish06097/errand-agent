@@ -86,17 +86,25 @@ from errand.domain.outcomes import (
     Failure,
     Limit,
     LimitName,
+    ModelDown,
     NoAction,
     Options,
     OutOfCoverage,
     PlanResult,
     Proposal,
+    Refused,
     Reply,
     TooLarge,
     ToolDown,
+    Truncated,
 )
 from errand.domain.slots import Shortlist
-from errand.llm.errors import ContextOverBudget, ModelCallLimit
+from errand.llm.errors import (
+    ContextOverBudget,
+    ModelCallLimit,
+    ModelDeadline,
+    ModelUnavailable,
+)
 from errand.tools import views
 from errand.tools.errors import (
     PlannerToolRejected,
@@ -116,8 +124,6 @@ from errand.world.contracts import (
     SearchProvidersError,
     SearchProvidersOut,
 )
-
-REPROMPTS_PER_RUN = 1
 
 
 @dataclass
@@ -213,19 +219,28 @@ class PlannerLoop:
         session = deps.llm.session(
             system=built.system, messages=built.messages, manifest=built.manifest
         )
+        retry = False
         for _ in range(deps.limits.loop_iterations):
             if self._past_deadline():
                 return Limit(limit="deadline")
             try:
-                turn = await session.call(on_token=deps.on_token)
+                if retry:
+                    retry = False
+                    turn = await session.retry_last(on_token=deps.on_token)
+                else:
+                    turn = await session.call(on_token=deps.on_token)
             except ModelCallLimit:
                 return Limit(limit="model_calls")
+            except ModelDeadline:
+                return Limit(limit="deadline")
+            except ModelUnavailable as exc:
+                return ModelDown(reason=exc.reason)
             except ContextOverBudget as exc:
                 return TooLarge(section="request", estimated=exc.needed, cap=exc.budget)
             if turn.stop_reason == "end_turn":
                 text = answer_text(turn.message)
                 if self._points_at_a_selection(text):
-                    if deps.counters.reprompts >= REPROMPTS_PER_RUN:
+                    if deps.counters.reprompts >= deps.limits.reprompts_per_run:
                         return NoAction()
                     deps.counters.reprompts += 1
                     deps.tracer.emit(
@@ -236,8 +251,27 @@ class PlannerLoop:
                     )
                     continue
                 return self._finish(text)
+            if turn.stop_reason == "refusal":
+                return Refused()
+            if turn.stop_reason == "max_tokens":
+                # The cut-off response is never sent back. One retry of the same request
+                # per run, on the reprompt budget; a second cut ends the run.
+                if deps.counters.reprompts >= deps.limits.reprompts_per_run:
+                    return Truncated()
+                deps.counters.reprompts += 1
+                deps.tracer.emit("guard.reprompt", detail={"reason": "max_tokens"})
+                retry = True
+                continue
             if turn.stop_reason != "tool_use":
-                return Failure(reason=f"stop_reason {turn.stop_reason!r} is not handled until M13")
+                # pause_turn, stop_sequence or anything new: we use no server tools and no
+                # stop sequences, so this is ours to look at.
+                deps.tracer.emit(
+                    "error",
+                    where="plan",
+                    exception_type="UnhandledStopReason",
+                    message=f"stop_reason {turn.stop_reason!r}",
+                )
+                return Failure(reason=f"stop_reason {turn.stop_reason!r}")
             calls = list(turn.message.tool_calls)
             if not calls:
                 return Failure(reason="stop_reason tool_use without a tool call")

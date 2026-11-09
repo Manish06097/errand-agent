@@ -32,8 +32,9 @@ class ModelSettings(BaseSettings):
     planner_max_tokens: int = 16_000
     # The SDK retries a failed request (connection errors, 408, 409, 429, 5xx) inside one
     # model.call, so latency and the planner timeout stretch up to (1 + retries) times.
-    # Explicit so nothing hides behind the SDK default; M13 sets it against the deadline.
-    planner_max_retries: int = Field(default=2, ge=0)
+    # Explicit so nothing hides behind the SDK default. 1 (N3): 15.2 says "after one
+    # retry", and two would stretch a failed call to three attempts against the deadline.
+    planner_max_retries: int = Field(default=1, ge=0)
     # Live and record runs opt in to strict prefix binding, so a history edit fails
     # loudly instead of being patched over by drop_block (architecture 10.1).
     thinking_binding_beta: str = "thinking-binding-controls-2026-08-01"
@@ -61,12 +62,48 @@ class LimitSettings(BaseSettings):
     # Per-run cost cap (15.1). M10 applies it to the quarantined reader only: a reader
     # call is skipped once the run has spent this much. M13 applies it to the planner.
     run_cost_cap_usd: float = 0.40
+    # Caps INV-09 checks (15.1). Reprompts are enforced in plan, replans in routing and
+    # status checks in verify; they are listed here so the run records one set of limits.
+    reprompts_per_run: int = 1
+    replans_per_run: int = 1
+    status_checks_per_run: int = 4
+    # What an open intent may run past the deadline: execute, verify and respond finish.
+    critical_grace_s: float = 20.0
+
     # The wall clock per run when the planner is the real model (15.1), live and record
     # modes only; evals keep run_deadline_s. M13 owns the enforcement.
     # 43 = ceil(2 x p95 of a planning turn) + the reader's timeout: the reader is skipped
     # once less run time is left than its timeout, so 2 x p95 alone turns it off on every
     # cold-cache turn. tests/quarantine/test_live_deadline_leaves_reader_time.py pins it.
     live_run_deadline_s: float = Field(default=43.0, gt=0)
+
+    @model_validator(mode="after")
+    def _backstop_outlasts_the_live_deadline(self) -> LimitSettings:
+        """The outer backstop must leave an open intent its full grace after the longest
+        deadline (15.1): live deadline + critical grace + 10 s."""
+        need = self.live_run_deadline_s + self.critical_grace_s + 10.0
+        if self.run_backstop_s < need:
+            raise ValueError(
+                f"run_backstop_s {self.run_backstop_s} is under live_run_deadline_s + "
+                f"critical_grace_s + 10 = {need}"
+            )
+        return self
+
+    def recorded(self, deadline_s: float | None = None) -> dict[str, float | int]:
+        """The limits as run.start records them for INV-09. `deadline_s` is the effective
+        deadline admission computed (live and record runs use `live_run_deadline_s`), so the
+        invariant reads the limit the run actually ran under."""
+        return {
+            "model_calls": self.model_calls_per_run,
+            "iterations": self.loop_iterations,
+            "tool_calls": self.tool_calls_per_run,
+            "deadline_s": self.run_deadline_s if deadline_s is None else deadline_s,
+            "backstop_s": self.run_backstop_s,
+            "reprompts": self.reprompts_per_run,
+            "replans": self.replans_per_run,
+            "status_checks": self.status_checks_per_run,
+            "critical_grace_s": self.critical_grace_s,
+        }
 
 
 class BookingSettings(BaseSettings):
@@ -209,6 +246,16 @@ class MemorySettings(BaseSettings):
     half_life_days: float = Field(default=60.0, gt=0)
     # The seeds `python -m errand.seed` and the dev drawer know (13.5).
     seed_names: tuple[str, ...] = ("memory_demo", "memory_rich_v1")
+
+
+class FollowupSettings(BaseSettings):
+    """Proactive follow-up (architecture 14)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_FOLLOWUP_", extra="ignore")
+
+    # The watcher's lifespan task polls list_bookings this often; 0 turns it off. Evals
+    # and tests use 0 and call tick() through the `watcher_tick` verb.
+    watch_interval_s: float = Field(default=15.0, ge=0)
 
 
 class ContextCaps(BaseSettings):

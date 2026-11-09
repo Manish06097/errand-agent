@@ -89,10 +89,10 @@ async def test_prepare_proposal_run_twice_makes_one_hold_and_one_approval(tmp_pa
 
 def test_await_approval_is_the_interrupt_and_nothing_else() -> None:
     node = await_module.await_approval
-    assert list(inspect.signature(node).parameters) == ["state"]
+    assert list(inspect.signature(node).parameters) == ["state", "runtime"]
     tree = ast.parse(textwrap.dedent(inspect.getsource(node)))
     func = tree.body[0]
-    assert isinstance(func, ast.FunctionDef)
+    assert isinstance(func, ast.AsyncFunctionDef)
     body = [s for s in func.body if not isinstance(s, ast.Expr)]  # the docstring, if any
     assert len(body) == 2, ast.dump(func)
     assign, ret = body

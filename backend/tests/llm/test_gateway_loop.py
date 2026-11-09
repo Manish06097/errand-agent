@@ -186,8 +186,10 @@ async def test_a_failing_model_call_is_traced_as_an_error(tmp_path: Path) -> Non
     (err,) = r.of_type("error")
     assert err["where"] == "llm.gateway"
     assert err["exception_type"] == "ConnectionError"
-    assert r.of_type("model.call") == []
-    assert r.gateway.counters.model_calls == 0
+    # Not a model outage, so it stays what it was; the failed call is still recorded.
+    (call,) = r.of_type("model.call")
+    assert call["error"].startswith("ConnectionError") and call["usage"]["output"] == 0
+    assert r.gateway.counters.model_calls == 1
 
 
 class _Ticks:

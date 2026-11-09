@@ -42,6 +42,8 @@ class UiAction(_Inbound):
         "check_now",
         "abandon_errand",
         "stop",
+        "widen_followup",
+        "dismiss_followup",
     ]
     payload: dict[str, str] = Field(default_factory=dict)
 
@@ -60,8 +62,9 @@ class ApprovalDeclined(_Inbound):
 
 class SystemEvent(_Inbound):
     type: Literal["system_event"] = "system_event"
-    kind: Literal["followup_start"]
+    kind: Literal["followup_start", "followup_lapsed"]
     booking_id: str | None = None
+    job_id: str | None = None
 
 
 class Recover(_Inbound):

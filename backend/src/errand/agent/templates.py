@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime, tzinfo
 
+from errand.agent import templates_limits
 from errand.agent.cards import brief_chips
 from errand.agent.templates_conversation import no_fit_body, out_of_coverage_body
 from errand.domain.brief import BriefField
@@ -35,16 +36,19 @@ from errand.domain.outcomes import (
     AskExhausted,
     Failure,
     Limit,
+    ModelDown,
     NoFit,
     Options,
     OutOfCoverage,
     PendingCheck,
     PlanResult,
     Proposal,
+    Refused,
     Reply,
     RunOutcome,
     TooLarge,
     ToolDown,
+    Truncated,
 )
 from errand.domain.windows import slot_label
 
@@ -88,6 +92,13 @@ def so_far(errand: Errand | None) -> str:
         budget = brief.budget_max_inr.value
         parts.append("any price" if budget == "none" else f"under ₹{budget:,}")
     return ", ".join(parts)
+
+
+def backstop_notice(errand: Errand | None) -> OutcomeNotice:
+    """The 90 s backstop's WALL_CLOCK_EXCEEDED, filled from the last checkpointed errand."""
+    return templates_limits.wall_clock_exceeded(
+        so_far(errand), templates_limits.still_to_do(errand, _FIELD_WORDS)
+    )
 
 
 def internal_error(run_id: str) -> OutcomeNotice:
@@ -214,6 +225,18 @@ def render(
         return no_fit_body(result)
     if isinstance(result, Options) and errand is not None and errand.shortlist is not None:
         return RunOutcome.PRESENTED_OPTIONS, shortlist_card(errand, result.recommendation, tz)
+    if isinstance(result, Limit) and result.limit == "deadline":
+        return RunOutcome.WALL_CLOCK_EXCEEDED, templates_limits.wall_clock_exceeded(
+            so_far(errand), templates_limits.still_to_do(errand, _FIELD_WORDS)
+        )
+    if isinstance(result, ModelDown):
+        return RunOutcome.MODEL_UNAVAILABLE, templates_limits.model_unavailable()
+    if isinstance(result, Refused):
+        return RunOutcome.MODEL_REFUSED, templates_limits.model_refused()
+    if isinstance(result, Truncated):
+        return RunOutcome.MODEL_NO_PROGRESS, templates_limits.model_truncated()
+    if isinstance(result, ToolDown) and result.error_class == "ToolUnexpected":
+        return RunOutcome.TOOL_UNAVAILABLE, templates_limits.tool_unexpected()
     if isinstance(result, Limit):
         known = so_far(errand)
         have = f" So far I have: {known}." if known else ""

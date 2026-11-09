@@ -6,12 +6,13 @@ When a booked provider cancels (a simulated event), the agent must detect it wit
 
 ## Decision
 
-- A lifespan watcher polls `list_bookings` for users with upcoming bookings every 15 s (evals call `tick()`), diffs against `known_bookings`, and inserts a unique `followup_jobs` row per (booking, event) so each event is handled once across restarts.
-- Job rows move `detected -> notified | ignored -> done`; the reconciler resumes a job left in `detected` after a crash.
+- A lifespan watcher polls `list_bookings` for every user with a conversation every 15 s (evals call `tick()`), mirrors every upcoming booking (not only the ones the agent made) into `known_bookings`, diffs, and inserts a unique `followup_jobs` row per (booking, event) so each event is handled once across restarts.
+- Job rows move `detected -> notified | ignored`, `notified -> done` (`replaced`, `dismissed`, `lapsed`), or `detected -> deferred -> notified` when a saved `contact_window` is closed; the reconciler resumes `detected` jobs and `deferred` ones once `deliver_at` has passed.
+- Delivery is a graph run on the follow-up conversation (`SystemEvent(followup_start)`), so the Rebook card uses the same grant, execute and verify path as any booking.
 - In the same transaction as the job insert, the watcher invalidates any pending or granted cancel or reschedule card for that booking.
-- A code policy decides: ignore (past or already replaced), "nothing to cancel" (the user had a cancel card for it), urgent (within 24 h) or normal; no-fit notices offer widen buttons.
+- A pure code policy decides: ignore (started or already replaced), notify without a search (a same-service booking already in the window), "nothing to cancel" (the user had a cancel card for it), reschedule window, urgent (within 24 h) or normal; no-fit notices offer three widen buttons.
 - A rebook intent carries `replaces_booking_id` under a unique index, so a replacement requested from the origin chat and one from the follow-up thread cannot both be booked.
-- The follow-up runs in its own conversation linked from the origin one. Code clones the original brief, re-applies current memory, searches, filters, ranks and holds the top candidate, and shows a "Rebook" card. No model call until the user replies.
+- The follow-up runs in its own conversation linked from the origin one by a `proactive` line. Code clones the original brief (or builds one from the booking), re-applies current memory, searches, filters, ranks and holds the top candidate under the same price ceiling, and shows a "Rebook" card. No model call and no reader call until the user replies; import-linter contracts make that structural.
 
 ## Alternatives considered
 

@@ -1,0 +1,41 @@
+id: S40_nothing_fits_after_a_cancel
+title: The provider cancels and nothing fits the same ceiling; an honest notice says what was searched, no hold exists, three buttons, one click widens one field, and no memory is written
+category: [followup]
+seed: 40
+world:
+  book: {forced: [success, success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "300"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹300."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  # the visit is now within a day, so only today and tomorrow are searched
+  - advance: 23h
+  - world_event: {type: provider_cancelled, booking: last_booked}
+  - expect_world: {hold_slot: 1}
+  - watcher_tick: {}
+  - expect_outcome: NOTIFIED
+  - expect_notification: {count: 1}
+  - open_followup: {}
+  - expect_transcript: {includes: ["nothing fits", "I looked at"]}
+  - expect_card: {kind: none}
+  # nothing is held before the click, and the search made no write of any kind
+  - expect_world: {search_providers: 2, hold_slot: 1, book: 1}
+  - expect_rows:
+      - {table: approvals, where: {status: pending}, count: 0}
+      - {table: holds, count: 1}
+  - expect_transcript: {last_includes: ["Up to ₹450", "More days", "Any time of day", "sort it myself"]}
+  # one click widens one field, for this errand only
+  - click_followup: widen
+    field: price
+  - expect_card: {kind: action, status: pending}
+  - expect_world: {search_providers: 3, hold_slot: 2, book: 1}
+  - expect_rows:
+      - {table: memories, count: 0}
+      - {table: memory_events, count: 0}
+expect:
+  invariants: [default]

@@ -39,6 +39,7 @@ from errand.domain.inbound import (
     ApprovalDeclined,
     ApprovalGranted,
     Recover,
+    SystemEvent,
     UiAction,
     UserMessage,
 )
@@ -47,6 +48,7 @@ from errand.ids import errand_id_for
 
 TERMINAL = frozenset({Phase.COMPLETED, Phase.FAILED, Phase.ABANDONED})
 M4_ACTIONS = frozenset({"select_slot", "refresh_hold"})
+FOLLOWUP_ACTIONS = frozenset({"widen_followup", "dismiss_followup"})
 RECHECK_ACTIONS = frozenset({"check_now"})
 
 
@@ -70,6 +72,7 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
             "park": None,
             "system_notes": [],
             "card_changes": [],
+            "followup": None,
         }
         # Memory first (gate 2 decisions 10 and 17): clear what was forgotten, pre-fill the area.
         turn = getattr(state.inbound, "turn_no", None) or 0
@@ -103,8 +106,10 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
                 deps.tracer.emit(
                     "card.update", approval_id=gone, status="expired", reason="grant_not_executed"
                 )
-            if inbound.kind not in M4_ACTIONS:
+            if inbound.kind not in M4_ACTIONS | FOLLOWUP_ACTIONS:
                 update["plan_result"] = Failure(reason=f"ui action {inbound.kind} is not built yet")
+        elif isinstance(inbound, SystemEvent):
+            pass  # followup_start and followup_lapsed: the followup node reads the job
         elif isinstance(inbound, ApprovalGranted):
             async with deps.db.session() as repos:
                 row = await repos.approvals.get(inbound.approval_id)
@@ -148,7 +153,7 @@ async def _off_dead_card(deps: RunDeps, errand: Errand) -> Errand:
     return transition(errand, Phase.COMPARING, reason, deps.tracer)
 
 
-Route = Literal["plan", "prepare_proposal", "execute", "verify", "respond"]
+Route = Literal["plan", "prepare_proposal", "execute", "verify", "respond", "followup"]
 
 
 def route_after_ingress(state: ThreadState) -> Route:
@@ -159,6 +164,10 @@ def route_after_ingress(state: ThreadState) -> Route:
     inbound = state.inbound
     if isinstance(inbound, UserMessage):
         return "plan"
+    if isinstance(inbound, SystemEvent) or (
+        isinstance(inbound, UiAction) and inbound.kind in FOLLOWUP_ACTIONS
+    ):
+        return "followup"
     if isinstance(inbound, UiAction) and inbound.kind in M4_ACTIONS:
         return "prepare_proposal"
     if isinstance(inbound, ApprovalGranted):

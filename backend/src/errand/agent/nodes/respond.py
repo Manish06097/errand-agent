@@ -39,6 +39,7 @@ from errand.agent.state import CardChange, ThreadState
 from errand.agent.templates import (
     NOT_BOOKED_TEXT,
     SLOT_TAKEN_TEXT,
+    clock_hhmm,
     internal_error,
     provider_cancelled_text,
     render,
@@ -48,6 +49,7 @@ from errand.agent.templates import (
 from errand.clock import to_ms
 from errand.domain.brief import BriefField
 from errand.domain.errand import Errand, Phase
+from errand.domain.followup import WidenOption
 from errand.domain.inbound import Recover, UserMessage
 from errand.domain.messages import (
     KIND_OF,
@@ -78,6 +80,8 @@ from errand.domain.outcomes import (
     RunOutcome,
     StepResult,
 )
+from errand.followup import service as followup_service
+from errand.followup import templates as followup_templates
 from errand.ids import message_id_for
 from errand.store.repos.approvals import ApprovalRow
 from errand.store.repos.messages import Message
@@ -152,6 +156,7 @@ class _Respond:
         live = await live_approval(deps)
         outcome, bodies = await self._render(live)
         pending = live if live is not None and live.status == "pending" else None
+        starting = self.state.followup is not None and self.state.followup.mode == "start"
         typed_ok = not self.asked and not any("?" in t for t in self.model_text)
         if pending is not None:
             last = bodies[-1] if bodies else None
@@ -163,6 +168,8 @@ class _Respond:
                 self.errand = self.errand.model_copy(update={"approval_id": pending.approval_id})
             if outcome not in _PRECEDENCE:
                 outcome = RunOutcome.AWAITING_APPROVAL
+            if starting and outcome is RunOutcome.AWAITING_APPROVAL:
+                outcome = RunOutcome.NOTIFIED  # parked on the Rebook card (14.5)
         if bodies and self.errand is not None and self.errand.phase is not Phase.COMPLETED:
             last = bodies[-1]
             if getattr(last, "status_line", None) is None:
@@ -198,6 +205,8 @@ class _Respond:
     # ------------------------------------------------------------------ rendering
 
     async def _render(self, live: ApprovalRow | None) -> tuple[RunOutcome, list[MessageBody]]:
+        if self.state.followup is not None:
+            return await self._render_followup()
         result = self.state.result
         if result is not None:
             return await self._render_step(result, live)
@@ -385,6 +394,81 @@ class _Respond:
             return RunOutcome.REPLIED, [notice(RunOutcome.REPLIED, text)]
         return RunOutcome.INTERNAL_ERROR, [internal_error(self.deps.run_id)]
 
+    async def _render_followup(self) -> tuple[RunOutcome, list[MessageBody]]:
+        """The follow-up notice, from the node's context and the card prepare_proposal made
+        (14.5): code templates over structured facts, no model."""
+        ctx = self.state.followup
+        assert ctx is not None
+        result = self.state.result
+        card: ActionCard | None = None
+        if isinstance(result, CardReady):
+            card = await self._card_of(result.approval_id)
+        elif ctx.variant == "replacement":
+            # The proposal fell through (the hold failed, the held quote was over the
+            # ceiling): nothing is held, so say so and offer the widening buttons.
+            ctx = ctx.model_copy(
+                update={
+                    "variant": "nothing_fits",
+                    "ready": False,
+                    "widen": [
+                        WidenOption(field="days", label="More days (the next 7 days)"),
+                        WidenOption(field="time", label="Any time of day"),
+                    ],
+                }
+            )
+            self.state = self.state.model_copy(update={"followup": ctx})
+        tz = self.deps.tz
+        held = None
+        if card is not None:
+            held = clock_hhmm(card.hold_expires_at, tz)
+        name, service, slot, bid = ctx.provider_name, ctx.service, ctx.slot_label, ctx.booking_id
+        outcome = RunOutcome.NOTIFIED if ctx.mode == "start" else RunOutcome.REPLIED
+        actions: list[NoticeAction] = []
+        if ctx.variant == "replacement":
+            if ctx.mode == "widen":
+                text = followup_templates.widened_notice(bid, held)
+            else:
+                text = followup_templates.replacement_notice(name, service, slot, bid, held)
+        elif ctx.variant == "nothing_fits":
+            searched = ctx.searched or "the replacement window"
+            text = followup_templates.nothing_fits_notice(name, service, slot, bid, searched)
+            if ctx.mode == "widen":
+                text = f"I looked again at {searched} and still nothing fits."
+        elif ctx.variant == "no_search" and ctx.existing is not None:
+            text = followup_templates.already_have(*ctx.existing)
+        elif ctx.variant == "nothing_to_cancel":
+            text = followup_templates.nothing_to_cancel(name, service, slot, bid)
+        elif ctx.variant == "ask_area":
+            text = followup_templates.ask_where(name, service, slot, bid)
+            self.asked = True
+        elif ctx.variant == "dismissed":
+            text = followup_templates.dismissed_line(bid)
+        elif ctx.variant == "lapsed":
+            text = followup_templates.lapse_line(bid)
+        else:
+            text = followup_templates.stale_line()
+        if ctx.variant in (
+            "replacement",
+            "nothing_fits",
+            "no_search",
+            "nothing_to_cancel",
+            "ask_area",
+        ):
+            actions += [
+                NoticeAction(kind="select_slot", label=alt.label, slot_ref=alt.slot_ref)
+                for alt in ctx.alternatives
+            ]
+            actions += [
+                NoticeAction(kind="widen_followup", label=w.label, field=w.field, value=w.value)
+                for w in ctx.widen
+            ]
+            if ctx.variant != "nothing_to_cancel":
+                actions.append(NoticeAction(kind="dismiss_followup", label="I'll sort it myself"))
+        bodies: list[MessageBody] = [OutcomeNotice(outcome=outcome, text=text, actions=actions)]
+        if card is not None:
+            bodies.append(card)
+        return outcome, bodies
+
     # ------------------------------------------------------------------ writing
 
     async def _write(self, bodies: list[MessageBody], typed_ok: bool) -> None:
@@ -426,10 +510,11 @@ class _Respond:
                     body,
                 )
             )
-        async with deps.db.session() as repos:
+        async with deps.db.transaction() as repos:
             for message, _ in written:
                 await repos.messages.upsert_assistant(message)
             await repos.conversations.touch(deps.conversation_id, now_ms)
+            await self._commit_followup(repos, now_ms)
         for message, body in written:
             if body.type in ("action", "reminder", "outcome"):
                 deps.tracer.emit(
@@ -438,6 +523,53 @@ class _Respond:
                     message_id=message.message_id,
                     body={**message.body, "typed_grant_ok": message.typed_grant_ok},
                 )
+
+    async def _commit_followup(self, repos: Any, now_ms: int) -> None:
+        """The job move, the bell row and the origin conversation's line, in the same
+        transaction as the messages (14.2): all of it or none of it."""
+        deps = self.deps
+        ctx = self.state.followup
+        if ctx is not None and ctx.variant != "stale":
+            if ctx.mode == "start":
+                await followup_service.commit_delivery(
+                    repos,
+                    ctx=ctx,
+                    run_id=deps.run_id,
+                    user_id=deps.user_id,
+                    conversation_id=deps.conversation_id,
+                    now_ms=now_ms,
+                    tracer=deps.tracer,
+                )
+            elif ctx.mode in ("dismiss", "lapse"):
+                await followup_service.commit_done(
+                    repos,
+                    job_id=ctx.job_id,
+                    booking_id=ctx.booking_id,
+                    reason="dismissed" if ctx.mode == "dismiss" else "lapsed",
+                    now_ms=now_ms,
+                    tracer=deps.tracer,
+                )
+            return
+        result = self.state.result
+        errand = self.errand
+        if (
+            isinstance(result, Booked)
+            and not result.cancelled_by_provider
+            and errand is not None
+            and errand.replaces_booking_id
+        ):
+            row = await repos.approvals.get(result.approval_id)
+            card = ActionCard.model_validate_json(row.card_json) if row is not None else None
+            await followup_service.commit_replaced(
+                repos,
+                replaced_booking_id=errand.replaces_booking_id,
+                new_booking_id=result.booking_id,
+                new_label=card.slot_label if card else "",
+                run_id=deps.run_id,
+                followup_conversation_id=deps.conversation_id,
+                now_ms=now_ms,
+                tracer=deps.tracer,
+            )
 
 
 def _card_change_line(change: CardChange) -> str:

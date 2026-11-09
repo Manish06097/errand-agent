@@ -43,7 +43,6 @@ from errand.tools.errors import ToolError
 from errand.tools.gateway import Caller
 from errand.world.contracts import BookError, BookOut, HoldSlotOut, Slot
 
-REPLANS_PER_RUN = 1
 SLOT_TAKEN_NOTE = (
     "The provider says the slot {slot} with {provider} was just taken by someone else, so "
     "nothing was booked and the approval is spent. Search again and show the user other "
@@ -235,7 +234,7 @@ class BookingPath:
         """The errand is back to COMPARING; one SystemNote replan per run (S25), else the
         user is told and picks from the options already on screen."""
         deps = self.deps
-        if deps.counters.replans >= REPLANS_PER_RUN:
+        if deps.counters.replans >= deps.limits.replans_per_run:
             return ActionFailed(approval_id=approval_id, reason="slot_taken")
         async with deps.db.session() as repos:
             row = await repos.approvals.get(approval_id)

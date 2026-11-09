@@ -93,7 +93,7 @@ ALLOWED: Mapping[Caller, frozenset[ToolName]] = {
     Caller.VERIFIER: frozenset({"get_booking_status", "list_bookings"}),
     Caller.RECONCILER: frozenset({"get_booking_status", "list_bookings"}),
     Caller.WATCHER: frozenset({"list_bookings"}),
-    Caller.FOLLOWUP: frozenset({"search_providers", "get_provider", "hold_slot"}),
+    Caller.FOLLOWUP: frozenset({"search_providers", "get_provider", "hold_slot", "list_bookings"}),
     # Code fetching the top candidates' reviews for the reader before ranking (10.6).
     Caller.RANKER: frozenset({"get_provider"}),
 }
@@ -194,7 +194,10 @@ class ToolGateway:
         last: ToolError | None = None
         for attempt in range(1, attempts + 1):
             if attempt > 1:
-                await self._clock.sleep(self.limits.retry_backoff_s)
+                # The backoff never carries a non-critical call past the deadline.
+                wait = self.limits.retry_backoff_s
+                left = None if critical else self.counters.time_left_s(self._clock.now())
+                await self._clock.sleep(wait if left is None else max(0.0, min(wait, left)))
             time_left = None if critical else self._check_budget(tool)
             try:
                 with self._tracer.opening("tool.call", tool):

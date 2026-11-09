@@ -6,6 +6,8 @@ same intent id and finds its own row instead of making a second one.
 
 from __future__ import annotations
 
+import json
+
 from errand.execution.idempotency import derive_idem_key
 from errand.store.repos.intents import AttemptRow, IntentRow
 
@@ -16,6 +18,12 @@ def intent_id_for(approval_id: str) -> str:
 
 def attempt_id_for(intent_id: str, n: int) -> str:
     return f"{intent_id}.a{n}"
+
+
+def replaces_of(material_json: str) -> str | None:
+    """The booking a Rebook replaces, from its approved material (the one_replacement index)."""
+    value = json.loads(material_json).get("replaces_booking_id")
+    return str(value) if value else None
 
 
 def book_intent(
@@ -38,7 +46,7 @@ def book_intent(
         fingerprint=fingerprint,
         material_json=material_json,
         target_booking_id=None,
-        replaces_booking_id=None,
+        replaces_booking_id=replaces_of(material_json),
         same_key_retries=0,
         state="open",
         result_json=None,

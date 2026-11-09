@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from errand.domain.counters import RunCounters
 from errand.domain.errand import Errand, Phase
+from errand.domain.followup import FollowupCtx
 from errand.domain.inbound import Inbound
 from errand.domain.outcomes import PlanResult, RunOutcome, StepResult
 
@@ -60,6 +61,10 @@ class ThreadState(BaseModel):
     result: StepResult | None = None
     # The approval respond parked the run on; await_approval interrupts on it (M4).
     park: str | None = None
+    # A node raised or was skipped for the deadline (node_guard): every router sends the
+    # run to respond. Set per run in the run input, so a parked thread starts clean.
+    node_failed: bool = False
+    followup: FollowupCtx | None = None
     counters: RunCounters = Field(default_factory=RunCounters)
     outcome: RunOutcome | None = None
     # Corrections this run made to a live card (M8); respond's status line says why.

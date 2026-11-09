@@ -1,0 +1,279 @@
+"""The follow-up through the real API (architecture 14): the watcher, delivery, the bell and
+the user's event stream, the cancel-card row of the policy, and a job resumed after a crash."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from errand.clock import to_ms
+from errand.domain.inbound import SystemEvent
+from errand.store.repos.approvals import ApprovalRow
+from errand.tools.errors import ToolTimeout
+from errand.trace.reader import read_trace
+from errand.world.scenario import BookConfig, ScenarioConfig, WorldConfig
+from evals.runner import Harness, harness
+
+OPENER = "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+
+
+def world() -> ScenarioConfig:
+    return ScenarioConfig(
+        id="followup_api", seed=7, world=WorldConfig(book=BookConfig(forced=["success"] * 3))
+    )
+
+
+async def book_one(h: Harness) -> str:
+    """One verified booking through the real path. Returns its world booking id."""
+    await h.say(OPENER)
+    convo = await h.conversation()
+    card = [m for m in convo["messages"] if m["body"].get("type") == "action"][-1]
+    click = await h.decide(card["approval_id"], "approve", card["body"]["fingerprint"])
+    await h.finish(str(click.json()["run_id"]))
+    return [b for b in await h.inspector.bookings() if b.created_by_key is not None][-1].booking_id
+
+
+@asynccontextmanager
+async def booked(tmp_path: Path) -> AsyncIterator[tuple[Harness, str]]:
+    async with harness(tmp_path, world()) as h:
+        yield h, await book_one(h)
+
+
+async def test_a_cancel_card_open_for_the_booking_is_invalidated_and_nothing_is_offered(
+    tmp_path: Path,
+) -> None:
+    """Policy row 3, through the watcher: the cancel card for the booking the provider just
+    cancelled is invalidated with booking_no_longer_active in the tick's transaction, and the
+    notice says there is nothing to cancel, with no search and no hold."""
+    async with booked(tmp_path) as (h, booking_id):
+        now = to_ms(h.manager.clock.now())
+        material = {
+            "v": 1,
+            "user_id": "u_demo",
+            "action": "cancel",
+            "booking_id": booking_id,
+            "provider_id": "P1",
+            "slot_start": "2026-11-10T09:00:00+05:30",
+            "booking_status": "confirmed",
+        }
+        async with h.manager.db.session() as repos:
+            await repos.approvals.insert(
+                ApprovalRow(
+                    approval_id="ap_cancel",
+                    conversation_id=h.conversation_id,
+                    errand_id="e_x",
+                    proposal_id="pr_cancel",
+                    action="cancel",
+                    fingerprint="fp1_x",
+                    material_json=json.dumps(material),
+                    card_json="{}",
+                    bound_hold_id=None,
+                    status="pending",
+                    granted_via=None,
+                    granted_message_id=None,
+                    invalidated_reason=None,
+                    consumed_by_intent=None,
+                    requested_at=now,
+                    granted_at=None,
+                    consumed_at=None,
+                    expires_at=now + 600_000,
+                )
+            )
+        searches = len([r for r in await h.op_log() if r["op"] == "search_providers"])
+        holds = len([r for r in await h.op_log() if r["op"] == "hold_slot"])
+        await h.inspector.fire_provider_cancel(booking_id)
+        result = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        async with h.manager.db.session() as repos:
+            row = await repos.approvals.get("ap_cancel")
+        assert row is not None and row.status == "invalidated"
+        assert row.invalidated_reason == "booking_no_longer_active"
+        h.conversations["f"] = f"cf_{result.delivered[0]}"
+        await h.switch("f")
+        text = json.dumps((await h.conversation())["messages"])
+        assert "nothing for you to cancel" in text
+        ops = await h.op_log()
+        assert len([r for r in ops if r["op"] == "search_providers"]) == searches
+        assert len([r for r in ops if r["op"] == "hold_slot"]) == holds
+
+
+async def test_the_bell_and_the_event_stream(tmp_path: Path) -> None:
+    async with booked(tmp_path) as (h, booking_id):
+        # The stream announces nothing for a quiet bell and replays what a client missed.
+        await h.inspector.fire_provider_cancel(booking_id)
+        await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        bell = (await h.client.get("/api/notifications")).json()
+        assert bell["unread"] == 1 and len(bell["notifications"]) == 1
+        entry = bell["notifications"][0]
+        assert entry["title"].endswith("replacement ready") and entry["conversation_id"].startswith(
+            "cf_"
+        )
+        stream = await h.client.get("/api/users/me/events", params={"once": "true"})
+        assert "event: notification" in stream.text and f"id: {entry['seq']}" in stream.text
+        replay = await h.client.get(
+            "/api/users/me/events",
+            params={"once": "true"},
+            headers={"Last-Event-ID": str(entry["seq"])},
+        )
+        assert "event: notification" not in replay.text
+        read = await h.client.post(f"/api/notifications/{entry['notification_id']}/read")
+        assert read.json()["unread"] == 0
+        assert (await h.client.post("/api/notifications/nope/read")).status_code == 404
+
+
+async def test_a_job_resumed_after_a_crash_is_delivered_once(tmp_path: Path) -> None:
+    """The run that delivers a job dies before respond: the job is still detected, the next
+    tick delivers it, and exactly one notification exists (the reconciler's case)."""
+    async with booked(tmp_path) as (h, booking_id):
+        await h.inspector.fire_provider_cancel(booking_id)
+        watcher = h.app.state.watcher
+        calls = {"n": 0}
+        real = watcher.start
+
+        async def flaky(conversation_id: str, event: SystemEvent) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("the process died before the run started")
+            await real(conversation_id, event)
+
+        watcher.start = flaky
+        await watcher.tick()
+        async with h.manager.db.session() as repos:
+            assert [j.state for j in await repos.followups.in_state("detected")] == ["detected"]
+        await watcher.tick()
+        await watcher.tick()
+        await h.manager.wait_idle()
+        async with h.manager.db.session() as repos:
+            assert await repos.notifications.count() == 1
+            assert [j.state for j in await repos.followups.in_state("notified")] == ["notified"]
+
+
+async def test_a_second_deliverer_finding_the_job_notified_does_nothing(tmp_path: Path) -> None:
+    async with booked(tmp_path) as (h, booking_id):
+        await h.inspector.fire_provider_cancel(booking_id)
+        first = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        again = await h.app.state.watcher.tick()
+        assert first.delivered and not again.delivered and not again.changed
+        # The run itself also refuses: a stale start event writes nothing but its notice.
+        job_id = first.delivered[0]
+        conversation_id = f"cf_{job_id}"
+        await h.manager.submit_system(
+            conversation_id, SystemEvent(kind="followup_start", job_id=job_id)
+        )
+        await h.manager.wait_idle()
+        async with h.manager.db.session() as repos:
+            assert await repos.notifications.count() == 1
+
+
+async def test_a_job_that_already_exists_is_not_detected_or_delivered_again(
+    tmp_path: Path,
+) -> None:
+    """The unique (booking, kind) rule is what keeps a second detector (the watcher after M5's
+    verify, or a second process) from starting the same follow-up twice: the mirror still
+    says `confirmed`, so the watcher sees a move, but the job row is already there."""
+    async with booked(tmp_path) as (h, booking_id):
+        await h.inspector.fire_provider_cancel(booking_id)
+        first = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        assert first.delivered
+        async with h.manager.db.transaction() as repos:
+            known = await repos.known_bookings.get(booking_id)
+            assert known is not None
+            await repos.known_bookings.upsert(
+                type(known)(**{**known.__dict__, "status": "confirmed"})  # forget the move
+            )
+        again = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        assert again.detected == [] and again.delivered == []
+        async with h.manager.db.session() as repos:
+            assert await repos.notifications.count() == 1
+            assert [j.state for j in await repos.followups.in_state("notified")] == ["notified"]
+
+
+async def test_a_failed_list_bookings_skips_the_user_and_shows_as_watcher_lag(
+    tmp_path: Path,
+) -> None:
+    """The user hears nothing; the tick is a watch run with the failure in its record, and
+    the next tick that works catches up and clears the lag."""
+    async with booked(tmp_path) as (h, booking_id):
+        client = h.manager.world.client
+        real = client.list_bookings
+
+        async def down(*args: object, **kwargs: object) -> object:
+            raise ToolTimeout("list_bookings", 5.0)
+
+        client.list_bookings = down
+        await h.inspector.fire_provider_cancel(booking_id)
+        failed = await h.app.state.watcher.tick()
+        assert failed.failed_users == ["u_demo"] and failed.trace is not None
+        assert failed.detected == [] and failed.delivered == []
+        assert (await h.client.get("/api/notifications")).json()["unread"] == 0
+        assert h.app.state.watcher.health.failing_users == ["u_demo"]
+        client.list_bookings = real
+        caught_up = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        assert caught_up.failed_users == [] and caught_up.delivered
+        assert h.app.state.watcher.health.failing_users == []
+        end = [r for r in read_trace(failed.trace).records if r["type"] == "run.end"]
+        assert end[0]["failed_users"] == ["u_demo"] and end[0]["outcome"] is None
+
+
+async def test_the_reconciler_resumes_a_detected_job_without_reading_the_provider(
+    tmp_path: Path,
+) -> None:
+    """A job the process died on (detected, nothing delivered) is delivered by the
+    reconciler's follow-up pass, at startup and on a tick, with no provider read."""
+    async with booked(tmp_path) as (h, booking_id):
+        await h.inspector.fire_provider_cancel(booking_id)
+        watcher = h.app.state.watcher
+
+        async def dead(conversation_id: str, event: SystemEvent) -> None:
+            raise RuntimeError("the process died before the run started")
+
+        real = watcher.start
+        watcher.start = dead
+        detected = await watcher.tick()
+        assert detected.detected and not detected.delivered
+        watcher.start = real
+        reads_before = len([r for r in await h.op_log() if r["op"] == "list_bookings"])
+        report = await h.app.state.reconciler.tick(wait=True)
+        assert len(report.recovery_runs) == 1
+        async with h.manager.db.session() as repos:
+            assert [j.state for j in await repos.followups.in_state("notified")] == ["notified"]
+            assert await repos.notifications.count() == 1
+        assert len([r for r in await h.op_log() if r["op"] == "list_bookings"]) == reads_before + 2
+        # the run's own two reads (its same-service check, prepare_proposal's validation of
+        # the card) and no poll of the provider's bookings
+        again = await h.app.state.reconciler.tick(wait=True)
+        assert again.recovery_runs == []
+
+
+async def test_a_reschedule_card_in_flight_moves_the_search_window_to_where_it_was_going(
+    tmp_path: Path,
+) -> None:
+    """Policy row 4 through a real reschedule card: the seeded AC servicing (Thu 12 Nov) was
+    being moved to Saturday 14 Nov when the provider cancelled it. The card is invalidated,
+    and the replacement window is centred on Saturday, not on the cancelled Thursday. With no
+    area known for a seeded booking the notice asks where to look (decision 8)."""
+    async with harness(tmp_path, ScenarioConfig(id="resched", seed=7)) as h:
+        view = await h.say("Move my AC servicing to Saturday.")
+        assert view.outcome == "AWAITING_APPROVAL"
+        seeded = [b for b in await h.inspector.bookings() if b.created_by_key is None]
+        await h.inspector.fire_provider_cancel(seeded[1].booking_id)
+        result = await h.app.state.watcher.tick()
+        await h.manager.wait_idle()
+        async with h.manager.db.session() as repos:
+            rows = await repos.approvals.invalidated_for_booking(
+                seeded[1].booking_id, "booking_no_longer_active"
+            )
+        assert [r.action for r in rows] == ["reschedule"]
+        h.conversations["f"] = f"cf_{result.delivered[0]}"
+        await h.switch("f")
+        convo = await h.conversation()
+        assert "Where should I look?" in json.dumps(convo["messages"])
+        window = convo["state"]["errand"]["brief"]["window"]["value"]
+        assert window["start"].startswith("2026-11-12") and window["end"].startswith("2026-11-17")
