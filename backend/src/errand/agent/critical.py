@@ -97,14 +97,16 @@ def pending_notice(result: PendingCheck, tz: tzinfo) -> OutcomeNotice:
     """The PENDING_VERIFICATION message for a result, shared by `respond` and the
     RunManager's outer handler so both say the same thing. The facts and the wording are
     M5's (`templates.pending_text`, `PendingFacts`); "Check now" is offered whenever the
-    provider's answer can still change (not for a mismatch the provider recorded, or a
-    request that was never sent)."""
+    provider's answer can still change; a mismatch the provider recorded offers to cancel
+    that booking instead."""
     reason = "status_unavailable" if result.reason == "status_not_confirmed" else result.reason
-    actions = (
-        [NoticeAction(kind="check_now", label="Check now")]
-        if reason in ("hold_live", "status_unavailable")
-        else []
-    )
+    actions: list[NoticeAction] = []
+    if reason in ("hold_live", "status_unavailable"):
+        actions.append(NoticeAction(kind="check_now", label="Check now"))
+    if reason == "material_mismatch" and result.booking_id:
+        # The user's own quick reply (the client sends the label as their message); the
+        # planner then proposes the cancel through the ordinary path (S65).
+        actions.append(NoticeAction(kind="cancel", label=f"Cancel {result.booking_id}"))
     return OutcomeNotice(
         outcome=RunOutcome.PENDING_VERIFICATION,
         text=pending_text(result, tz),

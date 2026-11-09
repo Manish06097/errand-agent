@@ -23,16 +23,17 @@ from errand.agent.changes.validate import check_cancel_proposal
 from errand.agent.deps import RunDeps
 from errand.agent.records import emit_swept
 from errand.agent.state import ThreadState
-from errand.agent.transitions import transition
+from errand.agent.transitions import INITIAL_PHASE, transition
 from errand.agent.validation import Rejected
 from errand.approvals import service
 from errand.approvals.fingerprint import fingerprint
 from errand.clock import from_ms, to_ms
-from errand.domain.brief import ErrandKind, Provenance, TextFact
+from errand.domain.brief import Brief, ErrandKind, Provenance, TextFact
 from errand.domain.errand import Errand, Phase
 from errand.domain.inbound import UserMessage
 from errand.domain.material import CancelMaterial, ist_seconds
 from errand.domain.outcomes import CardReady, Proposal, ProposalRefused, StepResult
+from errand.ids import errand_id_for
 from errand.store.repos.approvals import ApprovalRow
 from errand.tools.errors import ToolError
 from errand.tools.gateway import Caller
@@ -67,8 +68,14 @@ async def prepare_cancel(
         return errand, ProposalRefused(reason="unavailable", text=REFUSED_TEXT["unavailable"])
     async with deps.db.session() as repos:
         live = await repos.intents.live_targets(deps.user_id)
+        waiting = await repos.intents.awaiting_provider(deps.conversation_id)
     verdict = check_cancel_proposal(
-        errand, booking_id, listed.bookings, now=deps.clock.now(), live_targets=live
+        errand,
+        booking_id,
+        listed.bookings,
+        now=deps.clock.now(),
+        live_targets=live,
+        awaiting_provider=waiting,
     )
     if isinstance(verdict, Rejected):
         deps.tracer.emit(
@@ -79,6 +86,17 @@ async def prepare_cancel(
             reason=verdict.code, text=REFUSED_TEXT.get(verdict.code, verdict.message)
         )
     booking = verdict.booking
+    if errand.phase is Phase.NEEDS_ATTENTION:
+        # The provider recorded something other than what was approved (S65) and nothing is
+        # left to ask it: this errand ends here, and the cancel is a new errand.
+        errand = transition(errand, Phase.ABANDONED, "superseded_by_cancel", deps.tracer)
+        errand = Errand(
+            errand_id=errand_id_for(deps.run_id),
+            kind=ErrandKind.CANCEL,
+            phase=INITIAL_PHASE,
+            brief=Brief(),
+        )
+        deps.tracer.errand_id = errand.errand_id
     provenance = Provenance(source="booking_history", booking_id=booking.booking_id)
     brief = errand.brief.model_copy(
         update={

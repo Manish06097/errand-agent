@@ -23,6 +23,7 @@ steps:
   - approve: {}
   - expect_outcome: BOOKED_VERIFIED
   - expect_world: {book: 1}
+  - expect_book_calls: {agent_calls: 1, world_rows: 1}
   - expect_booking: {count: 1}
 expect:
   invariants: [default]

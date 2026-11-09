@@ -16,24 +16,31 @@ import pytest
 
 from errand.world.catalog import INJECTION_REVIEWS
 from evals import invariants
-from evals.dsl import load_scenario
+from evals.dsl import ReconcilerTick, load_scenario
 from evals.invariants import Records
 from evals.runner import EVALS, run_scenario
 
 _CACHE: dict[str, Records] = {}
 
 
-async def records_of(scenario_id: str, root: Path) -> Records:
+async def records_of(scenario_id: str, root: Path, *, before_tick: bool = False) -> Records:
     """A real scenario's records, run once per session and copied for each test (every
-    test doctors its own copy)."""
-    if scenario_id not in _CACHE:
+    test doctors its own copy). `before_tick` stops the scenario at its first reconciler
+    tick: the records of a conversation that still waits on the provider (N1 extends the
+    pending scenarios with the tick that settles them)."""
+    cache_key = f"{scenario_id}:before_tick" if before_tick else scenario_id
+    if cache_key not in _CACHE:
         captured: list[Records] = []
         root.mkdir()
         scenario = load_scenario(EVALS / "scenarios" / f"{scenario_id}.yaml")
+        if before_tick:
+            steps = list(scenario.steps)
+            at = next(i for i, step in enumerate(steps) if isinstance(step, ReconcilerTick))
+            scenario = scenario.model_copy(update={"steps": steps[:at]})
         result = await run_scenario(scenario, root, on_records=captured.append)
         assert result.passed, result.failures
-        _CACHE[scenario_id] = captured[0]
-    return copy.deepcopy(_CACHE[scenario_id])
+        _CACHE[cache_key] = captured[0]
+    return copy.deepcopy(_CACHE[cache_key])
 
 
 @pytest.fixture

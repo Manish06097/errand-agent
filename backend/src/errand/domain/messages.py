@@ -93,6 +93,7 @@ class NoticeAction(_Body):
         "raise_budget",
         "options",
         "check_now",
+        "cancel",
     ]
     label: str
     # For refresh_hold: the approval whose slot gets a fresh hold and a new card.

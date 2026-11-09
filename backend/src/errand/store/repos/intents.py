@@ -245,3 +245,16 @@ class IntentsRepo:
             (user_id,),
         ) as cur:
             return [_intent(r) for r in await cur.fetchall()]
+
+    async def awaiting_provider(self, conversation_id: str) -> bool:
+        """Is any intent of the conversation waiting on the provider's answer (an attempt
+        still `prepared`, `in_flight` or `unknown`)? A mismatch the provider recorded is
+        settled for this purpose: nothing is left to ask it."""
+        async with self._conn.execute(
+            "SELECT 1 FROM action_intents i WHERE i.conversation_id = ? "
+            "AND i.state IN ('open', 'needs_attention') AND EXISTS ("
+            "SELECT 1 FROM intent_attempts a WHERE a.intent_id = i.intent_id "
+            "AND a.state IN ('prepared', 'in_flight', 'unknown')) LIMIT 1",
+            (conversation_id,),
+        ) as cur:
+            return await cur.fetchone() is not None

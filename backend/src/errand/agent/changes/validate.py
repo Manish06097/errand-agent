@@ -31,9 +31,22 @@ class ValidCancel:
     booking: BookingItem
 
 
-def convertible(errand: Errand) -> Rejected | None:
+def convertible(errand: Errand, *, awaiting_provider: bool = False) -> Rejected | None:
     """May this errand become a cancel or reschedule (7.2: GATHERING or COMPARING to
-    QUOTING)? A booking with a shortlist or a card is never converted."""
+    QUOTING)? A booking with a shortlist or a card is never converted.
+
+    An errand in NEEDS_ATTENTION is not converted either, but it does not block: when its
+    intent is not waiting on the provider (the provider recorded something other than what
+    was approved, S65) the cancel starts as a new errand and the old one is abandoned
+    (`awaiting_provider` False). While the provider's answer is still pending, the booking
+    may yet appear, so the user waits for it."""
+    if errand.phase is Phase.NEEDS_ATTENTION:
+        if awaiting_provider:
+            return Rejected(
+                "not_convertible",
+                "a booking is still being confirmed with the provider; wait for its result",
+            )
+        return None
     if errand.kind is ErrandKind.REBOOK:
         return Rejected("not_convertible", "finish the rebooking before changing a booking")
     if errand.kind is ErrandKind.BOOK:
@@ -56,9 +69,10 @@ def check_cancel_proposal(
     *,
     now: datetime,
     live_targets: Collection[str],
+    awaiting_provider: bool = False,
 ) -> ValidCancel | Rejected:
     """`bookings` is a fresh code-issued list_bookings answer."""
-    refused = convertible(errand)
+    refused = convertible(errand, awaiting_provider=awaiting_provider)
     if refused is not None:
         return refused
     booking = next((b for b in bookings if b.booking_id == booking_id), None)

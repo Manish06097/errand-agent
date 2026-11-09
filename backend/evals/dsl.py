@@ -109,7 +109,15 @@ class ExpectSearchMatchesBrief(_Strict):
 
 class ExpectNotice(_Strict):
     expect_notice: Literal[
-        "retry", "narrow_search", "shorten", "answer", "refresh_hold", "raise_budget", "options"
+        "retry",
+        "narrow_search",
+        "shorten",
+        "answer",
+        "refresh_hold",
+        "raise_budget",
+        "options",
+        "check_now",
+        "cancel",
     ]
     names: list[BriefField] = Field(default_factory=list)
 
@@ -221,6 +229,13 @@ class ExpectCancel(_Strict):
     """What the world saw of the cancel, and where the booking ended up."""
 
     expect_cancel: CancelSpec
+
+
+class ClickAction(_Strict):
+    """Press a button of the last run's notice, the way the web client does for a quick
+    reply: its label is sent as the user's message. `kind` is the NoticeAction kind."""
+
+    click_action: dict[str, str]
 
 
 class SwitchConversation(_Strict):
@@ -424,6 +439,7 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "refresh_hold": RefreshHold,
     "advance": Advance,
     "conversation": SwitchConversation,
+    "click_action": ClickAction,
     "restart": Restart,
     "reconciler_tick": ReconcilerTick,
     "check_now": CheckNow,
@@ -463,6 +479,7 @@ Step = (
     | RefreshHold
     | Advance
     | SwitchConversation
+    | ClickAction
     | Restart
     | ReconcilerTick
     | CheckNow

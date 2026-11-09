@@ -52,6 +52,7 @@ from evals.dsl import (
     Approve,
     ApproveConcurrently,
     CheckNow,
+    ClickAction,
     ClickSlot,
     Decline,
     Dedupe,
@@ -510,6 +511,8 @@ def describe(step: Step, mode: Dedupe = "on") -> str | None:
     if isinstance(step, Post):
         how = "concurrently" if step.post.concurrent else "in sequence"
         return f"same client_msg_id x{step.post.times} {how}: 1 run, 1 message, 1 run.start"
+    if isinstance(step, ClickAction):
+        return f"press the notice's {step.click_action.get('kind')} button"
     if isinstance(step, Restart):
         return "API killed at its fault point, restarted; the reconciler ran before serving"
     if isinstance(step, ReconcilerTick):
@@ -838,6 +841,15 @@ class Runner:
             if run["run_id"] not in seen and run["trigger"] == "recovery":
                 await self._view(run["run_id"])
 
+    async def _click_action(self, step: ClickAction) -> None:
+        kind = step.click_action.get("kind")
+        notice = self.last.notice() or {}
+        actions = [a for a in notice.get("actions", []) if a.get("kind") == kind]
+        if not actions:
+            raise AssertionError(f"click_action: the last notice offers no {kind!r} button")
+        self.inputs.append(Say(say=str(actions[0]["label"])))
+        await self._type(str(actions[0]["label"]))
+
     async def _check_now(self) -> None:
         await self._flush_acks()
         await self._before_run()
@@ -1051,6 +1063,8 @@ class Runner:
             await self.h.inspector.advance(parse_duration(step.advance).total_seconds())
         elif isinstance(step, SwitchConversation):
             await self.h.switch(step.conversation)
+        elif isinstance(step, ClickAction):
+            await self._click_action(step)
         elif isinstance(step, Restart):
             await self._restart()
         elif isinstance(step, ReconcilerTick):

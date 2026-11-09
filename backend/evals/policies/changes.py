@@ -22,6 +22,7 @@ from errand.llm.scripted import ScriptedRequest
 from evals.policies.common import TurnView, answer, tool_calls
 
 _CANCEL = re.compile(r"\bcancel\b", re.I)
+_CANCEL_ID = re.compile(r"\bcancel\s+(B-\d+)\b", re.I)
 _CANCEL_IT = re.compile(r"^\s*(yes,?\s+)?(please\s+)?(cancel it|confirm cancellation)\b", re.I)
 _ACK = re.compile(r"^\s*(yes|yeah|yep|ok|okay|sure|haan)\b", re.I)
 _KEEP = re.compile(r"\b(keep|instead|change my mind|not sure|wait)\b", re.I)
@@ -39,6 +40,11 @@ def _asked_services(text: str) -> set[str]:
 
 
 def _matches(text: str, bookings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    named = _CANCEL_ID.search(text)
+    if named is not None:
+        # "Cancel B-8266": the user quotes an id (a button the notice offered); the handle
+        # is still the view's.
+        return [b for b in bookings if b.get("booking_id") == named.group(1)]
     wanted = _asked_services(text)
     active = [b for b in bookings if b.get("status") == "confirmed"]
     return [b for b in active if not wanted or b.get("service") in wanted]
