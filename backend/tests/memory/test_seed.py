@@ -268,3 +268,23 @@ async def test_the_demo_seed_has_eight_realistic_rows_and_no_canary(tmp_path: Pa
     assert "CANARY" not in dump
     reopened = await AgentDB.open(tmp_path / "agent.sqlite")
     await reopened.close()
+
+
+def test_the_seed_command_refuses_a_data_dir_that_already_holds_a_key_file(
+    tmp_path: Path,
+) -> None:
+    """Review round 1: the seed left an existing key file in place but hashed under its
+    fixed key, so a real install could end up with hashes its own key cannot match."""
+    from errand.seed import __main__ as seed_cli
+
+    (tmp_path / "memory_hmac.key").write_text("ab" * 32, encoding="ascii")
+    assert seed_cli.main(["memory_demo", "--data-dir", str(tmp_path)]) == 2
+    assert not (tmp_path / "agent.sqlite").exists()
+    assert (tmp_path / "memory_hmac.key").read_text() == "ab" * 32
+
+
+async def test_the_seed_builders_refuse_it_too(tmp_path: Path) -> None:
+    (tmp_path / "memory_hmac.key").write_text("ab" * 32, encoding="ascii")
+    with pytest.raises(FileExistsError):
+        await build_demo(tmp_path)
+    assert (tmp_path / "memory_hmac.key").read_text() == "ab" * 32
