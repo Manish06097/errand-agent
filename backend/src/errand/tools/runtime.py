@@ -53,6 +53,11 @@ class WorldAccess:
     client: WorldClient
     clock: Clock
     aclose: Callable[[], Awaitable[None]] = _noop
+    # Re-reads the world's clock. A TrackingClock only learns of a clock moved behind its
+    # back (a scenario reload straight on the world) from the next response, so a stamp
+    # taken before any world call must ask first (BUG-N4-1). In process the clock is the
+    # world's own.
+    sync_clock: Callable[[], Awaitable[None]] = _noop
     # Dev access to the same world (the /api/dev routes). Never handed to the agent.
     inspector: WorldInspector | None = None
 
@@ -113,6 +118,20 @@ async def over_http(
             clock.update_from_header(moved.headers.get(CLOCK_HEADER))
 
         clock.advance_hook = advance
+
+    async def sync_clock() -> None:
+        try:
+            synced = await http.get("/health")
+        except httpx.HTTPError:
+            return  # an unreachable world fails the run's own calls; keep the last reading
+        clock.update_from_header(synced.headers.get(CLOCK_HEADER))
+
     transport = HttpTransport(base_url, timeouts, clock=clock, http=http)
     inspector = HttpInspector(base_url, clock, http=http)
-    return WorldAccess(client=transport, clock=clock, aclose=http.aclose, inspector=inspector)
+    return WorldAccess(
+        client=transport,
+        clock=clock,
+        aclose=http.aclose,
+        inspector=inspector,
+        sync_clock=sync_clock,
+    )

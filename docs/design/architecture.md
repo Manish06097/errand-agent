@@ -1753,6 +1753,13 @@ The design note's annotated excerpt is cut from that file and shows one planner 
 - `errand-trace show <run>` renders a timeline; `errand-trace export --thread <id>` writes the conversation-level file; `errand-trace excerpt <file> --kind timeout` produces the design-note excerpt from it; `errand-trace stats` reports p50 and p95 latency, cost per verified booking and tool error rates from `runs`.
 - `GET /api/health` reports unresolved intents, watcher lag, and Langfuse sink state.
 
+### 16.6 N4 rulings
+
+- **The export records.** `errand-trace export` writes `export.header` first (run ids in start order; `git_sha` from the runs' `run.start` records if they carry one, else the exporting checkout's, with `git_sha_source` saying which; the `mode` of the model calls; `clock_mode`; `exported_at`) and `conversation.totals` last. The totals are summed from the records in the file, with Decimal for cost, as the tracer sums `run.end`: `model_calls` counts `model.call` records, `reader_calls` counts `reader.call` records that were not cache hits and carry usage, tokens are the usage split summed. Both records are in `trace/schema.py` (`ExportHeader`, `ConversationTotals`), outside `RECORD_TYPES` because a Tracer never emits them. `clock_mode` is read from the file: `system_offset` when `ts` minus `wall_ts` stays constant to within 2 s, else `sim`.
+- **The excerpt.** `errand-trace excerpt <file> --kind timeout` prints at most 12 lines (10 on a real file): the last planner `model.call` before the grant, a `...` line, then `approval.granted`, `approval.consumed`, `intent.written`, the `book` call that timed out, the `executing -> verifying` transition, the `get_booking_status` call that confirmed, `intent.resolved` and `run.end`. Keys are cut to what the reader needs and long ids to 14 characters. It exits 2 with a message when the file has no such sequence. The same file always gives the same lines.
+- **One clock reading at admission (BUG-N4-1).** A `TrackingClock` learns that the world's clock moved only from the next response, so `_admit` first calls `WorldAccess.sync_clock` (a `/health` read over HTTP, a no-op in process) and stamps the user message from that reading. A world clock that moves back mid-run still moves later stamps; that is the world's doing, not a second clock.
+- **File names.** The bugs write-up is `docs/BUGS_WRITEUP.md` (a pointer sits at the top of `BUGS.md`) and the demo script is `docs/DEMO_SCRIPT.md`.
+
 ---
 
 ## 17. Web app

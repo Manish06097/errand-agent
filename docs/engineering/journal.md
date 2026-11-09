@@ -643,3 +643,29 @@ Finding 1, mine: my `replaces_booking_id` change (part A, b282dc0) used a wrappi
 - The conversation API reading chip bodies with their status at read time was deferred to N2C. Rejected: the web side now lands here, so it is needed now.
 - The "forget mid-run" test is S49b's hook scenario. Accepted.
 - The `$0` in the cassette commit message stays. History is not rewritten.
+## N4: deliverables (phase 1)
+
+**Goal.** The things a reader of the repo opens first, written from what exists: the design note, the bugs write-up, the README, the demo script, a real timeout-after-success trace with an annotated excerpt, and the S22 cassette. Triage first of the one open bug from the M5 review.
+
+**Decisions.**
+- The trace is exported by `errand-trace export` with an `export.header` first and `conversation.totals` last, and the excerpt is cut by `errand-trace excerpt --kind timeout`, so the committed `docs/traces/timeout_after_success.md` is byte-identical to what the tool prints. Tests run on a real S22 run, not on dicts (architecture 16.6).
+- The excerpt picks the first timed-out `book` in file order (a list, not `sorted(run_ids)`), the same way the rest of the module reads the file.
+- The bugs write-up picks BUG-M1-3 (a double booking in the world I test against), BUG-M3-1 (the eval gate green on zero scenarios) and BUG-M4-2 (false "booked" claims, five review rounds). A test checks that each repro commit precedes its fix. Alternate: BUG-N1-1 (example 3 as the brief words it lost "not before 10 a.m." and proposed 08:00) is stronger than BUG-M3-1 for a reader who cares about the product: it is the brief's own request failing in front of the user, where M3-1 is a tooling slip. I kept M3-1 because it shows the safety net failing, which BUG-N1-1 does not.
+- README limits are copied from `config.py` and the trace stats from `errand-trace stats`, not written by hand.
+
+**BUG-N4-1.** A user message was stamped after the assistant card it produced. Triggered on `make dev` (ports 9230 to 9232) by resetting the world's scenario straight on the world port, so the world's clock moved back behind the API's back, then sending the S01 opener in a new chat: user 1794191467863, card 1794191407470, and `GET /api/conversations` sorted the new chat among older ones. Cause: the API's `TrackingClock` learns the world's offset only from the next response, so admission stamped the message with the stale reading and the card with the fresh one. Red repro `1ce66f3` (fails on that SHA, the lead re-ran it), fix `30fa803`, row `6d5e35a`. Files the fix touched: `backend/src/errand/tools/runtime.py` (`WorldAccess.sync_clock`, a `/health` read over HTTP, a no-op in process, 21 lines) and `backend/src/errand/api/runs.py` (one line, `_admit` calls it before stamping). Regression: `backend/tests/regressions/test_bug_n4_1_user_message_stamped_after_its_own_card.py`.
+
+**Deviations (accepted by the lead, recorded).** (1) File names: `docs/BUGS_WRITEUP.md` and `docs/DEMO_SCRIPT.md`, with a pointer at the top of `BUGS.md`. (2) The trace is captured now, on the N3 tree, not after N2B; it must be re-captured after N2B lands (the planner's context changes). (3) The fix is in the admission path (`runtime.py` plus `runs.py`), not in `TrackingClock` itself, because the clock cannot know the world moved without a response; reads are not re-sorted.
+
+**Verified.** Live calls, all small: recording the S22 cassette cost $0.0253; the live timeout-after-success conversation `c_01a1bf6918127b07945613980c8a2ab7` cost $0.0331652 (3 runs, 4 planner calls, 1 reader call that missed the cache, 16,252 tokens in, 1,013 out; `conversation.totals` in the export). Everything else ran offline. Gate results for the final commits are in the hand-back; `make check` and `make evals` were read by exit code.
+
+**What review caught.** The excerpt chose its run with `sorted(run_ids)[0]`, which picks by id, not by when the timeout happened; it now takes the first timed-out `book` in file order (`fb65096`). The design note claimed five replay cassettes and a live smoke test, which do not exist; it now says two cassettes (S01, S22) and a few live runs. The export records, the excerpt rule and the admission clock fix were rulings worth writing down, so they went into architecture 16.6 (`e9cd85c`). The lead also re-ran the BUG-N4-1 repro on its own SHA to confirm it was red before the fix, and found the `.env` I had left moved aside (below).
+
+**What broke.** I moved `.env` aside for a keyless `make evals` run and did not restore it; the lead found the key sitting in a shared tmp folder. Restored with `mv` and `chmod 600`, no copy left. Lesson: any move-aside is wrapped in `trap '...' EXIT` so it is restored on any exit, and a keyless run is better done by unsetting the variable in the child environment than by moving the file. The first fix commit also failed because `pre-commit` was not on PATH in my shell; the venv's bin must be on PATH.
+
+**Next (the freeze after N2B).**
+- Re-capture `docs/traces/timeout_after_success.jsonl` and the excerpt after N2B merges, and re-record the S01 and S22 cassettes (the context builder changes the planner's request).
+- Update the design note's Trade-offs line when more cassettes and a live smoke test actually land; today it says two cassettes (S01, S22) and a few live runs.
+- Mark the memory part of `docs/DEMO_SCRIPT.md` as verified once the `/memory` page exists, and remove the matching README limits.
+- The AI-assistant transcripts: the candidate exports them and the README placeholder points to where they go.
+- Rotate the API key (it was in a shared tmp folder for a while) and record the demo video.
