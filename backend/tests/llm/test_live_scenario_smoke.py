@@ -13,11 +13,14 @@ it does is the product's own contract:
 - the total cost of the five scenarios stays under the cap, so a runaway loop fails the run
   instead of spending (the check runs after every scenario).
 
-The cost of each scenario is printed.
+The cost of each scenario is printed. With ERRAND_SMOKE_TRACE_DIR set, each scenario's traces
+are copied to `<dir>/<scenario>/` afterwards, so `errand-trace stats` can measure them.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -88,6 +91,9 @@ async def test_the_scenario_holds_its_invariants_on_the_real_models(
         on_records=captured.append,
     )
     (records,) = captured
+    keep = os.environ.get("ERRAND_SMOKE_TRACE_DIR")
+    if keep and (tmp_path / "traces").is_dir():
+        shutil.copytree(tmp_path / "traces", Path(keep) / name, dirs_exist_ok=True)
 
     violated = [f for f in result.failures if f.startswith("INV-")]
     assert not violated, "\n".join(violated)
