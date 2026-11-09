@@ -288,3 +288,12 @@ async def test_the_seed_builders_refuse_it_too(tmp_path: Path) -> None:
     with pytest.raises(FileExistsError):
         await build_demo(tmp_path)
     assert (tmp_path / "memory_hmac.key").read_text() == "ab" * 32
+
+
+def test_the_committed_manifest_is_what_the_seed_builds(
+    rich: tuple[Path, dict[str, Any], str],
+) -> None:
+    from errand.seed.__main__ import DEFAULT_MANIFEST
+
+    _, manifest, _ = rich
+    assert DEFAULT_MANIFEST.read_text(encoding="utf-8") == dumps_manifest(manifest)

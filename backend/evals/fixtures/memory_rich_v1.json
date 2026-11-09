@@ -71,7 +71,7 @@
           "kind": "errand"
         },
         {
-          "id": "BK-043",
+          "id": "BK-045",
           "kind": "booking"
         }
       ]
@@ -125,7 +125,7 @@
           "kind": "errand"
         },
         {
-          "id": "BK-038",
+          "id": "BK-040",
           "kind": "booking"
         },
         {
@@ -158,7 +158,7 @@
           "kind": "errand"
         },
         {
-          "id": "BK-039",
+          "id": "BK-041",
           "kind": "booking"
         },
         {
@@ -191,7 +191,7 @@
           "kind": "errand"
         },
         {
-          "id": "BK-040",
+          "id": "BK-042",
           "kind": "booking"
         }
       ]
@@ -220,7 +220,7 @@
           "kind": "errand"
         },
         {
-          "id": "BK-041",
+          "id": "BK-043",
           "kind": "booking"
         }
       ]
@@ -249,7 +249,7 @@
           "kind": "errand"
         },
         {
-          "id": "BK-042",
+          "id": "BK-044",
           "kind": "booking"
         }
       ]
@@ -311,10 +311,10 @@
   },
   "conversation_id": "c_0001",
   "counts": {
-    "active": 32,
+    "active": 31,
     "forgotten": 7,
     "pending_confirmation": 9,
-    "rejected": 4,
+    "rejected": 5,
     "superseded": 8
   },
   "inference_declined": [
@@ -338,7 +338,7 @@
       "rejected_because": "undone",
       "scope": "global",
       "status": "rejected",
-      "value_hash": "ae4c9b854b457c1908cf0da5d4aea4f6f3e4a8c23b06ef521e9f8333c1595223"
+      "value_hash": "f8ecafbfeb343841e9ef4671259391067cd55048a5e2c9d58e3032da0e431ca1"
     },
     {
       "events": [
@@ -352,7 +352,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "superseded",
-      "value_hash": "805883f1ab872f7bca7ce872bb5c92654c5642a2dee780ae6a1b4d38bc5299ee"
+      "value_hash": "c39c1c94cde575d6a9c30742933bf8e9f094ad9b5cdde30756d44a05b5392597"
     },
     {
       "events": [
@@ -365,7 +365,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "active",
-      "value_hash": "86f2ff5f9009a8db1647862b9906529caa0318d439141592c79b99d80ba440ff"
+      "value_hash": "f8c9662f7dae1018a4fdeb407ae2a484d4909cd7e74d64192d2556647eb6b666"
     },
     {
       "events": [
@@ -379,7 +379,7 @@
       "rejected_because": null,
       "scope": "service:plumber",
       "status": "superseded",
-      "value_hash": "40510175845988f13f6162ed8526f0b09f73384467fa855e1e79b44a56562a58"
+      "value_hash": "82e83aa3e2c98c83d1a8ee0df18e25a57682ad57a40a6c09d81ce6a3b515d5e6"
     },
     {
       "events": [
@@ -392,7 +392,7 @@
       "rejected_because": null,
       "scope": "service:plumber",
       "status": "active",
-      "value_hash": "15197cf7214b58e67cae565e573ffd9aa44bcb81f8ee5d7185dfe8da0a16ef43"
+      "value_hash": "3f8b0e75000ecf1b3498a2e21a525b77453e147a4c1ffd7e1bccc270d1ee9d47"
     },
     {
       "events": [
@@ -406,7 +406,7 @@
       "rejected_because": null,
       "scope": "service:electrician",
       "status": "superseded",
-      "value_hash": "15197cf7214b58e67cae565e573ffd9aa44bcb81f8ee5d7185dfe8da0a16ef43"
+      "value_hash": "3f8b0e75000ecf1b3498a2e21a525b77453e147a4c1ffd7e1bccc270d1ee9d47"
     },
     {
       "events": [
@@ -419,7 +419,7 @@
       "rejected_because": null,
       "scope": "service:electrician",
       "status": "active",
-      "value_hash": "9f69998560dcfd8016442e0a32e959191df095817a164ce844c64ec5a8b0cc1b"
+      "value_hash": "f7413e4e0edfb87276543e28335d8250e774f19d85a0f75baf52955aa7cdc988"
     },
     {
       "events": [
@@ -433,7 +433,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "superseded",
-      "value_hash": "439ffca99ef8de64da4ac9afec8f906c08b7ff56e9a68514647177276c7ef929"
+      "value_hash": "750a24a31499f55bac464c6504d58322b1cbb62b92215e74c279c831b73a9662"
     },
     {
       "events": [
@@ -446,7 +446,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "active",
-      "value_hash": "ccc427f51b0be31f45d51a1f070802ef6a27075a28c55ad715dd1e338aec93fd"
+      "value_hash": "a8931491f56122aa5075c91f06de356a73669f987ec0ec8bea2a4c9553c444dd"
     },
     {
       "events": [
@@ -460,7 +460,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "superseded",
-      "value_hash": "378979ce42fc7e9e2736636d0ce0602e5268c2fe5ca82b48c1702df326c4f47c"
+      "value_hash": "dc0d5364ee6f9431ed1a1a3887d4c38d57ecabe07ae1fcb05153286b2cf6fee8"
     },
     {
       "events": [
@@ -473,7 +473,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "active",
-      "value_hash": "1db9256190331398d33fe7ea6b2567f6b116a55dd6f97e297b5733d41acdc94a"
+      "value_hash": "aefcf071a392433e1120952dfbdceb73b0f13c89333a22d3185259559299b5b4"
     },
     {
       "events": [
@@ -486,7 +486,7 @@
       "rejected_because": null,
       "scope": "service:plumber",
       "status": "active",
-      "value_hash": "1b17f4de4048aecb1bc4eb8ed0b82a528a440db990872c5608a4030b42d9d0b0"
+      "value_hash": "aa2e04e6d0000f0218c8c926e6e75d45063ff5c468eb2c61b25c112a67048b23"
     },
     {
       "events": [
@@ -500,33 +500,35 @@
       "rejected_because": null,
       "scope": "service:plumber",
       "status": "active",
-      "value_hash": "97086571f822df6942619590a6980a5b7f2f3395c5581c8bec2a5075cf4e23c0"
+      "value_hash": "32b0a9d2e83884b19a9bd540c17fff29b0fe85fb5bbdb9f32963efe4b91ced08"
     },
     {
       "events": [
-        "suggested"
+        "suggested",
+        "rejected"
       ],
       "id": "m-14",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "plumber:P2",
-      "rejected_because": null,
+      "label": "plumber:P11",
+      "rejected_because": "superseded_by_keep",
       "scope": "service:plumber",
-      "status": "pending_confirmation",
-      "value_hash": "abc5ac4ec94f0b99f1a61ab177add7d2309d3dafb56023c972aa2bdfa2339546"
+      "status": "rejected",
+      "value_hash": "844d7da07089a663cde5444d3f8c39175eb48da923d76635eb9dedaa656ee7a5"
     },
     {
       "events": [
-        "suggested"
+        "suggested",
+        "rejected"
       ],
       "id": "m-15",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "plumber:P9",
-      "rejected_because": null,
+      "label": "plumber:P10",
+      "rejected_because": "dismissed",
       "scope": "service:plumber",
-      "status": "pending_confirmation",
-      "value_hash": "e64a6581909f6a848f6b21ed615b2e510f9357fc3d020f6432eed8f65054eb8f"
+      "status": "rejected",
+      "value_hash": "37cfda53825a9b313e0b0d63e8211e207a88b7560f686d6f4942cfc5f2bbcf32"
     },
     {
       "events": [
@@ -535,39 +537,37 @@
       "id": "m-16",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "plumber:P11",
+      "label": "electrician:E2",
       "rejected_because": null,
-      "scope": "service:plumber",
+      "scope": "service:electrician",
       "status": "pending_confirmation",
-      "value_hash": "32ec08d6336c6458e3904294509e3021df83eef9898132d419885bbd728a5101"
+      "value_hash": "cc86aa45e6501a4402955f442440a1d49fcefad44305527719679e409edef663"
     },
     {
       "events": [
-        "suggested",
-        "rejected"
+        "suggested"
       ],
       "id": "m-17",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "plumber:P10",
-      "rejected_because": "dismissed",
-      "scope": "service:plumber",
-      "status": "rejected",
-      "value_hash": "e70b2a1b0b5bf06d49abdd1905ea60cef1097c8f69bc99743721c70ea0440e3b"
+      "label": "electrician:E5",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "0fe7dfb3e322ee54b99c169f1183db2289673206dd24c3eb76986683e2cd4831"
     },
     {
       "events": [
-        "suggested",
-        "confirmed"
+        "suggested"
       ],
       "id": "m-18",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "electrician:E1",
+      "label": "electrician:E6",
       "rejected_because": null,
       "scope": "service:electrician",
-      "status": "active",
-      "value_hash": "04c16bff0bb2746281235d0b9c69326a2b098b44856d16046859f6a56f541a46"
+      "status": "pending_confirmation",
+      "value_hash": "bfae0c60432194172e4223a42593ffffb5ab0af4dae07e6aa7764eca5a33de66"
     },
     {
       "events": [
@@ -576,11 +576,11 @@
       "id": "m-19",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "electrician:E2",
+      "label": "electrician:E7",
       "rejected_because": null,
       "scope": "service:electrician",
       "status": "pending_confirmation",
-      "value_hash": "2500ab39fb3d386a4b81365839bb19aabddb7a2d9232082b3c4af0635c66a075"
+      "value_hash": "008cd5291ccb451dc7b1657a30bc825296b988ba6cd859603b453cb341f3e39c"
     },
     {
       "events": [
@@ -589,11 +589,11 @@
       "id": "m-20",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "electrician:E5",
+      "label": "electrician:E8",
       "rejected_because": null,
       "scope": "service:electrician",
       "status": "pending_confirmation",
-      "value_hash": "c785ca41b62e8d25a5983f5f990ee58da7b79917c9c5bb942929f67015bfaba8"
+      "value_hash": "3b6729f86fd99be05a17e6b4b0a133c2a5a2046cb6dd3a34c970f610997de67c"
     },
     {
       "events": [
@@ -606,35 +606,33 @@
       "rejected_because": null,
       "scope": "service:electrician",
       "status": "pending_confirmation",
-      "value_hash": "3a44bc0ded74bcbb30ca7a69d9db68d5485eda0da14ba7e38adc3651f5a46145"
+      "value_hash": "5191871ecf4b5b3535e6792af15693f4a7eaf09bbd553789dc8ac3d4f16bd1e6"
     },
     {
       "events": [
-        "suggested",
-        "rejected"
+        "suggested"
       ],
       "id": "m-22",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "electrician:E9",
-      "rejected_because": "dismissed",
+      "label": "electrician:E11",
+      "rejected_because": null,
       "scope": "service:electrician",
-      "status": "rejected",
-      "value_hash": "46eb635c71a8176a453abcbfef7d484aea23db27f41c982eeae85b54930cbfd4"
+      "status": "pending_confirmation",
+      "value_hash": "3b9de8baedf2ebda393491fde3c492c10a8e2e5824ca4e3b1dc08442152b36cf"
     },
     {
       "events": [
-        "suggested",
-        "confirmed"
+        "suggested"
       ],
       "id": "m-23",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "ac_servicing:A1",
+      "label": "electrician:E12",
       "rejected_because": null,
-      "scope": "service:ac_servicing",
-      "status": "active",
-      "value_hash": "961ea6171fe18f8c510fc30a17ba90b2dc0cca62fd36a1b8749aad14fe357483"
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "0f1b7966db6c307b4b874e50138b762538aca2f195d06257b85a5d092cd4e6e1"
     },
     {
       "events": [
@@ -643,37 +641,39 @@
       "id": "m-24",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "ac_servicing:A2",
+      "label": "electrician:E13",
       "rejected_because": null,
-      "scope": "service:ac_servicing",
+      "scope": "service:electrician",
       "status": "pending_confirmation",
-      "value_hash": "fc032765194b27a7af6e61472671edd9a55cae4019c6f63ee6a1bc4307b1f653"
+      "value_hash": "3049aa6595f28a7a66557e9a3bf211f985cfa0fb1209ede849db69bbe8ebc6fe"
     },
     {
       "events": [
-        "suggested"
+        "suggested",
+        "rejected"
       ],
       "id": "m-25",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "ac_servicing:A3",
-      "rejected_because": null,
-      "scope": "service:ac_servicing",
-      "status": "pending_confirmation",
-      "value_hash": "973ce3432355cdc6c2318cd864fafc0bbf390c8a2e44c08f0421b01347e993be"
+      "label": "electrician:E9",
+      "rejected_because": "dismissed",
+      "scope": "service:electrician",
+      "status": "rejected",
+      "value_hash": "db907ce58916531c011fc3a39fa8653d36fd4160004e795aa39142d3a78e22e0"
     },
     {
       "events": [
-        "suggested"
+        "suggested",
+        "confirmed"
       ],
       "id": "m-26",
       "key": "preferred_provider",
       "kind": "inferred",
-      "label": "ac_servicing:A4",
+      "label": "ac_servicing:A1",
       "rejected_because": null,
       "scope": "service:ac_servicing",
-      "status": "pending_confirmation",
-      "value_hash": "423d96365c8728a45d62cb4625e0819b3d2dd3815327d30b1ed75a401b3ae443"
+      "status": "active",
+      "value_hash": "83e6daffd3aec947ab7b70cf3b707a3d5b559bd1502dcb9d5bb1c530abbefadb"
     },
     {
       "events": [
@@ -687,7 +687,7 @@
       "rejected_because": "superseded_by_explicit",
       "scope": "service:ac_servicing",
       "status": "rejected",
-      "value_hash": "09c7e52eeec72ed2eea4b64c412df7dd45770c2c1cda3600b5c60e382886d1f3"
+      "value_hash": "880d1d6ba9fce3dc6734ab663924563e6cc79524f958f0f6b50acac31e083bfd"
     },
     {
       "events": [
@@ -701,7 +701,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "active",
-      "value_hash": "9a62759d18986ff37fd45c642454e768bdc8d7581681106fef54ac7e7579bca3"
+      "value_hash": "d4edf35ea06b9c474f2f3371306b9ec225b1c74965cdcbc89893d6fa0f29b2eb"
     },
     {
       "events": [
@@ -714,7 +714,7 @@
       "rejected_because": null,
       "scope": "service:ac_servicing",
       "status": "active",
-      "value_hash": "5fbac5d52e9045dd6b3340180e67701e9769a3b99abf79d7504faaad6de8c34b"
+      "value_hash": "aff0b3033bca3ccee2c82d73e31576caf501535590ba4bbf20ca50fe241b0eb4"
     },
     {
       "events": [
@@ -727,7 +727,7 @@
       "rejected_because": null,
       "scope": "service:electrician",
       "status": "active",
-      "value_hash": "c0f67ad12561fa019513139a54e6128c9a084da874570ebbeb447182b443da0f"
+      "value_hash": "28b58dbc9e09b6e9b78bca82e4c37cf1a24b5b5cd73999480cab1644dac6e302"
     },
     {
       "events": [
@@ -740,7 +740,7 @@
       "rejected_because": null,
       "scope": "service:ac_servicing",
       "status": "active",
-      "value_hash": "5a0b83e19c5750eed6d8d46cb858d15c956a657093c08afa53133c0fbe5f04fb"
+      "value_hash": "65ff5bb157b46d494f7a11f2d8bd4cbc071047801c5e0cc3b0e12d29cea1bec6"
     },
     {
       "events": [
@@ -753,7 +753,7 @@
       "rejected_because": null,
       "scope": "service:plumber",
       "status": "active",
-      "value_hash": "439ffca99ef8de64da4ac9afec8f906c08b7ff56e9a68514647177276c7ef929"
+      "value_hash": "750a24a31499f55bac464c6504d58322b1cbb62b92215e74c279c831b73a9662"
     },
     {
       "events": [
@@ -766,7 +766,7 @@
       "rejected_because": null,
       "scope": "service:electrician",
       "status": "active",
-      "value_hash": "9a9fc384be1c64b9a34ded95794c7516fb1ee02c99ab4f8f1a0cc11d8a4c6939"
+      "value_hash": "4b17fa0c72c4f17de388f3d06c5ab0501d63a81aa33e0c08ead2472741174c0e"
     },
     {
       "events": [
@@ -779,7 +779,7 @@
       "rejected_because": null,
       "scope": "service:ac_servicing",
       "status": "active",
-      "value_hash": "f51811ca23d8559c258253b1ead8496473ebb87281609c10a8be84db1a00531b"
+      "value_hash": "a7df6a8cba07e6dadc209f51c897bf2a8ffc2d9b31621aa260e313be251eb242"
     },
     {
       "events": [
@@ -792,7 +792,7 @@
       "rejected_because": null,
       "scope": "service:electrician",
       "status": "active",
-      "value_hash": "e624eaef297d9eacea503ec7cf43ddf70a3f4ff85a2f64a9c56c8545f450ae37"
+      "value_hash": "aded593a8d394ec09375ae08948b60bfa3230d4f7468e1d2c1b845f17d792978"
     },
     {
       "events": [
@@ -805,7 +805,7 @@
       "rejected_because": null,
       "scope": "service:plumber",
       "status": "active",
-      "value_hash": "9b804e16c061282fa5d4cbad70abf7467e61d7dd3343db585902105394cc783c"
+      "value_hash": "abd85e2b60f1ced898961e47c1f6023b09765750f444cb0b19ce8211290b62ec"
     },
     {
       "events": [
@@ -818,7 +818,7 @@
       "rejected_because": null,
       "scope": "service:plumber",
       "status": "active",
-      "value_hash": "2e0437c76878a02240f4cfc5eb118fb58cea3a34837108a16a266cf0900dcff9"
+      "value_hash": "d7fd62361d7bdd1fdff0fa53a61c3ff16f9e3466eca45d2b6cb5c5c6e8ca104a"
     },
     {
       "events": [
@@ -831,7 +831,7 @@
       "rejected_because": null,
       "scope": "service:electrician",
       "status": "active",
-      "value_hash": "4aed98370d5379e76b5771c74aa1532da1430f005866f10d1f46338b01654a5f"
+      "value_hash": "bc59cd31a5112da8b4c5ecd4c5fd69946ce333561828ca001351ee32efd4193a"
     },
     {
       "events": [
@@ -844,7 +844,7 @@
       "rejected_because": null,
       "scope": "service:ac_servicing",
       "status": "active",
-      "value_hash": "805883f1ab872f7bca7ce872bb5c92654c5642a2dee780ae6a1b4d38bc5299ee"
+      "value_hash": "c39c1c94cde575d6a9c30742933bf8e9f094ad9b5cdde30756d44a05b5392597"
     },
     {
       "events": [
@@ -857,7 +857,7 @@
       "rejected_because": null,
       "scope": "service:ac_servicing",
       "status": "active",
-      "value_hash": "185a1c16c1059c74e515834be47ec5f9e6ed2ff56dcd0ad8f3e1d3bc892de3db"
+      "value_hash": "d8e4359bbdea6ca38affb8ee127b5c572cef20549173646799a7607c056af51e"
     },
     {
       "events": [
@@ -870,7 +870,7 @@
       "rejected_because": null,
       "scope": "service:pest_control",
       "status": "active",
-      "value_hash": "bdc5d8a48c23897906b09a9a3680bd2e9c8b3121edbda36f949800f0959c8d55"
+      "value_hash": "ff8f0590c87bd109df7ab482a88c1b88cf16225a0289d54a14d8ac66fc707293"
     },
     {
       "events": [
@@ -883,7 +883,7 @@
       "rejected_because": null,
       "scope": "service:pest_control",
       "status": "active",
-      "value_hash": "4d8f9d6b38bf1b3a9183b66d890038a63c2eb9883f674c305a8e78744a98d895"
+      "value_hash": "102b1084ba1cdc521679e29b6dce22a3b100e4ac210db31fce6e24445e20d88b"
     },
     {
       "events": [
@@ -896,7 +896,7 @@
       "rejected_because": null,
       "scope": "service:pest_control",
       "status": "active",
-      "value_hash": "805883f1ab872f7bca7ce872bb5c92654c5642a2dee780ae6a1b4d38bc5299ee"
+      "value_hash": "c39c1c94cde575d6a9c30742933bf8e9f094ad9b5cdde30756d44a05b5392597"
     },
     {
       "events": [
@@ -909,7 +909,7 @@
       "rejected_because": null,
       "scope": "service:pest_control",
       "status": "active",
-      "value_hash": "80f52570da1cdcfad017df407ef09b6f14ed3142d64efae90c23863db645d2f8"
+      "value_hash": "41b4c41e25d7db9c1a4cf157ff5ecc140b6440ffd28be591c9d204ab750ec586"
     },
     {
       "events": [
@@ -922,7 +922,7 @@
       "rejected_because": null,
       "scope": "service:painting",
       "status": "active",
-      "value_hash": "0f8eb4b72b6e0c9e88b388eb967b49e067ef1004bf07bffc22c3acb13b43580a"
+      "value_hash": "a44c4b601407c9d0ed612e34b538d736d2433599790b3d8f79ea8129ced7062a"
     },
     {
       "events": [
@@ -935,7 +935,7 @@
       "rejected_because": null,
       "scope": "service:painting",
       "status": "active",
-      "value_hash": "3a90f580768928eef2535c492f4753001608a8879e3e1bb15511a6ed4d8fccfe"
+      "value_hash": "1aac962b453ea53fa2eb818e75ec45869e297aeecec084533ea5759acdc0d24b"
     },
     {
       "events": [
@@ -948,7 +948,7 @@
       "rejected_because": null,
       "scope": "service:painting",
       "status": "active",
-      "value_hash": "c0f67ad12561fa019513139a54e6128c9a084da874570ebbeb447182b443da0f"
+      "value_hash": "28b58dbc9e09b6e9b78bca82e4c37cf1a24b5b5cd73999480cab1644dac6e302"
     },
     {
       "events": [
@@ -961,7 +961,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "active",
-      "value_hash": "0c91e7172edace99595bafd901e2c0c38a5650168219f7a84615cd0b05c09cea"
+      "value_hash": "5765268ade29df268bd46f4d767739d52c21a29a5e52871d1e1c8ae1ff7ffc23"
     },
     {
       "events": [
@@ -975,7 +975,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "superseded",
-      "value_hash": "469eeaefa0576908be1480222721dbad5631ffc547e43f68d76b2fa5d3f2357a"
+      "value_hash": "306a4c517ca5d2aae03960e80e7c1bf20b9bf8225fd09af0e97123d4b08b3e48"
     },
     {
       "events": [
@@ -990,7 +990,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "forgotten",
-      "value_hash": "7d702981413fe84d4f20136a33b9d13002a2bff6f35abc592833fb0aa907e433"
+      "value_hash": "3004e19cfd6aed0c97d6c2ae4a29d6e0d5935133e1cc0f1d8c20d40d7f674181"
     },
     {
       "events": [
@@ -1005,7 +1005,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "forgotten",
-      "value_hash": "4b07f6b45653741fac4c44f8f083f1e7af3b2939db6f296820f97be21d0c7400"
+      "value_hash": "3b94c49c1c447dc0b1c33895546d4266d4d0db5084b010840b985d430bc13d5f"
     },
     {
       "events": [
@@ -1019,7 +1019,7 @@
       "rejected_because": null,
       "scope": "service:cleaning",
       "status": "forgotten",
-      "value_hash": "9a201c287cc2ea9fc56557daa420d1fa3ae0e0759dd1556479ef014d280a8dfa"
+      "value_hash": "123699494b7bce2a8b2b6d5e114beba67e544786df072d23a1c2d031655527fa"
     },
     {
       "events": [
@@ -1033,7 +1033,7 @@
       "rejected_because": null,
       "scope": "service:carpentry",
       "status": "forgotten",
-      "value_hash": "99ee50221221864d50c60baea6f14d8ac2e235cc6e78be6088cd40cc97fca394"
+      "value_hash": "6acfa422457a4d8697c29949b8a79066a74ddb79c9c82c36701badc890a32623"
     },
     {
       "events": [
@@ -1047,7 +1047,7 @@
       "rejected_because": null,
       "scope": "service:gardening",
       "status": "forgotten",
-      "value_hash": "a8cf63e4f6dbe930b5d426a35228c1fe2c21d2aed919745b7085b569a1f71434"
+      "value_hash": "8f2193f6e8c3376b0fa0a2cf2a6a15e6761b6f2e99b0c9c28a8c7a11f74ab9f0"
     },
     {
       "events": [
@@ -1061,7 +1061,7 @@
       "rejected_because": null,
       "scope": "service:laundry",
       "status": "forgotten",
-      "value_hash": "80f52570da1cdcfad017df407ef09b6f14ed3142d64efae90c23863db645d2f8"
+      "value_hash": "41b4c41e25d7db9c1a4cf157ff5ecc140b6440ffd28be591c9d204ab750ec586"
     },
     {
       "events": [
@@ -1075,7 +1075,7 @@
       "rejected_because": null,
       "scope": "service:tutoring",
       "status": "forgotten",
-      "value_hash": "e18e0168ec6f2956cc8f3ead6aa2e9ef903678dfe72957bef519bc0dcd03f6c0"
+      "value_hash": "56685786f53dbb4e348d724e549113efdc93188f3ee3e83ee2014b0337b6cb6d"
     },
     {
       "events": [
@@ -1089,7 +1089,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "superseded",
-      "value_hash": "870aa712f28fdd5b31b785eb961756e5d8b228933c90ba6be13e9a99c2f522cb"
+      "value_hash": "59c812bdea5f1fe3d63e208dc932a6c5103d57859bed9239b714d5d18df6a53d"
     },
     {
       "events": [
@@ -1103,7 +1103,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "superseded",
-      "value_hash": "6a830e9793baccac48eabc66ffff2cc8b1adceac57db6b402822fc444a2ef4e6"
+      "value_hash": "b2a66b2c03482dc89c387f5daa66f24fb77b339597b8e69cbbcdeab6cf226ad0"
     },
     {
       "events": [
@@ -1116,7 +1116,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "active",
-      "value_hash": "33904253f9b7a8fbcdf232682b23df0f876987f1567c21b2e24faff75cfe0f34"
+      "value_hash": "73f5452313a925cafe385c26f5e8057b84712d10de40911b8eb029cceb92e21f"
     },
     {
       "events": [
@@ -1129,7 +1129,7 @@
       "rejected_because": null,
       "scope": "global",
       "status": "active",
-      "value_hash": "7efc49ac25b860d1a2ceb8c9e22acd7b6c5bad027dac48d03c711d63ec69d4ec"
+      "value_hash": "dce22a4f28939e00ec3c659c5b3c7c2d28343e008e151d4be5d2b7a58a6b29c3"
     }
   ],
   "seed": "memory_rich_v1",

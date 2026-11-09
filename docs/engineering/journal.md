@@ -293,7 +293,7 @@ Two things were needed to make parallel runs safe. Tests that run a scenario wro
 - Forget overwrites the value and the whole evidence quote in `messages.body_json`, clears archived briefs and booking `origin_brief_json`, blanks stored answers in `client_requests` (they held the value), writes the HMAC hashes and nulls the value last. A test dumps the whole database and finds none of the value.
 - The scrub for a stale checkpoint sits in the repos (`KnownBookingsRepo.upsert`, the new `ErrandsRepo.archive`), so `verify.py` and `execute.py` are untouched; `ingress` clears and re-fills the open errand; the state API hides what is not eligible.
 - Selection is pure and returns a reason for every row. S4 uses a compact form (`{"home_area":"indiranagar"}`) because the first form put the longest-value case over its 600 tokens.
-- The seeds go through the service, the message repo, the archive repo and the real forget. `memory_rich_v1` has exactly decision 23's mix (32 active of which 4 inferred and 8 irrelevant, 9 pending, 8 superseded, 7 forgotten, 4 rejected), 240 messages in 6 sessions, 6 archived errands, 30 upcoming bookings; two builds are byte for byte equal.
+- The seeds go through the service, the message repo, the archive repo and the real forget. `memory_rich_v1` has exactly decision 23's mix (32 active of which 4 inferred and 8 irrelevant, 9 pending, 8 superseded, 7 forgotten, 4 rejected; round 2 changed it to 31 active of which 3 inferred, and 5 rejected, see 12.4), 240 messages in 6 sessions, 6 archived errands, 30 upcoming bookings; two builds are byte for byte equal.
 
 **Deviations, for the lead to rule on.**
 1. Ports: the task said 9200/9201/9202 and the brief 9360/9361/9362; I used 9200 to 9202 for every run below.
