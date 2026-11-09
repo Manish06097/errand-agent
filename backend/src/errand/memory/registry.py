@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import time
 from typing import Any, Literal
 
+from errand.domain.aliases import AREA_ALIASES
 from errand.tools.sanitize import clean_text
 from errand.world.contracts import Area
 
@@ -32,14 +33,6 @@ ACCESS_NOTE_CAP = 120
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 LANGUAGES = ("english", "hindi", "hinglish", "kannada")
 
-# Aliases for each area, lowercase. M8 owns the full alias table for the brief; memory
-# keeps the spellings a forget has to find, so it needs no dependency on that module.
-AREA_ALIASES: dict[str, tuple[str, ...]] = {
-    "indiranagar": ("indiranagar", "indira nagar", "indiranager", "indranagar"),
-    "koramangala": ("koramangala", "kormangala", "koramangla", "koramanagala"),
-    "whitefield": ("whitefield", "white field"),
-    "jayanagar": ("jayanagar", "jaya nagar", "jayanager"),
-}
 _PROVIDER = re.compile(r"^[PEA][1-9][0-9]{0,2}$")
 # Provider ids start with the letter of their service (world/catalog.py service_of).
 SERVICE_LETTER = {"plumber": "P", "electrician": "E", "ac_servicing": "A"}

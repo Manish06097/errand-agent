@@ -13,10 +13,10 @@ SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "ac_servicing": ("ac servicing", "ac service", "air conditioner", "aircon"),
 }
 AREA_ALIASES: dict[str, tuple[str, ...]] = {
-    "indiranagar": ("indiranagar", "indira nagar"),
-    "koramangala": ("koramangala",),
+    "indiranagar": ("indiranagar", "indira nagar", "indiranager", "indranagar"),
+    "koramangala": ("koramangala", "kormangala", "koramangla", "koramanagala"),
     "whitefield": ("whitefield", "white field"),
-    "jayanagar": ("jayanagar", "jaya nagar"),
+    "jayanagar": ("jayanagar", "jaya nagar", "jayanager"),
 }
 
 # That every Service and Area value has aliases is checked by

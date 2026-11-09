@@ -8,11 +8,11 @@
   that holds the quote (cues.py; the planner's choice of span is not trusted);
 - the value in the quote.
 
-The value check here is the conservative one: a surface form of the value must appear
-in the quote. Architecture 10.7 wants the evidence parsers of `agent/evidence.py` (a
-time parsed out of "not before ten", an amount out of "under 1,500"); those land with
-M8 and replace `value_in_quote` through the `value_check` argument, so a paraphrase
-this check refuses simply becomes a "Remember this for next time?" chip until then.
+The value check is built on the pure parsers of `errand.domain.evidence` (the same ones
+`update_brief` uses, architecture 10.7): a time parses out of the span to the same time,
+an amount to the same rupees, an area matches its alias, a provider matches by id or by a
+name in the catalogue view the agent holds, weekdays by name. A surface-form match is the
+fallback for keys with no parser (language, access note, contact window).
 """
 
 from __future__ import annotations
@@ -21,10 +21,13 @@ import re
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import time
 from typing import Any
 
+from errand.domain import aliases
+from errand.domain import evidence as parsers
 from errand.memory.cues import check_span, normalise, sentence_around
-from errand.memory.registry import surface_forms
+from errand.memory.registry import WEEKDAYS, surface_forms
 
 MIN_QUOTE_CHARS = 4
 
@@ -67,12 +70,37 @@ def locate_quote(message: str, quote: str) -> Located | None:
     return None
 
 
-def value_in_quote(key: str, scope: str, value: Any, quote: str) -> bool:
+def _surface(key: str, value: Any, quote: str) -> bool:
     text = normalise(quote)
     return any(
         re.search(rf"(?<![\w]){re.escape(normalise(form))}(?![\w])", text) is not None
         for form in surface_forms(key, value)
     )
+
+
+def _hhmm(value: Any) -> time | None:
+    try:
+        hour, minute = str(value).split(":")
+        return time(int(hour), int(minute))
+    except (ValueError, TypeError):
+        return None
+
+
+def value_in_quote(key: str, scope: str, value: Any, quote: str) -> bool:
+    """Does the quote carry the value? Parsers first, surface forms as the fallback."""
+    text = normalise(quote)
+    if key in ("earliest_time", "latest_time"):
+        want = _hhmm(value)
+        return want is not None and want in parsers.parse_times(text)
+    if key == "budget_ceiling":
+        return int(value) in parsers.parse_amounts(text)
+    if key == "home_area":
+        names = aliases.aliases_of("area", str(value))
+        return any(name in text for name in names) or _surface(key, value, quote)
+    if key == "avoid_days":
+        days = {d for d in WEEKDAYS if re.search(rf"\b{d}s?\b|\b{d[:3]}\b", text)}
+        return bool(value) and set(value) <= days
+    return _surface(key, value, quote)
 
 
 @dataclass(frozen=True)
