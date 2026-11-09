@@ -1126,16 +1126,41 @@ def _only_in_user_words(strings: list[str], needle: list[str]) -> bool:
 HARD_BUDGET = 12_000
 
 
+_BOUND_SKIP_KEYS = frozenset({"type", "role", "model"})
+_TOOLS_PREAMBLE = 400  # measured once (spikes C5); repeated here, not imported
+
+
+def _request_lower_bound(record: dict[str, Any]) -> int:
+    """ceil(utf8_bytes / 1.5) per string value in the recorded request, plus the tools
+    preamble when tools are bound. Bytes are never fewer than characters and the spike's
+    worst text is 1.68 characters per token, so this cannot exceed the real count."""
+    request = record.get("request") or {}
+    total = 0
+    stack: list[tuple[Any, str]] = [(request, "")]
+    while stack:
+        value, key = stack.pop()
+        if isinstance(value, str):
+            if key not in _BOUND_SKIP_KEYS:
+                total += -(-len(value.encode("utf-8")) * 2 // 3)
+        elif isinstance(value, list):
+            stack.extend((v, key) for v in value)
+        elif isinstance(value, dict):
+            stack.extend((v, k) for k, v in value.items())
+    return total + (_TOOLS_PREAMBLE if request.get("tools") else 0)
+
+
 def inv06_every_request_within_the_budget(rec: Records) -> Violations:
     """Every request's estimate is within the budget, and in replay, record and live modes
     the API-reported input tokens are too. It also checks that no request was sent that
-    its own `context.built` said was over the cap."""
+    its own `context.built` said was over the cap, and recomputes a lower bound from the
+    recorded request strings: over the budget, or above the recorded estimate, is a
+    violation, so the estimate the code under test writes is not the only witness."""
     out: Violations = []
     built: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in rec.all_records():
         if record["type"] == "context.built":
             built[(record["run_id"], str(record["manifest"].get("request_sha256")))].append(record)
-    biggest_est = biggest_reported = 0
+    biggest_est = biggest_reported = biggest_bound = 0
     for record in rec.all_records():
         if record["type"] != "model.call":
             continue
@@ -1145,6 +1170,18 @@ def inv06_every_request_within_the_budget(rec: Records) -> Violations:
         biggest_est = max(biggest_est, est, floor)
         if max(est, floor) > HARD_BUDGET:
             out.append(f"{where}: estimated {max(est, floor)} tokens, over {HARD_BUDGET}")
+        # An independent lower bound from the raw request strings in the record, so the
+        # gateway's own estimate is not the only witness. It never counts keys or
+        # structure, so an honest estimate is always above it.
+        bound = _request_lower_bound(record)
+        biggest_bound = max(biggest_bound, bound)
+        if bound > HARD_BUDGET:
+            out.append(f"{where}: independent lower bound {bound} tokens, over {HARD_BUDGET}")
+        elif bound > est:
+            out.append(
+                f"{where}: independent lower bound {bound} tokens, "
+                f"above the recorded estimate of {est}"
+            )
         if int(record.get("budget_tokens", HARD_BUDGET)) > HARD_BUDGET:
             out.append(f"{where}: the gateway's budget was {record['budget_tokens']}")
         for cb in built.get((record["run_id"], str(record["request_sha256"])), []):
@@ -1161,6 +1198,7 @@ def inv06_every_request_within_the_budget(rec: Records) -> Violations:
                 out.append(f"{where}: the API reported {reported} input tokens")
     rec.notes["max_estimated_tokens"] = biggest_est
     rec.notes["max_reported_input_tokens"] = biggest_reported
+    rec.notes["max_lower_bound_tokens"] = biggest_bound
     return out
 
 
