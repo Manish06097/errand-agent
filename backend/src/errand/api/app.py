@@ -357,6 +357,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 lambda: to_ms(manager.clock.now()),
                 load_or_create(data_dir / MemorySettings().hmac_key_file),
             )
+            manager.memory = app.state.memory
             reconciler = Reconciler(manager, config.reconciler or ReconcilerSettings())
             app.state.reconciler = reconciler
             await reconciler.startup()  # before the first request is served (9.7)

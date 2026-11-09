@@ -69,6 +69,7 @@ from errand.domain.inbound import (
 from errand.domain.outcomes import PendingCheck, RunOutcome
 from errand.ids import IdFactory, message_id_for, message_id_for_user
 from errand.llm.gateway import LLMGateway
+from errand.memory.service import MemoryService
 from errand.quarantine.reader import ReviewReader
 from errand.store.agent_db import AgentDB
 from errand.store.repos.messages import Message
@@ -200,6 +201,8 @@ class RunManager:
         self.approval_settings = approval_settings or ApprovalSettings()
         self.booking_settings = booking_settings or BookingSettings()
         self.consequential: ConsequentialLocks = consequential or UserLocks(db, self._holder)
+        # Set by the app once the memory service exists (it needs the manager's clock).
+        self.memory: MemoryService | None = None
 
     @property
     def approval_policy(self) -> service.ApprovalPolicy:
@@ -747,6 +750,7 @@ class RunManager:
             approval_settings=self.approval_settings,
             booking_settings=self.booking_settings,
             consequential=self.consequential,
+            memory=self.memory,
         )
 
     async def _fail(self, run: _Run, tracer: Tracer, exc: BaseException) -> RunOutcome:

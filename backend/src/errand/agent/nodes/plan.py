@@ -54,6 +54,7 @@ from pydantic import ValidationError
 from errand.agent import ask_guard, brief_ops, invalidation, pinned, steering, timewin
 from errand.agent.changes.validate import check_change_proposal
 from errand.agent.deps import RunDeps
+from errand.agent.memory_tools import MEMORY_TOOL_NAMES, MemoryTools
 from errand.agent.planner_tools import (
     ASK_OPTION_MAX_CHARS,
     ASK_QUESTION_MAX_CHARS,
@@ -186,6 +187,16 @@ class PlannerLoop:
         # proposal names a booking, and valid for this run only.
         self.booking_refs: dict[str, BookingItem] = {}
         self.card_changes: list[CardChange] = []
+        self.memory_tools = MemoryTools(self)
+
+    def reject(self, tool: str, reason: str, **detail: Any) -> None:
+        self._reject(tool, reason, **detail)
+
+    async def update_brief_quiet(self, patch: Mapping[str, Any]) -> bool:
+        """The no-cue path of `remember`: apply the value to this errand through the normal
+        update_brief checks. True if the patch was applied."""
+        out = await self._update_brief(patch)
+        return not (isinstance(out, tuple) and out[1])
 
     # ------------------------------------------------------------------ loop
 
@@ -322,6 +333,8 @@ class PlannerLoop:
                 return await self._propose_cancel(args)
             if name == "propose_reschedule":
                 return await self._propose_reschedule(args)
+            if name in MEMORY_TOOL_NAMES:
+                return await self.memory_tools.handle(name, args)
             if name in TOOLS:
                 # Not a planner tool: let the gateway refuse it, so its allowlist is the
                 # control that is exercised, not just this branch.

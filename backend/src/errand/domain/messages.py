@@ -246,6 +246,59 @@ class OutcomeCard(_Body):
     status_line: str | None = None
 
 
+class MemorySavedChip(_Body):
+    """ "Saved: home area" with Undo. References the row; the value is resolved at read time."""
+
+    type: Literal["memory_saved"] = "memory_saved"
+    memory_id: str
+
+
+class MemorySuggestionChip(_Body):
+    """One per errand that produced a suggestion: Keep and Dismiss."""
+
+    type: Literal["memory_suggestion"] = "memory_suggestion"
+    memory_id: str
+
+
+class MemoryOfferChip(_Body):
+    """ "Remember this for next time?" It stores no value, only where the user said it: a
+    click re-reads the span out of the user's message, so a forgotten value has no copy."""
+
+    type: Literal["memory_offer"] = "memory_offer"
+    key: str
+    scope: str
+    source_message_id: str
+    start: int
+    end: int
+
+
+class MemoryUpdateChip(_Body):
+    """ "Update your saved home area? [Update] [Just this time]" with the same no-value rule."""
+
+    type: Literal["memory_update"] = "memory_update"
+    memory_id: str
+    key: str
+    scope: str
+    source_message_id: str
+    start: int
+    end: int
+
+
+class MemoryForgetChip(_Body):
+    """What `propose_forget` renders. The forget is the user's click, never the model's."""
+
+    type: Literal["memory_forget"] = "memory_forget"
+    memory_id: str
+
+
+class MemoryListCard(_Body):
+    """What `list_memories` renders: references only, resolved with their status at read time."""
+
+    type: Literal["memory_list"] = "memory_list"
+    memory_ids: list[str] = Field(default_factory=list)
+    suggestion_ids: list[str] = Field(default_factory=list)
+
+
 MessageBody = Annotated[
     TextBody
     | ClarifyCard
@@ -253,9 +306,26 @@ MessageBody = Annotated[
     | OutcomeNotice
     | ActionCard
     | CardReminder
-    | OutcomeCard,
+    | OutcomeCard
+    | MemorySavedChip
+    | MemorySuggestionChip
+    | MemoryOfferChip
+    | MemoryUpdateChip
+    | MemoryForgetChip
+    | MemoryListCard,
     Field(discriminator="type"),
 ]
+
+MEMORY_BODY_TYPES = frozenset(
+    {
+        "memory_saved",
+        "memory_suggestion",
+        "memory_offer",
+        "memory_update",
+        "memory_forget",
+        "memory_list",
+    }
+)
 
 KIND_OF: dict[str, Literal["text", "card", "notice"]] = {
     "text": "text",
@@ -265,4 +335,10 @@ KIND_OF: dict[str, Literal["text", "card", "notice"]] = {
     "action": "card",
     "reminder": "card",
     "outcome": "card",
+    "memory_saved": "card",
+    "memory_suggestion": "card",
+    "memory_offer": "card",
+    "memory_update": "card",
+    "memory_forget": "card",
+    "memory_list": "card",
 }

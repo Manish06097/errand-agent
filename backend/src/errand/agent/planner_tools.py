@@ -27,6 +27,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from errand.agent.memory_tools import MEMORY_TOOLS
 from errand.domain.brief import BriefField, PartOfDay
 from errand.world.contracts import Area, Service
 
@@ -172,6 +173,7 @@ PLANNER_TOOLS: tuple[dict[str, Any], ...] = (
     PROPOSE_BOOKING,
     PROPOSE_CANCEL,
     PROPOSE_RESCHEDULE,
+    *MEMORY_TOOLS,
 )
 PROPOSE_TOOLS: frozenset[str] = frozenset(
     {"propose_booking", "propose_cancel", "propose_reschedule"}
