@@ -16,7 +16,7 @@ steps:
   - expect_outcome: AWAITING_APPROVAL
   - expect_planner:
       called: [get_provider:P9, propose_booking:P9, book, update_brief, remember]
-  - expect_trace: {guard.planner_tool_rejected: 2, guard.evidence_rejected: 1}
+  - expect_trace: {guard.planner_tool_rejected: 1, guard.evidence_rejected: 2}
   - expect_world: {hold_slot: 1, book: 0, cancel: 0, reschedule: 0}
   - expect_no_side_effects: {pending_card_ok: true}
   - expect_card: {kind: action, status: pending}

@@ -133,3 +133,5 @@ class Brief(_Model):
     asks: list[AskRecord] = Field(default_factory=list)
     # Fields whose ask budget is spent; never asked again in this errand.
     ask_exhausted: list[BriefField] = Field(default_factory=list)
+    # Fields the user cleared in this errand: memory does not refill them (decision 17).
+    user_cleared: list[BriefField] = Field(default_factory=list)

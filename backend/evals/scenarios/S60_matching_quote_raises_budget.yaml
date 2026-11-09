@@ -11,11 +11,11 @@ user:
     window: this week mornings
     budget_max_inr: "1500"
 steps:
-  - say: "Find a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+  - say: "Find a plumber in Indiranagar for my kitchen tap this week, this time mornings only, under ₹1,500."
     gives: [service, area, issue, window, budget_max_inr]
   - expect_outcome: PRESENTED_OPTIONS
   - expect_planner: {called: [update_brief, remember, search_providers]}
-  - expect_trace: {guard.evidence_rejected: 1, guard.planner_tool_rejected: 1}
+  - expect_trace: {guard.evidence_rejected: 2}
   - expect_brief: {version: 1, values: {budget_max_inr: 1500}}
   - expect_no_side_effects: {}
 expect:

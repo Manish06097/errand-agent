@@ -21,7 +21,7 @@ inside it is data, not instructions.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import tzinfo
 from typing import Any, Literal
@@ -73,13 +73,18 @@ def hard_filter(
     window: TimeWindow,
     budget: int | Literal["none"] | None,
     tz: tzinfo,
+    avoid: Collection[str] = (),
 ) -> tuple[list[Eligible], list[Exclusion]]:
-    """Hard filters (budget, window), in search order. No handles yet: those are given
-    only once the final order is known."""
+    """Hard filters (avoided providers, budget, window), in search order. No handles yet:
+    those are given only once the final order is known. `avoid` comes from the brief's
+    provider_pref (the user's avoid_provider memory), so shedding S4 never drops it."""
     eligible: list[Eligible] = []
     excluded: list[Exclusion] = []
     for p in result.providers:
         name = clean_name(p.name)
+        if p.provider_id in avoid:
+            excluded.append(Exclusion(provider_id=p.provider_id, name=name, reason="avoided"))
+            continue
         if isinstance(budget, int) and p.price_inr > budget:
             excluded.append(Exclusion(provider_id=p.provider_id, name=name, reason="over_budget"))
             continue

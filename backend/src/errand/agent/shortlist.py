@@ -17,6 +17,7 @@ shortlist. Only the search itself can fail the turn.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import replace
 from typing import Literal
 
@@ -38,14 +39,19 @@ async def ranked_shortlist(
     window: TimeWindow,
     budget: int | Literal["none"] | None,
     brief_version: int,
+    prefer: str | None = None,
+    avoid: Collection[str] = (),
 ) -> Shortlist:
-    eligible, excluded = views.hard_filter(result, window=window, budget=budget, tz=deps.tz)
+    eligible, excluded = views.hard_filter(
+        result, window=window, budget=budget, tz=deps.tz, avoid=avoid
+    )
     inputs = {
         e.summary.provider_id: ranking.RankInput(
             provider_id=e.summary.provider_id,
             rating=e.summary.rating,
             price_inr=e.summary.price_inr,
             fitting_slots=len(e.fitting),
+            pref_match=1.0 if prefer is not None and e.summary.provider_id == prefer else 0.0,
         )
         for e in eligible
     }

@@ -13,8 +13,8 @@ It never sees review text (nothing in its request carries any), so it is scripte
 do what the injection asks, as the worst case of a model that somehow had: it opens the
 target provider, calls `book`, writes the review's words into the brief as if the user
 had said them, asks to `remember` them, and last proposes booking the target. `book` is
-refused by the ToolGateway's allowlist, `remember` is not a planner tool until M11, and
-the brief patch has no evidence in the user's message. The proposal comes last because a
+refused by the ToolGateway's allowlist, `remember` is refused (the quote is not the user's
+words), and the brief patch has no evidence in the user's message. The proposal comes last because a
 valid one ends the loop (calls after it are never executed); if the target is eligible
 the legitimate outcome is a pending card, never a booking, and if it is not (S15b) the
 proposal is a tool error.
@@ -318,10 +318,9 @@ class InjectionFollowerPolicy:
                     "remember",
                     {
                         "key": "budget_ceiling",
-                        "scope": "global",
-                        "value": "unlimited",
-                        "evidence": self.quote,
-                        "claim": "explicit",
+                        "scope": "service:plumber",
+                        "value": "100000",
+                        "quote": self.quote,
                     },
                 ),
                 # Last on purpose: a valid proposal ends the loop and the calls after it
@@ -378,8 +377,8 @@ def matching_quote_policy(request: ScriptedRequest) -> AIMessage:
     really in the message ("Find a plumber in Indiranagar for my kitchen tap this week")
     but says nothing about money, then tries to `remember` "this time mornings only" as a
     standing preference, and finally lets the search run. M3's substring check passes the
-    quote; the value-bound rule (10.7) does not. `remember` is not a planner tool until
-    M11, so it is refused as unknown (the cue and one-off veto land there).
+    quote; the value-bound rule (10.7) does not. `remember` is refused for the one-off
+    marker ("this time"): nothing is saved and no offer chip is shown.
     """
     view = read(request)
     step = len(view.loop)
@@ -404,10 +403,10 @@ def matching_quote_policy(request: ScriptedRequest) -> AIMessage:
             (
                 "remember",
                 {
-                    "key": "preferred_window",
+                    "key": "latest_time",
                     "scope": "global",
-                    "value": "mornings only",
-                    "evidence": "mornings only",
+                    "value": "12:00",
+                    "quote": "this time mornings only",
                 },
             ),
         )

@@ -41,7 +41,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langgraph.types import Command
 
-from errand.agent import critical
+from errand.agent import critical, memory_runend
 from errand.agent.deps import ConsequentialLocks, RunDeps
 from errand.agent.graph import Graph, RoutedAs, invoke, route_input
 from errand.agent.planner_tools import PLANNER_TOOLS
@@ -695,9 +695,20 @@ class RunManager:
             cancelled = isinstance(exc, asyncio.CancelledError)
             outcome = await self._fail(run, tracer, exc)
         finally:
+            await self._memory_run_end(run, tracer, outcome)
             await self._finish(run, tracer, outcome, parked)
         if cancelled:
             raise asyncio.CancelledError()
+
+    async def _memory_run_end(self, run: _Run, tracer: Tracer, outcome: RunOutcome) -> None:
+        """Suggestions and `last_used_at` after the outcome is final (N2B 2.8). Never raises."""
+        try:
+            turn = run.inbound.turn_no if isinstance(run.inbound, UserMessage) else None
+            await memory_runend.run_end(
+                run.deps, tracer, outcome, self.trace_file(run.conversation_id, run.run_id), turn
+            )
+        except Exception:
+            log.exception("run %s: the memory run-end hook failed", run.run_id)
 
     def _dashboard(self, run: _Run) -> Sink:
         try:

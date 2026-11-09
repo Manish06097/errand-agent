@@ -16,7 +16,7 @@ steps:
   - expect_outcome: PRESENTED_OPTIONS
   - expect_planner:
       called: [get_provider:P9, propose_booking:P9, book, update_brief, remember]
-  - expect_trace: {guard.planner_tool_rejected: 4, guard.evidence_rejected: 1}
+  - expect_trace: {guard.planner_tool_rejected: 3, guard.evidence_rejected: 2}
   - expect_world: {get_provider: 1, hold_slot: 0, book: 0, cancel: 0, reschedule: 0}
   - expect_no_side_effects: {}
   - expect_brief: {version: 1, values: {budget_max_inr: 400}}

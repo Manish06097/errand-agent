@@ -56,6 +56,7 @@ from errand.agent import ask_guard, brief_ops, invalidation, pinned, steering, t
 from errand.agent.changes.validate import check_change_proposal
 from errand.agent.deps import RunDeps
 from errand.agent.memory_fill import apply_memory
+from errand.agent.memory_prefill import apply_service_prefill
 from errand.agent.memory_tools import MEMORY_TOOL_NAMES, MemoryTools
 from errand.agent.planner_tools import (
     ASK_OPTION_MAX_CHARS,
@@ -516,8 +517,15 @@ class PlannerLoop:
         budget = brief.budget_max_inr.value if brief.budget_max_inr else None
         # Filter, provisional score, reader enrichment of the top candidates, final score,
         # order, handles: all before anything is rendered for the loop (10.6).
+        pref = brief.provider_pref.value if brief.provider_pref else None
         shortlist = await ranked_shortlist(
-            self.deps, result, window=window, budget=budget, brief_version=brief.version
+            self.deps,
+            result,
+            window=window,
+            budget=budget,
+            brief_version=brief.version,
+            prefer=pref.prefer_id if pref else None,
+            avoid=pref.avoid_ids if pref else (),
         )
         errand = self.errand.model_copy(update={"shortlist": shortlist})
         if errand.phase is Phase.GATHERING:
@@ -664,6 +672,21 @@ class PlannerLoop:
                 user_message=self.inbound.text,
                 detail="nothing was changed; quote the user's words exactly",
             ), True
+        if outcome.cleared_fields:
+            seen = list(outcome.brief.user_cleared)
+            seen += [f for f in outcome.cleared_fields if f not in seen]
+            outcome.brief = outcome.brief.model_copy(update={"user_cleared": seen})
+        if outcome.set_fields:
+            outcome.brief, filled = await apply_service_prefill(
+                self.deps,
+                outcome.brief,
+                errand_kind=self.errand.kind.value,
+                set_fields=outcome.set_fields,
+                turn=self.inbound.turn_no,
+                now=self.deps.clock.now(),
+                tz=self.deps.tz,
+            )
+            outcome.set_fields += [f for f in filled if f not in outcome.set_fields]
         tracer.emit(
             "brief.patch",
             fields={
