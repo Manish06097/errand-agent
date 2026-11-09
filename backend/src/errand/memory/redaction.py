@@ -19,17 +19,22 @@ from typing import Any
 FORGOTTEN_MARKER = "[removed at your request]"
 SUPERSEDED_MARKER = "[updated preference]"
 
-# Model-written and user-written strings in a message body, by body type. The first is the
-# primary text that redaction offsets refer to; the rest are replaced without a row.
+# User-written and model-written strings in a message body, by body type (decision 13).
+# The first is the primary text that redaction offsets refer to; a clarify card's options
+# are model-written too and are replaced without a row.
+#
+# Text that code renders is out of scope on purpose: a notice, an outcome or reminder line,
+# a status line, a card title. They record what happened ("Booked Ravi, Thu 10:00"), which
+# is a fact about a booking and not a copy of the preference. Forgetting "not before 10"
+# must not wipe "10:00" from them. The trade-off, accepted by the ruling in 12.4: a value
+# that the code later rendered into such a line (a home area in a status line) stays in
+# agent.sqlite until the errand is deleted; the model never sees it as a preference, since
+# the brief scrub and the builder's eligible view see to that.
 _PRIMARY: dict[str, str] = {
     "text": "text",
-    "notice": "text",
-    "outcome": "text",
-    "reminder": "text",
     "clarify": "question",
     "shortlist": "recommendation",
 }
-_SECONDARY = ("status_line", "title")
 
 
 def primary_key(body: dict[str, Any]) -> str | None:
@@ -131,8 +136,8 @@ def redact_body(
     """Overwrite every surface form (and `extra_primary` offsets) in a message body.
 
     Returns the new body and the primary-text spans that were edited, in the old text's
-    coordinates. Secondary strings (a card's options and status line) are replaced
-    without a row: the redaction table has no coordinates for them.
+    coordinates. A clarify card's options are replaced without a row: the redaction table
+    has no coordinates for them. Code-rendered fields are never touched.
     """
     forms = tuple(forms)
     new = dict(body)
@@ -143,11 +148,7 @@ def redact_body(
         edited = merge([*find_spans(text, forms), *extra_primary])
         if edited:
             new[key] = overwrite(text, edited, FORGOTTEN_MARKER)
-    for name in _SECONDARY:
-        value = body.get(name)
-        if isinstance(value, str):
-            new[name] = overwrite(value, find_spans(value, forms), FORGOTTEN_MARKER)
-    options = body.get("options")
+    options = body.get("options") if body.get("type") == "clarify" else None
     if isinstance(options, list):
         new["options"] = [
             overwrite(o, find_spans(o, forms), FORGOTTEN_MARKER) if isinstance(o, str) else o
