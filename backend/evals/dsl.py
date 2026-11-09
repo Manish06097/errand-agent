@@ -46,6 +46,8 @@ class Say(_Strict):
     # again fails the scenario.
     gives: list[BriefField] = Field(default_factory=list)
     client_msg_id: str | None = None
+    # N2: the line typed this many times over, for a paste too long to write in a YAML file.
+    repeat: int = Field(1, ge=1, le=100_000)
 
 
 class Answer(_Strict):
