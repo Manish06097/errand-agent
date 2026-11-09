@@ -206,7 +206,7 @@ Scope, part A (bounded execution): the remaining `RunOutcome` templates, `stop_r
 
 **Gate 3** between part A and part B, one page in `docs/design/GATE-03.md`: I sign the follow-up policy (which cancels notify and how, and what `contact_window` changes), the replacement rules (current preferences only, never widened without me) and the card and notification UX.
 
-Scope, part B (proactive follow-up): watcher for provider-cancel events, `followup_jobs` with states and the startup reconciler resuming unfinished jobs, pending cards on the cancelled booking invalidated, the signed policy, a follow-up message in the booking's conversation, replacement search within current preferences, a "Rebook" card with `replaces_booking_id` that needs a fresh approval, notifications table, user-level SSE stream and a bell.
+Scope, part B (proactive follow-up): watcher for provider-cancel events, `followup_jobs` with states and the startup reconciler resuming unfinished jobs, pending cards on the cancelled booking invalidated, the signed policy, a follow-up in its own conversation (`kind=followup`, one `proactive` line in the booking's conversation, per Gate 3 decision 4), replacement search within current preferences, a "Rebook" card with `replaces_booking_id` that needs a fresh approval, notifications table, user-level SSE stream and a bell.
 
 Acceptance:
 - S44, S45 and S63 pass; S39, S40 and S41 pass.
