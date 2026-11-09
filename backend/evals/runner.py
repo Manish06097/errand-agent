@@ -1299,6 +1299,8 @@ def _notes(scenario: Scenario, records: invariants.Records) -> str:
         f"claims_checked={notes.get('claims_checked', 'not checked')}; "
         f"inv03_books={notes.get('inv03_books_checked', 'not checked')}; "
         f"inv03_resends={notes.get('inv03_resends_checked', 'not checked')}; "
+        f"inv03_liveness={notes.get('inv03_liveness_checked', 'not checked')}; "
+        f"inv03_bounds={notes.get('inv03_count_bounds_checked', 'not checked')}; "
         "never_mind=vacuous until M6; "
         f"attempts_checked={notes.get('attempts_checked', 'not checked')}; "
         f"attempts_unsettled={notes.get('attempts_unsettled', 'not checked')}; "

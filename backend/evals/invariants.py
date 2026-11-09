@@ -1129,6 +1129,7 @@ def inv03_a_resend_follows_the_status_first_rule(rec: Records) -> Violations:
                 )
 
     # 2. One key per hold; every re-send follows a not_found while the hold was live.
+    liveness_checked = unreadable = 0
     by_hold: dict[str, list[_Call]] = defaultdict(list)
     for call in books:
         by_hold[str(call.hold)].append(call)
@@ -1145,8 +1146,18 @@ def inv03_a_resend_follows_the_status_first_rule(rec: Records) -> Violations:
             seen = rows.get(between[-1].world_seq) if between[-1].world_seq else None
             expires = rec.world_holds.get(hold, {}).get("expires_at")
             at = None if seen is None else seen.get("done_ts") or seen.get("sim_ts")
-            if expires is not None and at is not None and int(at) >= int(expires):
-                out.append(f"{nxt.key}: re-sent on {hold} after the hold had lapsed")
+            if expires is None or at is None:
+                # An invariant that cannot check says so; it never passes quietly.
+                unreadable += 1
+                out.append(
+                    f"{nxt.key}: re-sent on {hold}, but could not check that the hold was "
+                    f"live (status call {'unseen' if seen is None else 'seen'} by the world, "
+                    f"hold {'missing' if expires is None else 'present'} in world_holds)"
+                )
+            else:
+                liveness_checked += 1
+                if int(at) >= int(expires):
+                    out.append(f"{nxt.key}: re-sent on {hold} after the hold had lapsed")
 
     # 3. A book that was not refused is followed by a status check on its key before any
     # card or the end of the run: the user hears only what get_booking_status says.
@@ -1169,12 +1180,14 @@ def inv03_a_resend_follows_the_status_first_rule(rec: Records) -> Violations:
     per_key: dict[str, int] = defaultdict(int)
     for call in books:
         per_key[str(call.key)] += 1
-    budget = (rec.booking or {}).get("max_same_key_retries")
+    # A record that lacks the budget is held to the default (1), not excused from the bound.
+    recorded = (rec.booking or {}).get("max_same_key_retries")
+    budget = int(recorded) if recorded is not None else 1
     for key, n in sorted(per_key.items()):
         if not rec.world_dedupes and n != 1:
             out.append(f"{key}: {n} book calls with dedupe off, exactly 1 allowed")
-        elif rec.world_dedupes and budget is not None and n > 1 + int(budget):
-            out.append(f"{key}: {n} book calls, at most {1 + int(budget)} allowed")
+        elif rec.world_dedupes and n > 1 + budget:
+            out.append(f"{key}: {n} book calls, at most {1 + budget} allowed")
     made: dict[str, list[str]] = defaultdict(list)
     for b in rec.world_bookings:
         if b["created_by_key"]:
@@ -1193,6 +1206,10 @@ def inv03_a_resend_follows_the_status_first_rule(rec: Records) -> Violations:
     rec.notes["inv03_books_checked"] = len(books)
     rec.notes["inv03_resends_checked"] = sum(max(0, len(g) - 1) for g in by_hold.values())
     rec.notes["inv03_abandoned_threads"] = len(gone)
+    rec.notes["inv03_liveness_checked"] = liveness_checked
+    rec.notes["inv03_liveness_unreadable"] = unreadable
+    rec.notes["inv03_count_bounds_checked"] = len(per_key)
+    rec.notes["inv03_budget_defaulted"] = recorded is None
     return out
 
 

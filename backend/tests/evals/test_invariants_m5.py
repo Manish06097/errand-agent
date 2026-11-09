@@ -10,6 +10,7 @@ off, a re-send straight after a timeout, two world bookings for one key, a book 
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,9 @@ def test_inv03_and_inv18_hold_and_count_what_they_checked(
         assert fails("INV-03", rec) == [] and fails("INV-18", rec) == []
     assert s23.notes["inv03_books_checked"] == 2 and s23.notes["inv03_resends_checked"] == 1
     assert s22.notes["inv03_resends_checked"] == 0
+    # What clauses 2 and 4 looked at: the one re-send's liveness, and one bound per key.
+    assert s23.notes["inv03_liveness_checked"] == 1 and s23.notes["inv03_liveness_unreadable"] == 0
+    assert s23.notes["inv03_count_bounds_checked"] == 1 and s22.notes["inv03_liveness_checked"] == 0
     assert s24.notes["attempts_unsettled"] == 1 and s69.notes["attempts_unsettled"] == 1
     assert s22.notes["attempts_unsettled"] == 0 and s22.notes["attempts_checked"] == 1
 
@@ -106,6 +110,27 @@ def test_inv03_fails_on_a_resend_after_the_hold_lapsed(s23: Records) -> None:
     for hold in doctored.world_holds.values():
         hold["expires_at"] = 1  # lapsed before every call the scenario made
     assert any("after the hold had lapsed" in v for v in fails("INV-03", doctored))
+
+
+def test_inv03_complains_when_it_cannot_read_whether_the_hold_was_live(s23: Records) -> None:
+    missing = copy.deepcopy(s23)
+    missing.world_holds.clear()
+    assert any("could not check that the hold was live" in v for v in fails("INV-03", missing))
+    unseen = copy.deepcopy(s23)
+    for call in _calls(_run_of(unseen, "book"), "get_booking_status"):
+        call.pop("world_seq", None)
+    assert any("could not check that the hold was live" in v for v in fails("INV-03", unseen))
+
+
+def test_inv03_holds_a_record_without_a_budget_to_the_default(s23: Records) -> None:
+    doctored = copy.deepcopy(s23)
+    records = _run_of(doctored, "book")
+    books, statuses = _calls(records, "book"), _calls(records, "get_booking_status")
+    not_found = {**copy.deepcopy(statuses[0]), "result": {"status": "not_found"}}
+    _insert_after(records, statuses[1], not_found, books[1], statuses[1])
+    doctored.booking = None
+    assert any("3 book calls, at most 2 allowed" in v for v in fails("INV-03", doctored))
+    assert doctored.notes["inv03_budget_defaulted"] is True
 
 
 def test_inv03_fails_on_an_outcome_shown_before_the_status_check(s23: Records) -> None:
@@ -225,6 +250,29 @@ def test_a_mismatch_the_agent_caught_is_not_an_inv01_violation_but_an_unnoticed_
     for intent in leftover.intents:
         intent["state"] = "succeeded"
     assert any("differs from the approved material" in v for v in fails("INV-01", leftover))
+
+
+def test_an_unchecked_provider_is_not_a_caught_mismatch_for_inv01(s65: Records) -> None:
+    """The hole this closes: a wrong booking plus a failed list_bookings. The check that
+    could not be finished is recorded as `check_incomplete`, never as a `mismatch`, so the
+    differing booking is still an INV-01 violation."""
+    doctored = copy.deepcopy(s65)
+    for r in doctored.all_records():
+        if r["type"] == "status.check":
+            r["mismatch"] = None
+            r["check_incomplete"] = True
+    assert any("differs from the approved material" in v for v in fails("INV-01", doctored))
+
+
+def test_a_booking_that_differs_keeps_its_id_on_the_intent_for_the_cancel_card(
+    s65: Records,
+) -> None:
+    """S65 leaves no known_bookings row; M9 reads the id from the intent's result_json."""
+    (intent,) = s65.intents
+    result = json.loads(intent["result_json"])
+    assert result["reason"] == "material_mismatch"
+    made = [b["booking_id"] for b in s65.world_bookings if b["created_by_key"]]
+    assert made == [result["booking_id"]]
 
 
 def test_the_default_set_includes_the_m5_invariants() -> None:
