@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from datetime import datetime, tzinfo
 
+from errand.agent.brief_ops import render_value
 from errand.approvals.confirm_grammar import suggestion
+from errand.domain.brief import Brief, BriefField
 from errand.domain.errand import Phase
 from errand.domain.material import BookMaterial
 from errand.domain.messages import (
     ActionCard,
+    BriefChip,
     CardReminder,
     MaterialLine,
     NearbyBooking,
@@ -41,6 +44,34 @@ def status_line(phase: Phase) -> str | None:
     return STATUS_LINES.get(phase)
 
 
+_CHIP_EVIDENCE_CHARS = 60
+_WINDOW_FIELDS = (BriefField.WINDOW, BriefField.NEW_WINDOW)
+
+
+def brief_chips(brief: Brief) -> list[BriefChip]:
+    """Every filled field of the brief as a chip, in field order (M8)."""
+    chips: list[BriefChip] = []
+    for name in BriefField:
+        fact = getattr(brief, name.value)
+        if fact is None:
+            continue
+        evidence = fact.prov.evidence
+        if evidence is not None and len(evidence) > _CHIP_EVIDENCE_CHARS:
+            evidence = evidence[: _CHIP_EVIDENCE_CHARS - 3] + "..."
+        chips.append(
+            BriefChip(
+                field=name,
+                value=render_value(fact),
+                source=fact.prov.source,
+                evidence=evidence,
+                window_label=fact.value.label
+                if name in (BriefField.WINDOW, BriefField.NEW_WINDOW)
+                else None,
+            )
+        )
+    return chips
+
+
 def rupees(amount: int) -> str:
     return f"₹{amount:,}"
 
@@ -66,6 +97,7 @@ def book_card(
     expires_at: datetime,
     nearby: list[BookingItem],
     tz: tzinfo,
+    brief: Brief | None = None,
 ) -> ActionCard:
     quote = material.quoted_price_inr
     delta = quote - search_price_inr
@@ -114,6 +146,7 @@ def book_card(
         nearby=near,
         material=material,
         status_line=STATUS_LINES[Phase.AWAITING_APPROVAL],
+        brief=brief_chips(brief) if brief is not None else [],
     )
 
 

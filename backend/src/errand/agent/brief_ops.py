@@ -30,6 +30,8 @@ from errand.domain.brief import (
     TimeWindowExpr,
     WindowFact,
 )
+from errand.domain.errand import Errand
+from errand.domain.windows import slot_fits
 from errand.world.contracts import Area, Service
 
 F = BriefField
@@ -249,6 +251,12 @@ def merge(
         set_fields.append(name)
     if not update:
         return brief, [], []
+    changed_service = F.SERVICE in set_fields and brief.service is not None
+    if changed_service and brief.issue is not None and F.ISSUE not in facts:
+        # A different service makes the old issue ("leaking tap") meaningless: it goes in
+        # the same merge, so the brief moves once (7.3, INVALIDATES).
+        update["issue"] = None
+        cleared.append(F.ISSUE)
     update["version"] = brief.version + 1
     return brief.model_copy(update=update), set_fields, cleared
 
@@ -257,6 +265,121 @@ def _same_value(a: object, b: object) -> bool:
     if hasattr(a, "model_dump") and hasattr(b, "model_dump"):
         return bool(a.model_dump() == b.model_dump())
     return a == b
+
+
+# ---------------------------------------------------------------- invalidation (7.3, 8.5)
+
+What = Literal["shortlist", "hold", "approval", "issue", "ranking"]
+Condition = Literal["held_slot_outside_window", "quote_over_budget", "provider_avoided"]
+
+
+@dataclass(frozen=True)
+class Rule:
+    """What a change to one field discards downstream.
+
+    `always` is discarded whenever the field's value changes. `when` is discarded only if
+    `condition` holds for the live hold and card. The shortlist is never re-filtered in
+    place: its slots were filtered by the old window and its candidates by the old
+    budget, so it is marked stale (the brief version moves, which stops `get_provider`
+    honouring it) and the planner's next `search_providers` rebuilds it.
+    """
+
+    always: tuple[What, ...]
+    when: tuple[What, ...] = ()
+    condition: Condition | None = None
+
+
+INVALIDATES: Mapping[BriefField, Rule] = {
+    F.SERVICE: Rule(always=("shortlist", "hold", "approval", "issue")),
+    F.AREA: Rule(always=("shortlist", "hold", "approval")),
+    F.WINDOW: Rule(
+        always=("shortlist",), when=("hold", "approval"), condition="held_slot_outside_window"
+    ),
+    F.BUDGET: Rule(always=("ranking",), when=("approval",), condition="quote_over_budget"),
+    F.PROVIDER_PREF: Rule(always=("ranking",), when=("approval",), condition="provider_avoided"),
+    F.TARGET_BOOKING: Rule(always=("shortlist", "hold", "approval")),
+}
+# What the user is told ("This card is out of date: you changed the day").
+CHANGED_WORDS: Mapping[BriefField, str] = {
+    F.SERVICE: "the service",
+    F.AREA: "the area",
+    F.WINDOW: "the day or time",
+    F.BUDGET: "the budget",
+    F.PROVIDER_PREF: "the provider",
+    F.TARGET_BOOKING: "the booking",
+}
+
+
+@dataclass(frozen=True)
+class Invalidation:
+    """One thing a change discards: the `invalidate {what, id, reason}` trace record."""
+
+    what: What
+    id: str
+    reason: str
+    field: BriefField
+
+
+def _condition_holds(cond: Condition, new_brief: Brief, errand: Errand, tz: tzinfo) -> bool:
+    hold = errand.hold
+    if cond == "held_slot_outside_window":
+        if new_brief.window is None:
+            return True  # a cleared window admits no slot
+        if hold is None:
+            return errand.approval_id is not None  # a card with no hold cannot be shown to fit
+        return not slot_fits(hold.slot, new_brief.window.value, tz)
+    if hold is None:
+        return False
+    if cond == "quote_over_budget":
+        budget = new_brief.budget_max_inr
+        return (
+            budget is not None
+            and isinstance(budget.value, int)
+            and (hold.quoted_price_inr > budget.value)
+        )
+    pref = new_brief.provider_pref
+    return pref is not None and hold.provider_id in pref.value.avoid_ids
+
+
+def _exists(what: What, old_brief: Brief, new_brief: Brief, errand: Errand) -> str | None:
+    """The id of the thing a rule would discard, or None if there is nothing to discard."""
+    if what in ("shortlist", "ranking"):
+        sl = errand.shortlist
+        return None if sl is None else f"shortlist_v{sl.brief_version}"
+    if what == "hold":
+        return errand.hold.hold_id if errand.hold is not None else None
+    if what == "approval":
+        return errand.approval_id
+    # the merge cleared it: there was an issue and now there is none
+    return "issue" if old_brief.issue is not None and new_brief.issue is None else None
+
+
+def invalidations(
+    field: BriefField, old_brief: Brief, new_brief: Brief, errand: Errand, tz: tzinfo
+) -> list[Invalidation]:
+    """What the change of `field` from `old_brief` to `new_brief` discards. Pure.
+
+    `errand` is the errand before the change (its shortlist, hold and card). A field
+    whose value did not change discards nothing; a field with no row (the free-text
+    ones) neither. M11's forget and correct call this too.
+    """
+    rule = INVALIDATES.get(field)
+    old, new = getattr(old_brief, field.value), getattr(new_brief, field.value)
+    if rule is None or (old is not None and new is not None and _same_value(old.value, new.value)):
+        return []
+    if old is None and new is None:
+        return []
+    reason = f"{field.value}_changed"
+    kinds: list[tuple[What, str]] = [(w, reason) for w in rule.always]
+    if rule.condition is not None and _condition_holds(rule.condition, new_brief, errand, tz):
+        why = {"quote_over_budget": "quote_over_budget", "provider_avoided": "provider_avoided"}
+        kinds += [(w, why.get(rule.condition, reason)) for w in rule.when]
+    out: list[Invalidation] = []
+    for what, why_code in kinds:
+        ident = _exists(what, old_brief, new_brief, errand)
+        if ident is not None:
+            out.append(Invalidation(what, ident, why_code, field))
+    return out
 
 
 def known_lines(brief: Brief) -> list[str]:

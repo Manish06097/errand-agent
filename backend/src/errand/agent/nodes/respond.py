@@ -30,13 +30,14 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from errand.agent import cards
+from errand.agent import cards, invalidation
 from errand.agent.claim_guard import BOOKING_ID, guard
 from errand.agent.deps import RunDeps
 from errand.agent.records import live_approval, verified_records
-from errand.agent.state import ThreadState
-from errand.agent.templates import internal_error, render
+from errand.agent.state import CardChange, ThreadState
+from errand.agent.templates import internal_error, render, shortlist_card
 from errand.clock import to_ms
+from errand.domain.brief import BriefField
 from errand.domain.errand import Errand, Phase
 from errand.domain.inbound import UserMessage
 from errand.domain.messages import (
@@ -56,6 +57,7 @@ from errand.domain.outcomes import (
     ConfirmHint,
     Declined,
     HoldFailed,
+    NoAction,
     Options,
     OverBudget,
     PendingCheck,
@@ -149,6 +151,8 @@ class _Respond:
         "Nothing booked for this request yet" under it (8.7)."""
         assert self.errand is not None
         phase = self.errand.phase
+        if self.state.card_changes:
+            return _card_change_line(self.state.card_changes[-1])
         if (
             self.cited_booking
             and phase in (Phase.GATHERING, Phase.COMPARING)
@@ -173,10 +177,36 @@ class _Respond:
         if result is not None:
             return await self._render_step(result, live)
         plan = await self._guarded(self.state.plan_result)
+        if isinstance(plan, NoAction):
+            return self._no_action()
         outcome, body = render(plan, self.errand, self.deps.run_id, self.deps.tz)
         if outcome is RunOutcome.ASKED_USER:
             self.asked = True
         return outcome, [body]
+
+    def _no_action(self) -> tuple[RunOutcome, list[MessageBody]]:
+        """Twice prose about booking and no proposal (10.4): the options stay on screen."""
+        bodies: list[MessageBody] = []
+        shortlist = self.errand.shortlist if self.errand else None
+        current = (
+            self.errand is not None
+            and shortlist is not None
+            and shortlist.brief_version == self.errand.brief.version
+            and bool(shortlist.candidates)
+        )
+        if current and self.errand is not None:
+            bodies.append(shortlist_card(self.errand, None, self.deps.tz))
+        bodies.append(
+            OutcomeNotice(
+                outcome=RunOutcome.MODEL_NO_PROGRESS,
+                text=(
+                    "I couldn't turn that into a booking, so nothing was booked. "
+                    "Pick a time on the options, or tell me which one you want."
+                ),
+                actions=[NoticeAction(kind="options", label="See options")],
+            )
+        )
+        return RunOutcome.MODEL_NO_PROGRESS, bodies
 
     async def _guarded(self, plan: PlanResult | None) -> PlanResult | None:
         """The claim guard over every piece of model text this result carries."""
@@ -381,6 +411,22 @@ class _Respond:
                     message_id=message.message_id,
                     body={**message.body, "typed_grant_ok": message.typed_grant_ok},
                 )
+
+
+def _card_change_line(change: CardChange) -> str:
+    """The status line after a correction touched the card on screen (8.5)."""
+    if change.outcome == "invalidated":
+        words = invalidation.changed_words([BriefField(f) for f in change.changed_fields])
+        return f"This card is out of date: you changed {words}. Nothing was booked."
+    if change.status == "consumed":
+        return (
+            "You had already approved the earlier card, so that booking goes ahead as shown; "
+            "your change applies to anything after it."
+        )
+    return (
+        f"The earlier card was already {change.status or 'closed'}, "
+        "so your change did not affect it."
+    )
 
 
 def _failed(result: ActionFailed) -> OutcomeNotice:

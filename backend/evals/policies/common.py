@@ -183,3 +183,13 @@ def answer(request: ScriptedRequest, text: str) -> AIMessage:
         usage_metadata=_usage(request, 30 + len(text) // 4),
         response_metadata={"stop_reason": "end_turn", "model_name": "claude-opus-5-5"},
     )
+
+
+def answer_with_thinking(request: ScriptedRequest, text: str, note: str = "Say it.") -> AIMessage:
+    """A final answer that carries a thinking block before its text, as a real model's does.
+    The block has a signature, so a history edit would be caught by the prefix check."""
+    return AIMessage(
+        content=[_thinking(request, note), {"type": "text", "text": text}],
+        usage_metadata=_usage(request, 30 + len(text) // 4),
+        response_metadata={"stop_reason": "end_turn", "model_name": "claude-opus-5-5"},
+    )

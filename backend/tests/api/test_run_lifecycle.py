@@ -122,9 +122,11 @@ async def test_a_limit_notice_with_nothing_known_says_only_that_it_stopped(
     assert notice["text"] == "I hit my step limit for this turn, so I stopped. Nothing was booked."
 
 
-async def test_a_search_that_finds_nobody_is_a_reply_not_an_empty_shortlist(
+async def test_a_search_that_finds_nobody_is_a_code_template_not_an_empty_shortlist(
     tmp_path: Path,
 ) -> None:
+    """The no-fit template (M8): REPLIED, the errand stays COMPARING with an empty
+    shortlist, and code names what could widen, window then budget then area."""
     async with harness(tmp_path, world()) as h:
         await h.say("Find a plumber for my kitchen tap this week, mornings only, under ₹100.")
         view = await h.say("indiranagar")
@@ -132,11 +134,20 @@ async def test_a_search_that_finds_nobody_is_a_reply_not_an_empty_shortlist(
         state = (await h.conversation())["state"]
     assert [r["op"] for r in op_log].count("search_providers") == 1
     assert state["errand"]["shortlist"]["candidates"] == []
+    assert state["errand"]["phase"] == "comparing"
     assert view.outcome == "REPLIED"
-    assert [m["body"]["type"] for m in view.messages] == ["text"]
-    assert view.messages[0]["body"]["text"] == (
-        "No provider has a free slot in that window and budget."
+    assert [m["body"]["type"] for m in view.messages] == ["notice"]
+    notice = view.messages[0]["body"]
+    assert notice["text"] == (
+        "No provider has a free slot for plumber, Indiranagar, Mon 9 Nov - Sun 15 Nov, "
+        "07:00-12:00, under \u20b9100. I can widen the dates or times, your budget or the area. "
+        "Which would you like?"
     )
+    assert [(a["kind"], a["label"], a["reply"]) for a in notice["actions"]] == [
+        ("quick_reply", "Any time of day", "this week, any time of day"),
+        ("quick_reply", "Raise budget to \u20b9500", "up to \u20b9500"),
+        ("quick_reply", "Try another area", "try a different area"),
+    ]
 
 
 async def test_the_tool_call_cap_ends_limit_reached(tmp_path: Path) -> None:

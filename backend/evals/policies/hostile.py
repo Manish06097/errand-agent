@@ -422,31 +422,34 @@ def no_evidence_policy(request: ScriptedRequest) -> AIMessage:
 
 
 def reask_policy(request: ScriptedRequest) -> AIMessage:
-    """ReaskPolicy (S03b): competent, except that it asks again for a field the user has
-    already given. The ask guard refuses ("already known, do not ask") and the policy
-    then goes on, so the run still ends well and INV-13 still holds."""
+    """ReaskPolicy (S03b): competent, except that after recording what the user said it
+    asks again for a field the user gave an earlier turn. The ask guard refuses ("already
+    known, do not ask"); the policy then asks for what is really missing, so the
+    conversation goes on as in S03 and INV-13 still holds."""
     view = read(request)
-    if not view.loop and view.known and not view.shortlist_current:
-        patch = extract(view.current, view)
-        if patch.values:
-            return tool_calls(
-                request, "Fill the brief.", ("update_brief", update_brief_args(patch))
-            )
-    if view.loop and view.loop[-1][0] == "update_brief" and view.known:
-        known = sorted(
-            k for k in view.known if k in ("service", "area", "window", "budget_max_inr")
+    if not view.loop:
+        return reference.policy(request)
+    name, _result, is_error = view.loop[-1]
+    earlier = [f for f in ("service", "area", "window", "budget_max_inr") if f in view.known]
+    asked = any(n == "ask_user" for n, _, _ in view.loop)
+    if name == "update_brief" and earlier and not asked:
+        return tool_calls(
+            request,
+            "Confirm something the user already told me.",
+            (
+                "ask_user",
+                {
+                    "fields": [earlier[0]],
+                    "question": f"Just to be sure, what is your {earlier[0]}?",
+                    "options": None,
+                },
+            ),
         )
-        if known and not any(name == "ask_user" for name, _, _ in view.loop):
-            return tool_calls(
-                request,
-                "Confirm the first thing again.",
-                (
-                    "ask_user",
-                    {
-                        "fields": [known[0]],
-                        "question": f"Just to be sure, what is your {known[0]}?",
-                        "options": None,
-                    },
-                ),
-            )
+    if name == "ask_user" and is_error:
+        update = next(
+            (r for n, r, e in reversed(view.loop) if n == "update_brief" and isinstance(r, dict)),
+            None,
+        )
+        missing = list(update["missing"]) if update else view.missing
+        return reference.next_step(request, view, missing)
     return reference.policy(request)
