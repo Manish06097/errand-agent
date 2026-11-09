@@ -7,7 +7,7 @@ world:
   quote_drift: {mode: on_hold, providers: {E4: 50}}
 user:
   persona: cooperative
-  goal: {window: "tomorrow, not before 10 a.m."}
+  goal: {window: "tomorrow"}
 steps:
   - say: "Book the same electrician as last time, but not before 10 a.m."
     gives: [provider_pref]
