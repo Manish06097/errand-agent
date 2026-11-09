@@ -356,6 +356,21 @@ class MemoriesRepo:
         ) as cur:
             return [(r[0], r[1], r[2], r[3]) for r in await cur.fetchall()]
 
+    async def user_cards(self, user_id: str) -> list[tuple[str, str, str | None]]:
+        """(approval_id, card_json, memory_ids_json) of every approval in the user's chats."""
+        async with self._conn.execute(
+            "SELECT a.approval_id, a.card_json, a.memory_ids_json FROM approvals a "
+            "JOIN conversations c ON c.conversation_id = a.conversation_id "
+            "WHERE c.user_id = ? ORDER BY a.requested_at, a.rowid",
+            (user_id,),
+        ) as cur:
+            return [(r[0], r[1], r[2]) for r in await cur.fetchall()]
+
+    async def set_card_json(self, approval_id: str, card_json: str) -> None:
+        await self._conn.execute(
+            "UPDATE approvals SET card_json = ? WHERE approval_id = ?", (card_json, approval_id)
+        )
+
     async def set_message_body(self, message_id: str, body_json: str) -> None:
         await self._conn.execute(
             "UPDATE messages SET body_json = ? WHERE message_id = ?", (body_json, message_id)

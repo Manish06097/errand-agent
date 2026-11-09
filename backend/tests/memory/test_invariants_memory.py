@@ -399,6 +399,16 @@ def test_inv19_fails_on_plaintext_of_a_forgotten_value_left_in_messages(rec: Rec
     assert any("plaintext of forgotten" in v for v in fails("INV-19", rec))
 
 
+def test_inv19_fails_on_plaintext_of_a_forgotten_value_left_in_an_approval(rec: Records) -> None:
+    rec = copy.deepcopy(rec)
+    rec.notes["memory_canaries"] = [{"text": "CANARY-FORGOTTEN-7731", "kind": "forgotten"}]
+    base = {"approval_id": "ap_x", "card_json": "{}", "material_json": "{}"}
+    rec.approvals = [{**base, "card_json": '{"brief":[{"value":"Canary-Forgotten-7731"}]}'}]
+    assert any("ap_x: plaintext of forgotten" in v for v in fails("INV-19", rec))
+    rec.approvals = [{**base, "material_json": '{"note":"canary forgotten 7731"}'}]
+    assert any("ap_x: plaintext of forgotten" in v for v in fails("INV-19", rec))
+
+
 def test_inv20_fails_when_s4_renders_an_id_the_manifest_does_not_list(rec: Records) -> None:
     rec = copy.deepcopy(rec)
     victim = next(

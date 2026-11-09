@@ -19,6 +19,11 @@ AREA_MESSAGE = (
 )
 
 
+BOOK_MESSAGE = (
+    "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+)
+
+
 def service_of(h: Any) -> MemoryService:
     service: MemoryService = h.app.state.memory
     return service
@@ -140,26 +145,37 @@ async def test_keep_on_a_suggestion_with_pending_siblings_succeeds_over_http(
 async def test_after_a_forget_the_database_holds_no_plaintext_and_the_trace_reads_masked(
     tmp_path: Path,
 ) -> None:
-    async with harness(tmp_path, world()) as h:
-        await add(h.client, "home_area", "global", "indiranagar", "a1")
-        view = await h.say(AREA_MESSAGE)
+    """With a card pending: its brief chips restate the area from memory, and the read serves
+    `approvals.card_json` in place of the redacted message body, so the approval row is
+    part of what a forget must scrub (the dump covers every table)."""
+    async with harness(tmp_path, world(), memory_seed="memory_demo") as h:
+        view = await h.say(BOOK_MESSAGE)
         run_id = view.run_id
+        async with h.app.state.manager.db.session() as repos:
+            pending = await repos.approvals.list_for_conversation(h.conversation_id)
+        assert [a.status for a in pending] == ["pending"]
+        assert "indiranagar" in pending[0].card_json.lower()  # the leak path is really there
 
         trace = next((tmp_path / "traces").rglob(f"{run_id}.jsonl"))
         assert b"Indiranagar" in trace.read_bytes()
 
-        done = await h.client.delete("/api/memory/m-01", params={"client_action_id": "d1"})
+        listed = (await h.client.get("/api/memory")).json()["preferences"]
+        memory_id = next(r["memory_id"] for r in listed if r["key"] == "home_area")
+        done = await h.client.delete(f"/api/memory/{memory_id}", params={"client_action_id": "d1"})
         assert done.status_code == 200 and done.json()["messages_redacted"] >= 1
+        assert done.json()["cards_invalidated"] == [pending[0].approval_id]
 
         async with h.app.state.manager.db.session() as repos:
             dump = "\n".join([line async for line in repos.conn.iterdump()])
+            cards = await repos.approvals.list_for_conversation(h.conversation_id)
         assert "ndiranagar" not in dump and "ndira nagar" not in dump.lower()
+        assert [c.status for c in cards] == ["invalidated"]  # the card stays, without the value
 
-        # the user's own message was overwritten in the transcript
+        # the read serves the stored card: the user's own words and the card are both clean
         transcript = (await h.client.get(f"/api/conversations/{h.conversation_id}")).json()
+        assert "ndiranagar" not in str(transcript).lower()
         texts = [m["body"].get("text", "") for m in transcript["messages"]]
         assert any("[removed at your request]" in t for t in texts)
-        assert not any("ndiranagar" in t for t in texts)
 
     # outside agent.sqlite: the raw file keeps the value, every user-facing read masks it
     raw = read_trace(trace)
@@ -171,32 +187,34 @@ async def test_after_a_forget_the_database_holds_no_plaintext_and_the_trace_read
     assert [r["type"] for r in masked.records] == [r["type"] for r in raw.records]
 
 
-BOOK_FROM_MEMORY = "Book a plumber for my kitchen tap this week, mornings only, under ₹1,500."
+async def test_a_correct_blanks_the_old_area_on_the_card_it_invalidates(tmp_path: Path) -> None:
+    async with harness(tmp_path, world(), memory_seed="memory_demo") as h:
+        await h.say("Book a plumber for my kitchen tap this week, mornings only, under ₹1,500.")
+        listed = (await h.client.get("/api/memory")).json()["preferences"]
+        memory_id = next(r["memory_id"] for r in listed if r["key"] == "home_area")
+        fixed = await h.client.patch(
+            f"/api/memory/{memory_id}", json={"value": "koramangala", "client_action_id": "p1"}
+        )
+        assert fixed.status_code == 200 and len(fixed.json()["cards_invalidated"]) == 1
+        read = (await h.client.get(f"/api/conversations/{h.conversation_id}")).json()
+        card = next(m for m in read["messages"] if m["body"].get("type") == "action")
+        assert card["approval"]["status"] == "invalidated"
+        assert "ndiranagar" not in str(card["body"]).lower()
+        area = next(c for c in card["body"]["brief"] if c["field"] == "area")
+        assert area["value"] == "[updated]"
 
 
-async def test_a_forget_with_a_pending_card_leaves_no_plaintext_in_approvals_or_the_read(
+async def test_the_insert_scrub_masks_a_forgotten_value_in_a_card_about_to_be_stored(
     tmp_path: Path,
 ) -> None:
-    """The card's brief chips restate the area from memory. The read serves `card_json`, not
-    the redacted message body, so the approval row must be scrubbed by the forget itself."""
     async with harness(tmp_path, world(), memory_seed="memory_demo") as h:
-        await h.say(BOOK_FROM_MEMORY)
+        listed = (await h.client.get("/api/memory")).json()["preferences"]
+        memory_id = next(r["memory_id"] for r in listed if r["key"] == "home_area")
+        await h.client.delete(f"/api/memory/{memory_id}", params={"client_action_id": "d1"})
         async with h.app.state.manager.db.session() as repos:
-            pending = [a for a in await repos.approvals.list_for_conversation(h.conversation_id)]
-        assert [a.status for a in pending] == ["pending"]
-        assert "indiranagar" in pending[0].card_json.lower()  # the repro is real
-
-        memory_id = next(
-            r["memory_id"]
-            for r in (await h.client.get("/api/memory")).json()["preferences"]
-            if r["key"] == "home_area"
+            hashes = await repos.memories.hashes_for_user("u_demo")
+        card = (
+            '{"brief":[{"field":"area","value":"Indiranagar","source":"memory","evidence":null}]}'
         )
-        done = await h.client.delete(f"/api/memory/{memory_id}", params={"client_action_id": "d1"})
-        assert done.status_code == 200
-
-        async with h.app.state.manager.db.session() as repos:
-            rows = await repos.approvals.list_for_conversation(h.conversation_id)
-        for row in rows:
-            assert "ndiranagar" not in (row.card_json + row.material_json).lower()
-        read = (await h.client.get(f"/api/conversations/{h.conversation_id}")).json()
-        assert "ndiranagar" not in str(read).lower()
+        scrubbed = service_of(h).card_scrubber()(card, hashes)
+        assert "ndiranagar" not in scrubbed and "[removed at your request]" in scrubbed

@@ -1519,6 +1519,11 @@ def inv19_memory_authority(rec: Records) -> Violations:
         for m in rec.messages:
             if _contains_run(_words(json.dumps(m["body"], ensure_ascii=False)), needle):
                 out.append(f"{m['message_id']}: plaintext of forgotten {canary['text']!r}")
+        # the read serves approvals.card_json in place of the message body, so it is scanned too
+        for a in rec.approvals:
+            stored = _words(f"{a['card_json']} {a['material_json']}")
+            if _contains_run(stored, needle):
+                out.append(f"{a['approval_id']}: plaintext of forgotten {canary['text']!r}")
     return out
 
 

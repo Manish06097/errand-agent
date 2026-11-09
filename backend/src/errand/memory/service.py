@@ -13,7 +13,7 @@ Context building and the model gateway never import this module: they read throu
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import tzinfo
 from typing import Any
 
@@ -25,6 +25,7 @@ from errand.memory.evidence import Checked, EvidenceRefused, ValueCheck, check_e
 from errand.memory.evidence import value_in_quote as default_value_check
 from errand.memory.hmac_key import hmac_hex
 from errand.memory.registry import (
+    PREFILL_FIELD,
     KeySpec,
     RegistryError,
     conflicts,
@@ -366,6 +367,7 @@ class MemoryService:
         cards = await self._invalidate_cards(
             repos, [r for r in replaced if r.key in self._card_keys]
         )
+        await self._scrub_cards(repos, user_id, replaced, {}, only_ids=set(cards))
         await mem.bump_epoch(user_id)
         stored = await mem.get(new_id)
         assert stored is not None
@@ -386,6 +388,58 @@ class MemoryService:
                 if await repos.approvals.invalidate(approval_id, "request_changed"):
                     done.append(approval_id)
         return done
+
+    def card_scrubber(self) -> Callable[[str, Mapping[str, str]], str]:
+        """For `approvals.service.create`: mask, in a card about to be inserted, every brief
+        chip text that hashes like a forgotten value (the insert-time half of the scrub)."""
+
+        def scrub(card_json: str, hashes: Mapping[str, str]) -> str:
+            card = json.loads(card_json)
+            chips = card.get("brief")
+            if not hashes or not isinstance(chips, list):
+                return card_json
+            for chip in chips:
+                for name in ("value", "evidence"):
+                    text = chip.get(name) if isinstance(chip, dict) else None
+                    if isinstance(text, str):
+                        masked = mask.mask_text(
+                            text, self._key, hashes, marker=redaction.FORGOTTEN_MARKER
+                        )
+                        chip[name] = masked.text
+            return json.dumps(card, ensure_ascii=False, separators=(",", ":"))
+
+        return scrub
+
+    async def _scrub_cards(
+        self,
+        repos: Repos,
+        user_id: str,
+        rows: Sequence[MemoryRow],
+        forms: dict[str, tuple[str, ...]],
+        *,
+        only_ids: set[str] | None,
+    ) -> None:
+        """Blank the old value in the stored cards (`approvals.card_json`), which the read
+        serves in place of the redacted message body. A forget redacts every surface form in
+        every card of the user and blanks the memory-sourced chip of the forgotten fields on
+        the cards that list the row; a correct blanks that chip on the cards it just
+        invalidated (`only_ids`). Status and the fingerprinted material are untouched."""
+        ids = {r.memory_id for r in rows}
+        fields = {PREFILL_FIELD[r.key] for r in rows if r.key in PREFILL_FIELD}
+        all_forms = tuple(f for fs in forms.values() for f in fs)
+        marker = redaction.FORGOTTEN_MARKER if forms else "[updated]"
+        for approval_id, card_json, listed in await repos.memories.user_cards(user_id):
+            if only_ids is not None and approval_id not in only_ids:
+                continue
+            depends = listed is not None and bool(ids & set(json.loads(listed)))
+            card = json.loads(card_json)
+            new, changed = redaction.redact_card_chips(
+                card, all_forms, blank_fields=fields if depends else (), marker=marker
+            )
+            if changed:
+                await repos.memories.set_card_json(
+                    approval_id, json.dumps(new, ensure_ascii=False, separators=(",", ":"))
+                )
 
     async def _refuse_contradiction(
         self, mem: MemoriesRepo, user_id: str, spec: KeySpec, scope: str, value: Any
@@ -619,6 +673,7 @@ class MemoryService:
                 await self._forget_row(repos, r, now, actor="user")
             cleared = await self._redact_messages(repos, user_id, chain, forms, span_hashes, now)
             archived = await self._cascade_archives(repos, user_id, set(ids), forms)
+            await self._scrub_cards(repos, user_id, chain, forms, only_ids=None)
             for r in chain:
                 await mem.add_hashes(
                     r.memory_id,
