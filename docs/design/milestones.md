@@ -129,7 +129,7 @@ Acceptance:
 
 ## M8. Conversation quality
 
-Scope: `TimeWindowExpr` and `timewin.resolve`, `INVALIDATES` table and `invalidate` records, card invalidation on corrections, brief chips with provenance, value-bound evidence (section 10.7), out-of-coverage template, the "Why this order" rendering of the score parts and the exclusion UX (the ranking function itself landed in M10), reprompt for missing proposals, `NoEvidencePolicy`, `MatchingQuotePolicy` and `ReaskPolicy`.
+Scope: `TimeWindowExpr` and `timewin.resolve`, `INVALIDATES` table and `invalidate` records, card invalidation on corrections, brief chips with provenance, value-bound evidence (section 10.7), out-of-coverage template, the "Why this order" rendering of the score parts and the exclusion UX (the ranking function itself landed in M10), reprompt for missing proposals, `NoEvidencePolicy`, `MatchingQuotePolicy` and `ReaskPolicy`, and the no-fit template (a search that finds nobody ends `REPLIED` with a code message naming what could widen, window then budget then area, as quick replies; the M3 handoff).
 - The gate 2 budget split (architecture 13.1), applied here because `not_before`/`not_after` take `update_brief` from 984 to about 1,080 and push the tool list past its old cap: S2 3,800 with the 400-token preamble inside it, S4 600, S6 1,000, S8 2,300 as a floor, slack 200. A config test fails if the caps do not sum to 12,000, and a test renders the bound tool list and fails over S2's cap. `INVALIDATES` lists, per brief field, whether a change invalidates a pending card; M11's forget and correct reuse it.
 
 Acceptance:
