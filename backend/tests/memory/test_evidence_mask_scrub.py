@@ -57,6 +57,60 @@ def test_each_missing_piece_of_evidence_is_refused_with_its_reason(
     assert err.value.reason == reason
 
 
+@pytest.mark.parametrize(
+    ("message", "quote", "key", "value"),
+    [
+        # decision 3's own example, quoted narrowly out of the one-off sentence
+        ("this time I prefer after 5 pm", "I prefer after 5 pm", "earliest_time", "17:00"),
+        ("For now I live in Koramangala", "I live in Koramangala", "home_area", "koramangala"),
+        (
+            "Just for this booking: I always want mornings, never before 10 am",
+            "never before 10 am",
+            "earliest_time",
+            "10:00",
+        ),
+        (
+            "Just for this booking: I always want mornings, never before 10 am",
+            "I always want mornings, never before 10 am",
+            "earliest_time",
+            "10:00",
+        ),
+        (
+            "Thanks! Today I always want it after 10 am\nok",
+            "I always want it after 10 am",
+            "earliest_time",
+            "10:00",
+        ),
+    ],
+)
+def test_the_one_off_veto_reads_the_whole_sentence_not_just_the_quote(
+    message: str, quote: str, key: str, value: object
+) -> None:
+    with pytest.raises(EvidenceRefused) as err:
+        _check(message, quote, key, value)
+    assert err.value.reason == "one_off"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Book me a plumber today. I always want to start after 10 am",  # veto in another sentence
+        "This time is fine; I always want to start after 10 am",  # another clause
+        "I have 10.5 hours free today\nI always want to start after 10 am",  # another line
+    ],
+)
+def test_a_veto_in_another_sentence_does_not_block_a_standing_preference(message: str) -> None:
+    got = _check(message, "I always want to start after 10 am")
+    assert got.cue == "always"
+
+
+def test_the_cue_must_still_be_inside_the_quote() -> None:
+    # the cue sits outside the quote: quoting the value alone is not evidence
+    with pytest.raises(EvidenceRefused) as err:
+        _check("I always want to start after 10 am", "start after 10 am")
+    assert err.value.reason == "no_cue"
+
+
 def test_a_quote_the_user_never_wrote_is_refused_even_if_it_has_the_cue() -> None:
     # S16: a review's text is not the user's message.
     with pytest.raises(EvidenceRefused) as err:
