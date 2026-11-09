@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from errand.approvals.confirm_grammar import Typed, classify, forbidden_content
+from errand.approvals.confirm_grammar import Typed, classify, forbidden_content, suggestion
 
 GRANTS = {
     "book": [
@@ -63,3 +63,29 @@ def test_everything_else_is_an_ordinary_message(text: str) -> None:
 )
 def test_forbidden_content_is_named(text: str, why: str) -> None:
     assert forbidden_content(text) == why
+
+
+# ---------------------------------------------------------------- Rebook (N3, 14)
+
+
+def test_rebook_it_grants_only_on_a_card_that_replaces_a_booking() -> None:
+    for text in ("rebook it", "Rebook it!", "yes rebook it", "please rebook it"):
+        assert classify(text, "book", rebook=True) is Typed.GRANT, text
+        assert classify(text, "book") is Typed.OTHER, text
+        assert classify(text, "cancel", rebook=True) is Typed.OTHER, text
+
+
+def test_book_it_still_grants_on_both_kinds_of_book_card() -> None:
+    for rebook in (False, True):
+        assert classify("book it", "book", rebook=rebook) is Typed.GRANT
+        assert classify("yes book it", "book", rebook=rebook) is Typed.GRANT
+
+
+def test_a_rebook_phrase_still_obeys_the_forbidden_content_rules() -> None:
+    for text in ("rebook it for tuesday", "rebook it but at 11", "don't rebook it", "rebook it 2"):
+        assert classify(text, "book", rebook=True) is Typed.OTHER, text
+
+
+def test_the_hint_names_the_phrase_for_the_card() -> None:
+    assert suggestion("book") == "book it"
+    assert suggestion("book", rebook=True) == "rebook it"

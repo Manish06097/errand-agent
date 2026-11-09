@@ -4,7 +4,8 @@ One frozen model per action, schema version `v=1`. The fingerprint is a hash of 
 canonical JSON of exactly these fields, so anything that should invalidate an approval
 when it changes has to be a field here, and nothing else may be:
 
-- book: action, user, provider, service, slot start and end, the **held** quote, and
+- book: action, user, provider, service, slot start and end, the **held** quote,
+  `replaces_booking_id` (only on a Rebook; absent from the JSON otherwise) and
   `same_service_nearby`, the sorted ids of the user's confirmed bookings of the same
   service within a day of the slot (the card shows them, so the click covers them);
 - cancel: action, user, booking, provider, slot start and the booking's status;
@@ -25,7 +26,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictInt
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StrictInt,
+    model_serializer,
+)
 
 from errand.clock import IST
 from errand.world.contracts import Service
@@ -72,6 +81,16 @@ class BookMaterial(_Material):
     slot_end: IstTime
     quoted_price_inr: StrictInt
     same_service_nearby: BookingIds = Field(default_factory=list)
+    # A Rebook (14): the cancelled booking this one replaces. Left out of the canonical
+    # JSON when None, so a plain book's fingerprint is exactly what it was before.
+    replaces_booking_id: str | None = Field(default=None, min_length=1)
+
+    @model_serializer(mode="wrap")
+    def _omit_replaces_when_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if data.get("replaces_booking_id") is None:
+            data.pop("replaces_booking_id", None)
+        return data
 
 
 class CancelMaterial(_Material):

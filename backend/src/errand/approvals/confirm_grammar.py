@@ -6,6 +6,8 @@ and trailing punctuation. Nothing is inferred: there is no model, no fuzzy match
 synonym list beyond this table.
 
     book:        book it, yes book it, confirm, confirm booking
+    rebook card: the book phrases, plus rebook it, yes rebook it (a card whose material
+                 has `replaces_booking_id`; "rebook it" is nothing on a plain book card)
     cancel:      cancel it, yes cancel it, confirm cancellation
     reschedule:  move it, yes move it, confirm
 
@@ -33,6 +35,7 @@ PHRASES: dict[Action, frozenset[str]] = {
     "cancel": frozenset({"cancel it", "confirm cancellation"}),
     "reschedule": frozenset({"move it", "confirm"}),
 }
+REBOOK_PHRASES: frozenset[str] = frozenset({"rebook it"})
 # "yes book it" is in the table above as "book it" with the optional "yes"; the
 # table in 8.3 lists both spellings, and both are accepted.
 BARE_ACKS = frozenset(
@@ -125,11 +128,12 @@ def _core(normalised: str) -> str:
     return " ".join(words)
 
 
-def classify(text: str, action: Action) -> Typed:
+def classify(text: str, action: Action, *, rebook: bool = False) -> Typed:
     if forbidden_content(text) is not None:
         return Typed.OTHER
     normalised = normalise(text)
-    if _core(normalised) in PHRASES[action]:
+    core = _core(normalised)
+    if core in PHRASES[action] or (rebook and action == "book" and core in REBOOK_PHRASES):
         return Typed.GRANT
     if is_bare_ack(text):
         return Typed.ACK
@@ -143,6 +147,8 @@ def is_bare_ack(text: str) -> bool:
     return normalised.replace(",", "") in BARE_ACKS or _core(normalised) in BARE_ACKS
 
 
-def suggestion(action: Action) -> str:
-    """The phrase the hint names: "book it", "cancel it", "move it"."""
+def suggestion(action: Action, *, rebook: bool = False) -> str:
+    """The phrase the hint names: "book it", "rebook it", "cancel it", "move it"."""
+    if rebook and action == "book":
+        return "rebook it"
     return {"book": "book it", "cancel": "cancel it", "reschedule": "move it"}[action]
