@@ -171,3 +171,13 @@ class ApprovalSettings(BaseSettings):
     # A typed grant is refused when the client says it composed the message later than
     # the agent clock at receipt plus this much (8.7, BUG-M4F-1): a skewed client clock.
     composed_tolerance_s: float = Field(default=2.0, ge=0)
+
+
+class FollowupSettings(BaseSettings):
+    """Proactive follow-up (architecture 14)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_FOLLOWUP_", extra="ignore")
+
+    # The watcher's lifespan task polls list_bookings this often; 0 turns it off. Evals
+    # and tests use 0 and call tick() through the `watcher_tick` verb.
+    watch_interval_s: float = Field(default=15.0, ge=0)
