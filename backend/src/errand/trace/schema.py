@@ -293,6 +293,7 @@ class GuardRecord(Envelope):
         "guard.evidence_rejected",
         "guard.forgotten_value_masked",
         "guard.planner_tool_rejected",
+        "guard.reprompt",
     ]
     detail: dict[str, Json] = Field(default_factory=dict)
 
@@ -311,6 +312,9 @@ class CardRecord(Envelope):
     body: dict[str, Json] | None = None
     status: str | None = None
     reason: str | None = None
+    # card.update after a brief correction (M8): the brief fields that changed, so the
+    # live UI can say what made the card stale.
+    changed_fields: list[str] | None = None
 
 
 class ErrorRecord(Envelope):

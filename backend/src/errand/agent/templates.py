@@ -16,11 +16,14 @@ from __future__ import annotations
 from datetime import datetime, tzinfo
 
 from errand.agent import templates_limits
+from errand.agent.cards import brief_chips
+from errand.agent.templates_conversation import no_fit_body, out_of_coverage_body
 from errand.domain.brief import BriefField
 from errand.domain.errand import Errand
 from errand.domain.messages import (
     CandidateOption,
     ClarifyCard,
+    ExcludedOption,
     MessageBody,
     NoticeAction,
     OutcomeNotice,
@@ -34,7 +37,9 @@ from errand.domain.outcomes import (
     Failure,
     Limit,
     ModelDown,
+    NoFit,
     Options,
+    OutOfCoverage,
     PendingCheck,
     PlanResult,
     Proposal,
@@ -69,7 +74,7 @@ def _join(words: list[str]) -> str:
     return ", ".join(words[:-1]) + " and " + words[-1]
 
 
-def _so_far(errand: Errand | None) -> str:
+def so_far(errand: Errand | None) -> str:
     """The brief's filled search fields in plain words, for a notice that stops early."""
     if errand is None:
         return ""
@@ -90,7 +95,7 @@ def _so_far(errand: Errand | None) -> str:
 def backstop_notice(errand: Errand | None) -> OutcomeNotice:
     """The 90 s backstop's WALL_CLOCK_EXCEEDED, filled from the last checkpointed errand."""
     return templates_limits.wall_clock_exceeded(
-        _so_far(errand), templates_limits.still_to_do(errand, _FIELD_WORDS)
+        so_far(errand), templates_limits.still_to_do(errand, _FIELD_WORDS)
     )
 
 
@@ -112,6 +117,15 @@ def recommendation_line(text: str) -> str | None:
     if len(line) > RECOMMENDATION_MAX_CHARS:
         line = line[: RECOMMENDATION_MAX_CHARS - 3].rstrip() + "..."
     return line
+
+
+# Why a provider is not on the shortlist, in words the card can show (code-written).
+EXCLUSION_WORDS: dict[str, str] = {
+    "over_budget": "Over your budget",
+    "no_slot_in_window": "No free slot in your window",
+    "over_cap": "Not shown: only the top 8 fit on the list",
+    "avoided": "You asked to avoid this provider",
+}
 
 
 def hidden_reviews_notice(flags: int) -> str | None:
@@ -149,11 +163,23 @@ def shortlist_card(errand: Errand, recommendation: str | None, tz: tzinfo) -> Sh
                 badges=list(c.badges),
                 injection_flags=c.digest.injection_flags if c.digest else 0,
                 notice=hidden_reviews_notice(c.digest.injection_flags if c.digest else 0),
+                score=c.score,
+                score_parts=dict(c.score_parts),
             )
             for c in shortlist.candidates
         ],
         excluded_count=len(shortlist.excluded),
         recommendation=recommendation,
+        excluded=[
+            ExcludedOption(
+                provider_id=x.provider_id,
+                name=x.name,
+                reason=x.reason,
+                reason_text=EXCLUSION_WORDS.get(x.reason, "Left out"),
+            )
+            for x in shortlist.excluded
+        ],
+        brief=brief_chips(errand.brief),
     )
 
 
@@ -169,6 +195,7 @@ def render(
             fields=result.fields,
             question=result.question,
             options=result.options,
+            brief=brief_chips(errand.brief),
         )
     if isinstance(result, AskExhausted):
         needed = _join([_FIELD_WORDS[f] for f in result.still_needed]) or "a few more details"
@@ -181,22 +208,26 @@ def render(
             actions=[NoticeAction(kind="answer", label="Answer")],
             still_needed=result.still_needed,
         )
+    if isinstance(result, OutOfCoverage) and errand is not None:
+        return out_of_coverage_body(result, errand)
+    if isinstance(result, NoFit):
+        return no_fit_body(result)
     if isinstance(result, Options) and errand is not None and errand.shortlist is not None:
         return RunOutcome.PRESENTED_OPTIONS, shortlist_card(errand, result.recommendation, tz)
     if isinstance(result, Limit) and result.limit == "deadline":
         return RunOutcome.WALL_CLOCK_EXCEEDED, templates_limits.wall_clock_exceeded(
-            _so_far(errand), templates_limits.still_to_do(errand, _FIELD_WORDS)
+            so_far(errand), templates_limits.still_to_do(errand, _FIELD_WORDS)
         )
     if isinstance(result, ModelDown):
         return RunOutcome.MODEL_UNAVAILABLE, templates_limits.model_unavailable()
     if isinstance(result, ToolDown) and result.error_class == "ToolUnexpected":
         return RunOutcome.TOOL_UNAVAILABLE, templates_limits.tool_unexpected()
     if isinstance(result, Limit):
-        known = _so_far(errand)
-        so_far = f" So far I have: {known}." if known else ""
+        known = so_far(errand)
+        have = f" So far I have: {known}." if known else ""
         return RunOutcome.LIMIT_REACHED, OutcomeNotice(
             outcome=RunOutcome.LIMIT_REACHED,
-            text=f"I hit my step limit for this turn, so I stopped.{so_far} Nothing was booked.",
+            text=f"I hit my step limit for this turn, so I stopped.{have} Nothing was booked.",
             actions=[
                 NoticeAction(kind="retry", label="Try again"),
                 NoticeAction(kind="narrow_search", label="Narrow search"),

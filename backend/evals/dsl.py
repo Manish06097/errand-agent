@@ -311,6 +311,10 @@ class ExpectNoSideEffects(_Strict):
 class BriefSpec(_Strict):
     version: int | None = None
     values: dict[BriefField, Any] = Field(default_factory=dict)
+    # M8: provenance. The exact evidence span each fact carries, and the turn it was set
+    # at; a fact a later message did not touch keeps both.
+    evidence: dict[BriefField, str] = Field(default_factory=dict)
+    set_at_turn: dict[BriefField, int] = Field(default_factory=dict)
 
 
 class ExpectBrief(_Strict):
@@ -390,6 +394,51 @@ class IfDedupe(_Strict):
     ]
 
 
+class PatchSpec(_Strict):
+    set: list[BriefField] = Field(default_factory=list)
+    clear: list[BriefField] = Field(default_factory=list)
+
+
+class ExpectPatch(_Strict):
+    """The fields the last run's applied `brief.patch` records set and cleared (M8)."""
+
+    expect_patch: PatchSpec
+
+
+class ShortlistSpec(_Strict):
+    # substring of the shortlist card's window label
+    window_label_includes: str | None = None
+    # every slot on the card starts on one of these ISO weekdays (1 = Monday)
+    slot_weekdays: list[int] | None = None
+    # every slot on the card lies inside these local hours, ["07:00", "12:00"] (the
+    # carried-over day part of a correction, M8 review)
+    slot_hours: list[str] | None = None
+    # the brief chips on the card name exactly these fields
+    chips: list[BriefField] | None = None
+    # every candidate carries its score parts
+    score_parts: bool | None = None
+    # the exclusion reasons on the card, as a set
+    excluded_reasons: list[str] | None = None
+
+
+class ExpectShortlist(_Strict):
+    """The shortlist card the last run showed (M8)."""
+
+    expect_shortlist: ShortlistSpec
+
+
+class ExpectOptions(_Strict):
+    """The quick replies of the last ClarifyCard, exactly (M8)."""
+
+    expect_options: list[str]
+
+
+class ExpectApprovals(_Strict):
+    """Every approval row of the conversation as `status` or `status:reason`, in order."""
+
+    expect_approvals: list[str]
+
+
 STEP_TYPES: dict[str, type[_Strict]] = {
     "say": Say,
     "answer": Answer,
@@ -425,6 +474,10 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "if_dedupe": IfDedupe,
     "expect_book_calls": ExpectBookCalls,
     "expect_rows": ExpectRows,
+    "expect_patch": ExpectPatch,
+    "expect_shortlist": ExpectShortlist,
+    "expect_options": ExpectOptions,
+    "expect_approvals": ExpectApprovals,
 }
 
 Step = (
@@ -462,6 +515,10 @@ Step = (
     | IfDedupe
     | ExpectBookCalls
     | ExpectRows
+    | ExpectPatch
+    | ExpectShortlist
+    | ExpectOptions
+    | ExpectApprovals
 )
 
 
@@ -510,6 +567,10 @@ PlannerName = Literal[
     "hostile:cross_service_cite",
     "hostile:loop_forever",
     "hostile:loop_forever_x3",
+    "hostile:matching_quote",
+    "hostile:no_evidence",
+    "hostile:no_day_part",
+    "hostile:reask",
 ]
 ReaderName = Literal["keyword", "blind", "hostile", "skipper", "timeout", "refusal", "max_tokens"]
 

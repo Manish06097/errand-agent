@@ -6,10 +6,11 @@ Later milestones extend this module rather than adding settings elsewhere.
 
 from __future__ import annotations
 
+from datetime import time
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ModelMode = Literal["scripted", "replay", "record", "live"]
@@ -206,3 +207,67 @@ class FollowupSettings(BaseSettings):
     # The watcher's lifespan task polls list_bookings this often; 0 turns it off. Evals
     # and tests use 0 and call tick() through the `watcher_tick` verb.
     watch_interval_s: float = Field(default=15.0, ge=0)
+
+
+class ContextCaps(BaseSettings):
+    """The gate 2 budget split (architecture 13.1), in estimated tokens per section.
+
+    One source of truth: `context.builder.CAPS` reads it, the S6 shed and every section
+    check read `CAPS`, and the sum is validated against `context_budget_tokens`, so the
+    table can never drift from the 12,000 cap. S2 includes the 400-token tools preamble.
+    S8 (the loop reserve) is a floor the builder never refuses on; it is counted here
+    because the sum has to account for it.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_CAP_", extra="ignore")
+
+    rules: int = Field(default=1_600, gt=0)  # S1
+    tools: int = Field(default=3_800, gt=0)  # S2
+    state: int = Field(default=1_100, gt=0)  # S3
+    memory: int = Field(default=600, gt=0)  # S4
+    ledger: int = Field(default=400, gt=0)  # S5
+    recent: int = Field(default=1_000, gt=0)  # S6
+    current: int = Field(default=1_000, gt=0)  # S7
+    loop: int = Field(default=2_300, gt=0)  # S8, a floor
+    slack: int = Field(default=200, ge=0)
+
+    @property
+    def total(self) -> int:
+        return (
+            self.rules
+            + self.tools
+            + self.state
+            + self.memory
+            + self.ledger
+            + self.recent
+            + self.current
+            + self.loop
+            + self.slack
+        )
+
+    @model_validator(mode="after")
+    def _sums_to_the_budget(self) -> ContextCaps:
+        budget = LimitSettings().context_budget_tokens
+        if self.total != budget:
+            raise ValueError(f"context section caps sum to {self.total}, not {budget}")
+        return self
+
+
+class DayPartSettings(BaseSettings):
+    """Part-of-day bounds for `timewin` (architecture 10.5: "from config")."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_DAY_", extra="ignore")
+
+    morning_from: time = time(7)
+    morning_to: time = time(12)
+    afternoon_from: time = time(12)
+    afternoon_to: time = time(17)
+    evening_from: time = time(17)
+    evening_to: time = time(21)
+
+    def bounds(self) -> dict[str, tuple[time, time]]:
+        return {
+            "morning": (self.morning_from, self.morning_to),
+            "afternoon": (self.afternoon_from, self.afternoon_to),
+            "evening": (self.evening_from, self.evening_to),
+        }

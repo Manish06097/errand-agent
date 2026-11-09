@@ -47,11 +47,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.runtime import Runtime
 from pydantic import ValidationError
 
-from errand.agent import ask_guard, brief_ops, timewin
+from errand.agent import ask_guard, brief_ops, invalidation, steering, timewin
 from errand.agent.deps import RunDeps
 from errand.agent.planner_tools import (
     ASK_OPTION_MAX_CHARS,
@@ -61,17 +61,20 @@ from errand.agent.planner_tools import (
     PROPOSE_TOOLS,
     AskUserArgs,
     GetProviderArgs,
+    NotCoveredArg,
     ProposeBookingArgs,
     UpdateBriefArgs,
 )
 from errand.agent.records import open_bookings, state_extras
 from errand.agent.shortlist import ranked_shortlist
-from errand.agent.state import SystemNote, ThreadState
-from errand.agent.templates import recommendation_line
+from errand.agent.state import CardChange, SystemNote, ThreadState
+from errand.agent.templates import recommendation_line, so_far
+from errand.agent.templates_conversation import covered_labels, no_fit_result
 from errand.agent.transitions import transition
 from errand.agent.validation import Rejected, check_book_proposal
 from errand.context.builder import build_context
-from errand.domain.brief import BriefField, TimeWindowExpr
+from errand.domain import aliases
+from errand.domain.brief import AskRecord, BriefField, TimeWindowExpr
 from errand.domain.errand import Errand, Phase
 from errand.domain.inbound import UserMessage
 from errand.domain.outcomes import (
@@ -81,13 +84,16 @@ from errand.domain.outcomes import (
     Limit,
     LimitName,
     ModelDown,
+    NoAction,
     Options,
+    OutOfCoverage,
     PlanResult,
     Proposal,
     Reply,
     TooLarge,
     ToolDown,
 )
+from errand.domain.slots import Shortlist
 from errand.llm.errors import (
     ContextOverBudget,
     ModelCallLimit,
@@ -141,6 +147,7 @@ async def plan(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
         # the run's result, not that one (BUG-M5-1).
         "result": None,
         "counters": deps.counters.model_copy(deep=True),
+        "card_changes": [*state.card_changes, *loop.card_changes],
     }
 
 
@@ -176,6 +183,7 @@ class PlannerLoop:
         self.notes = list(notes or [])
         self.searched = False
         self.booking_providers: set[str] = set()
+        self.card_changes: list[CardChange] = []
 
     # ------------------------------------------------------------------ loop
 
@@ -217,7 +225,19 @@ class PlannerLoop:
             except ContextOverBudget as exc:
                 return TooLarge(section="request", estimated=exc.needed, cap=exc.budget)
             if turn.stop_reason == "end_turn":
-                return self._finish(answer_text(turn.message))
+                text = answer_text(turn.message)
+                if self._points_at_a_selection(text):
+                    if deps.counters.reprompts >= deps.limits.reprompts_per_run:
+                        return NoAction()
+                    deps.counters.reprompts += 1
+                    deps.tracer.emit(
+                        "guard.reprompt", detail={"reason": "selection_without_proposal"}
+                    )
+                    session.append(
+                        HumanMessage(content=[{"type": "text", "text": steering.REPROMPT_TEXT}])
+                    )
+                    continue
+                return self._finish(text)
             if turn.stop_reason != "tool_use":
                 return Failure(reason=f"stop_reason {turn.stop_reason!r} is not handled until M13")
             calls = list(turn.message.tool_calls)
@@ -258,13 +278,26 @@ class PlannerLoop:
         for call in calls:
             self._reject(str(call["name"]), "not_executed_after_proposal")
 
-    def _finish(self, text: str) -> PlanResult:
+    def _current_shortlist(self) -> Shortlist | None:
         shortlist = self.errand.shortlist
         fresh = shortlist is not None and shortlist.brief_version == self.errand.brief.version
-        if self.searched and fresh and shortlist is not None and shortlist.candidates:
+        return shortlist if fresh else None
+
+    def _points_at_a_selection(self, text: str) -> bool:
+        """Prose that says "I'll book it" while a current shortlist could be booked from."""
+        shortlist = self._current_shortlist()
+        return bool(
+            shortlist is not None and shortlist.candidates and steering.points_at_a_selection(text)
+        )
+
+    def _finish(self, text: str) -> PlanResult:
+        shortlist = self._current_shortlist()
+        if self.searched and shortlist is not None and shortlist.candidates:
             return Options(recommendation=recommendation_line(text))
-        # A search that found nobody has nothing to present: the model's answer goes out
-        # as a reply until M8 replaces it with a code-written no-fit template.
+        if self.searched and shortlist is not None:
+            # A search that found nobody has nothing to present: code names what could
+            # widen (10.2); the model's words are not used.
+            return no_fit_result(self.errand, so_far(self.errand))
         return Reply(text=text)
 
     def _past_deadline(self) -> bool:
@@ -282,7 +315,7 @@ class PlannerLoop:
             if name == "list_bookings":
                 return await self._list_bookings(args)
             if name == "update_brief":
-                return self._update_brief(args)
+                return await self._update_brief(args)
             if name == "ask_user":
                 return self._ask_user(args)
             if name == "propose_booking":
@@ -402,24 +435,30 @@ class PlannerLoop:
 
     # ------------------------------------------------------------------ brief tools
 
-    def _update_brief(self, args: Mapping[str, Any]) -> tuple[str, bool]:
+    async def _update_brief(self, args: Mapping[str, Any]) -> tuple[str, bool] | _End:
         tracer = self.deps.tracer
         try:
             parsed = UpdateBriefArgs.model_validate(dict(args))
         except ValidationError as exc:
             problem = exc.errors()[0]["msg"] if exc.errors() else "invalid"
             return views.render_error("invalid_arguments", detail=problem), True
-        quotes: dict[str, str] = {}
+        if parsed.not_covered is not None:
+            refused = self._check_not_covered(parsed.not_covered)
+            if refused is not None:
+                return refused, True
+        quotes: dict[str, list[str]] = {}
         for item in parsed.evidence:
-            quotes.setdefault(item.field, item.quote)
+            quotes.setdefault(item.field, []).append(item.quote)
         sets: list[brief_ops.FieldValue] = []
         values = parsed.set.model_dump(exclude_none=True)
         for name in values:
             value: Any = getattr(parsed.set, name)
             if name == "window":
                 value = TimeWindowExpr.model_validate(value.model_dump())
-            sets.append(brief_ops.FieldValue(BriefField(name), value, quotes.get(name)))
-        clears = [brief_ops.FieldValue(BriefField(n), None, quotes.get(n)) for n in parsed.clear]
+            sets.append(_field_value(name, value, quotes))
+        clears = [_field_value(n, None, quotes) for n in parsed.clear]
+        if parsed.not_covered is not None and not sets and not clears:
+            return self._out_of_coverage(parsed.not_covered)
         outcome = brief_ops.apply_patch(
             self.errand.brief,
             sets=sets,
@@ -470,13 +509,19 @@ class PlannerLoop:
                 "brief_version": outcome.brief.version,
             },
         )
+        before = self.errand
         errand = self.errand.model_copy(update={"brief": outcome.brief})
+        applied = await invalidation.apply(self.deps, errand, before.brief, outcome)
+        errand = applied.errand
+        self.card_changes += applied.changes
         required_cleared = [
             f for f in outcome.cleared_fields if f in brief_ops.REQUIRED[errand.kind]
         ]
         if errand.phase is Phase.COMPARING and required_cleared:
             errand = transition(errand, Phase.GATHERING, "required_field_cleared", tracer)
         self.errand = errand
+        if parsed.not_covered is not None:
+            return self._out_of_coverage(parsed.not_covered)
         gaps = brief_ops.missing(errand.brief, errand.kind)
         return views.render(
             {
@@ -485,6 +530,64 @@ class PlannerLoop:
                 "missing": [f.value for f in gaps],
             }
         ), False
+
+    def _check_not_covered(self, claim: NotCoveredArg) -> str | None:
+        """A tool error if `not_covered` is not what it says, else None (7.3, coverage)."""
+        said = brief_ops.normalise(claim.words)
+        check = brief_ops.check_evidence(
+            claim.words, self.inbound.text, BriefField(claim.field), None
+        )
+        if not check.ok:
+            self.deps.tracer.emit(
+                "guard.evidence_rejected",
+                detail={
+                    "tool": "update_brief",
+                    "fields": ["not_covered"],
+                    "message_id": self.inbound.message_id,
+                    "problems": 1,
+                },
+            )
+            return views.render_error(
+                "not_covered_rejected",
+                problems=[check.reason],
+                user_message=self.inbound.text,
+                detail="quote the words the user used for the place or service, exactly",
+            )
+        for field in ("area", "service"):
+            value = aliases.covered_value(field, said)
+            if value is not None:
+                self._reject("update_brief", "not_covered_is_covered", field=field)
+                return views.render_error(
+                    "is_covered",
+                    detail=f"{claim.words!r} is {value}, which we cover; set {field} instead",
+                )
+        return None
+
+    def _out_of_coverage(self, claim: NotCoveredArg) -> tuple[str, bool] | _End:
+        """End the loop with the covered values as quick replies. The ask is recorded like
+        any other, so the ask guard and INV-13 count it; if asking would break their rules
+        (the field is already filled, or its two asks are spent) it is a notice instead."""
+        brief = self.errand.brief
+        field = BriefField(claim.field)
+        asked_so_far = ask_guard.ask_counts(brief)[field]
+        askable = (
+            field in brief_ops.missing(brief, self.errand.kind)
+            and field not in brief.ask_exhausted
+            and asked_so_far < ask_guard.MAX_ASKS_PER_FIELD
+        )
+        if askable:
+            record = AskRecord(field=field, turn=self.inbound.turn_no, with_options=True)
+            brief = brief.model_copy(update={"asks": [*brief.asks, record]})
+            self.errand = self.errand.model_copy(update={"brief": brief})
+        words = clean_text(claim.words, limit=80)
+        return _End(
+            OutOfCoverage(
+                field=claim.field,
+                words=words,
+                covered=covered_labels(claim.field),
+                asked=askable,
+            )
+        )
 
     def _ask_user(self, args: Mapping[str, Any]) -> tuple[str, bool] | _End:
         tracer = self.deps.tracer
@@ -553,6 +656,13 @@ class PlannerLoop:
         return _End(
             Proposal(action="book", provider_id=parsed.provider_id, slot_ref=parsed.slot_ref)
         )
+
+
+def _field_value(name: str, value: Any, quotes: Mapping[str, list[str]]) -> brief_ops.FieldValue:
+    spans = quotes.get(name) or []
+    return brief_ops.FieldValue(
+        BriefField(name), value, spans[0] if spans else None, tuple(spans[1:])
+    )
 
 
 def answer_text(message: AIMessage) -> str:

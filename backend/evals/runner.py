@@ -23,13 +23,13 @@ import json
 import os
 import shutil
 import sqlite3
-import time
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import httpx
@@ -55,6 +55,7 @@ from evals.dsl import (
     ClickSlot,
     Decline,
     Dedupe,
+    ExpectApprovals,
     ExpectBookCalls,
     ExpectBooking,
     ExpectBrief,
@@ -64,13 +65,16 @@ from evals.dsl import (
     ExpectNoSideEffects,
     ExpectNotice,
     ExpectNotInRequests,
+    ExpectOptions,
     ExpectOutcome,
+    ExpectPatch,
     ExpectPlanner,
     ExpectQuestionFor,
     ExpectRank,
     ExpectReader,
     ExpectRows,
     ExpectSearchMatchesBrief,
+    ExpectShortlist,
     ExpectToolErrors,
     ExpectTrace,
     ExpectTranscript,
@@ -111,6 +115,10 @@ PLANNERS: dict[str, Policy] = {
     "hostile:cross_service_cite": hostile.cross_service_cite_policy,
     "hostile:loop_forever": limits_policies.loop_forever_policy,
     "hostile:loop_forever_x3": limits_policies.loop_forever_x3_policy,
+    "hostile:matching_quote": hostile.matching_quote_policy,
+    "hostile:no_evidence": hostile.no_evidence_policy,
+    "hostile:no_day_part": hostile.no_day_part_policy,
+    "hostile:reask": hostile.reask_policy,
 }
 SIDE_EFFECT_OPS = ("hold_slot", "book", "cancel", "reschedule")
 
@@ -552,6 +560,8 @@ def describe(step: Step, mode: Dedupe = "on") -> str | None:
         brief = step.expect_brief
         bits = [f"v{brief.version}"] if brief.version is not None else []
         bits += [f"{k.value}={v}" for k, v in brief.values.items()]
+        bits += [f"{k.value} from {q!r}" for k, q in brief.evidence.items()]
+        bits += [f"{k.value} set at turn {t}" for k, t in brief.set_at_turn.items()]
         return "brief " + ", ".join(bits)
     if isinstance(step, ExpectLimit):
         return f"run.end names the {step.expect_limit} cap"
@@ -563,6 +573,18 @@ def describe(step: Step, mode: Dedupe = "on") -> str | None:
             else ""
         )
         return f"nothing of the malformed answer in any model request{extra}"
+    if isinstance(step, ExpectPatch):
+        p = step.expect_patch
+        sets = ", ".join(f.value for f in p.set) or "nothing"
+        clears = f", clears {', '.join(f.value for f in p.clear)}" if p.clear else ""
+        return f"brief.patch sets {sets}{clears}"
+    if isinstance(step, ExpectShortlist):
+        spec = step.expect_shortlist.model_dump(exclude_none=True, mode="json")
+        return "shortlist " + ", ".join(f"{k}={v}" for k, v in spec.items())
+    if isinstance(step, ExpectOptions):
+        return "quick replies " + ", ".join(step.expect_options)
+    if isinstance(step, ExpectApprovals):
+        return "approvals " + ", ".join(step.expect_approvals)
     return None
 
 
@@ -1075,6 +1097,16 @@ class Runner:
                     n == want_rows.count,
                     f"{want_rows.table} {want_rows.where}: {n} rows, want {want_rows.count}",
                 )
+        elif isinstance(step, ExpectPatch):
+            self._expect_patch(step)
+        elif isinstance(step, ExpectShortlist):
+            self._expect_shortlist(step)
+        elif isinstance(step, ExpectOptions):
+            card = self.last.card()
+            got = list(card.options) if card else None
+            self.expect(got == step.expect_options, f"{self.last.run_id}: quick replies {got}")
+        elif isinstance(step, ExpectApprovals):
+            await self._expect_approvals(step)
         else:  # pragma: no cover - the DSL admits nothing else
             raise AssertionError(f"no runner for {step!r}")
 
@@ -1262,6 +1294,89 @@ class Runner:
             fact = brief.get(name.value) or {}
             got = fact.get("value")
             self.expect(str(got) == str(want), f"brief {name.value}={got!r}, expected {want!r}")
+        for name, quote in spec.evidence.items():
+            prov = (brief.get(name.value) or {}).get("prov") or {}
+            self.expect(
+                prov.get("evidence") == quote,
+                f"brief {name.value} evidence {prov.get('evidence')!r}, expected {quote!r}",
+            )
+        for name, turn in spec.set_at_turn.items():
+            at = (brief.get(name.value) or {}).get("set_at_turn")
+            self.expect(at == turn, f"brief {name.value} set at turn {at}, expected {turn}")
+
+    def _expect_patch(self, step: ExpectPatch) -> None:
+        applied = [r for r in self._last_records("brief.patch") if r.get("evidence_ok")]
+        got_set = [f for r in applied for f in r["fields"]["set"]]
+        got_clear = [f for r in applied for f in r["fields"]["clear"]]
+        want = step.expect_patch
+        self.expect(
+            got_set == [f.value for f in want.set] and got_clear == [f.value for f in want.clear],
+            f"{self.last.run_id}: brief.patch set {got_set} clear {got_clear}",
+        )
+
+    def _expect_shortlist(self, step: ExpectShortlist) -> None:
+        card = next(
+            (m["body"] for m in self.last.messages if m["body"]["type"] == "shortlist"), None
+        )
+        self.expect(card is not None, f"{self.last.run_id}: no shortlist card")
+        if card is None:
+            return
+        spec = step.expect_shortlist
+        if spec.window_label_includes is not None:
+            self.expect(
+                spec.window_label_includes in card["window_label"],
+                f"shortlist window {card['window_label']!r}, wanted {spec.window_label_includes!r}",
+            )
+        if spec.slot_weekdays is not None:
+            days = {
+                datetime.fromisoformat(slot["start"]).isoweekday()
+                for c in card["candidates"]
+                for slot in c["slots"]
+            }
+            self.expect(
+                bool(days) and days <= set(spec.slot_weekdays),
+                f"shortlist slots fall on weekdays {sorted(days)}, wanted {spec.slot_weekdays}",
+            )
+        if spec.slot_hours is not None:
+            lo, hi = (time.fromisoformat(h) for h in spec.slot_hours)
+            slots = [s for c in card["candidates"] for s in c["slots"]]
+            outside = [
+                s["label"]
+                for s in slots
+                if datetime.fromisoformat(s["start"]).time() < lo
+                or datetime.fromisoformat(s["end"]).time() > hi
+            ]
+            self.expect(
+                bool(slots) and not outside,
+                f"shortlist slots outside {spec.slot_hours[0]}-{spec.slot_hours[1]}: {outside}",
+            )
+        if spec.chips is not None:
+            names = [c["field"] for c in card["brief"]]
+            self.expect(names == [f.value for f in spec.chips], f"shortlist brief chips {names}")
+        if spec.score_parts:
+            missing = [c["provider_id"] for c in card["candidates"] if not c["score_parts"]]
+            self.expect(not missing, f"candidates without score_parts: {missing}")
+        if spec.excluded_reasons is not None:
+            got = sorted({x["reason"] for x in card["excluded"]})
+            self.expect(got == sorted(spec.excluded_reasons), f"excluded reasons {got}")
+            self.expect(
+                len(card["excluded"]) == card["excluded_count"]
+                and all(x["reason_text"] for x in card["excluded"]),
+                "excluded list and count disagree",
+            )
+
+    async def _expect_approvals(self, step: ExpectApprovals) -> None:
+        conn = sqlite3.connect(f"file:{self.h.root / 'agent.sqlite'}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT status, invalidated_reason FROM approvals ORDER BY requested_at, rowid"
+            ).fetchall()
+        finally:
+            conn.close()
+        got = [f"{status}:{reason}" if reason else status for status, reason in rows]
+        self.expect(
+            got == step.expect_approvals, f"approvals {got}, wanted {step.expect_approvals}"
+        )
 
     async def _expect_book_calls(self, step: ExpectBookCalls) -> None:
         spec = step.expect_book_calls
@@ -1426,14 +1541,14 @@ async def run_scenario(
         **extra,
     ) as h:
         runner = Runner(scenario, h, planner, mode)
-        started = time.monotonic()
+        started = monotonic()
         try:
             await runner.run()
         except SimUserFailure as exc:
             failures.append(f"simulated user: {exc}")
         except AssertionError as exc:
             failures.append(str(exc))
-        took = time.monotonic() - started
+        took = monotonic() - started
         cap = scenario.expect.max_real_s
         if cap is not None and took > cap:
             failures.append(f"the scenario took {took:.1f} s of real time, over {cap:g} s")

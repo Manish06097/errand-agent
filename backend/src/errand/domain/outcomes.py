@@ -80,6 +80,35 @@ class Proposal(_Result):
     booking_id: str | None = None
 
 
+class OutOfCoverage(_Result):
+    """update_brief's `not_covered` named a place or service we do not serve (7.3): a code
+    template lists what we do cover, as quick replies."""
+
+    kind: Literal["out_of_coverage"] = "out_of_coverage"
+    field: Literal["area", "service"]
+    words: str
+    covered: list[str]
+    # False when asking would break the ask rules (the field is filled, or its ask budget
+    # is spent): the template is then a notice, not a question card.
+    asked: bool = True
+
+
+class NoFit(_Result):
+    """A search that found nobody (10.2): a code template names what could widen."""
+
+    kind: Literal["no_fit"] = "no_fit"
+    # (kind, label, reply) for the brief's constraints, in the order window, budget, area
+    widen: list[tuple[str, str, str]] = Field(default_factory=list)
+    summary: str = ""
+
+
+class NoAction(_Result):
+    """The loop ended twice with prose that points at a selection but proposes nothing
+    (10.4): MODEL_NO_PROGRESS, and the shortlist card stays on screen."""
+
+    kind: Literal["no_action"] = "no_action"
+
+
 LimitName = Literal["model_calls", "iterations", "tool_calls", "deadline"]
 
 
@@ -123,7 +152,10 @@ PlanResult = Annotated[
     | ToolDown
     | ModelDown
     | TooLarge
-    | Failure,
+    | Failure
+    | OutOfCoverage
+    | NoFit
+    | NoAction,
     Field(discriminator="kind"),
 ]
 

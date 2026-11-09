@@ -7,7 +7,8 @@ the same request bytes (replay hashes and the eval table depend on that).
 Sections and caps (estimated tokens, 13.1):
 - S1 rules: `prompts/rules.md`, the only system block, with `cache_control`. It is the
   same bytes on every turn.
-- S2 tools: the fixed planner tool list (measured here, sent by the gateway).
+- S2 tools: the fixed planner tool list (measured here, sent by the gateway); its cap
+  includes the 400-token tools preamble.
 - S3 errand state: the brief with provenance, `Known:` and `Missing:`, the ask
   history, the last verified booking in this conversation, the live approval card (if
   any) with its status, the app's notes for this run (a SystemNote replan), and a
@@ -33,6 +34,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 
 from errand.agent.brief_ops import known_lines, missing
+from errand.config import ContextCaps
 from errand.domain.errand import Errand
 from errand.domain.inbound import UserMessage
 from errand.domain.messages import (
@@ -45,15 +47,18 @@ from errand.domain.messages import (
     TextBody,
 )
 from errand.domain.windows import fmt_day, slot_label
-from errand.llm.tokens import est_tokens
+from errand.llm.tokens import TOOLS_PREAMBLE_TOKENS, est_tokens
 from errand.store.repos.messages import Message
 
+# The gate 2 split lives in config.ContextCaps (it validates the sum against the 12,000
+# budget); the builder reads it, so the shed rules and the sums cannot drift apart.
+_CAPS = ContextCaps()
 CAPS: dict[str, int] = {
-    "rules": 1_600,
-    "tools": 2_000,
-    "state": 1_100,
-    "recent": 1_800,
-    "current": 1_000,
+    "rules": _CAPS.rules,
+    "tools": _CAPS.tools,
+    "state": _CAPS.state,
+    "recent": _CAPS.recent,
+    "current": _CAPS.current,
 }
 RECENT_TURNS = 6
 SHORTLIST_SHOWN = 5
@@ -104,7 +109,9 @@ def build_context(
 ) -> BuiltContext:
     system = system_blocks()
     rules_est = est_tokens(system[0]["text"])
-    tools_est = est_tokens(json.dumps(list(tools), ensure_ascii=False, separators=(",", ":")))
+    tools_est = TOOLS_PREAMBLE_TOKENS + est_tokens(
+        json.dumps(list(tools), ensure_ascii=False, separators=(",", ":"))
+    )
     state = "<errand_state>\n" + render_state(errand, now, tz, extras) + "\n</errand_state>"
     recent_text, included, dropped = _render_recent(history, current.message_id)
     recent = "<recent_turns>\n" + (recent_text or "(none)") + "\n</recent_turns>"

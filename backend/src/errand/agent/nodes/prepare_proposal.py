@@ -273,6 +273,7 @@ class _Preparer:
             expires_at=expires,
             nearby=nearby,
             tz=deps.tz,
+            brief=self.errand.brief,
         )
         row = ApprovalRow(
             approval_id=approval_id,
