@@ -3,16 +3,16 @@
     errand-trace show <run_id | path.jsonl> [--data-dir DIR]
     errand-trace export --thread <conversation_id> [--out PATH] [--data-dir DIR]
 
-`show` prints a timeline: seq, milliseconds since the first record, the record type
-indented by span depth, and a one-line summary. A truncated last line is reported on
-stderr and skipped.
+`show` reads through the masked reader, so a value the user has forgotten shows as
+"[removed]" even if the raw file still holds it. It prints a timeline: seq, milliseconds
+since the first record, the record type indented by span depth, and a one-line summary.
+A truncated last line is reported on stderr and skipped.
 
 `export` writes every run of one conversation, in the order the runs started, as one
 JSONL (each record as the run wrote it, one per line), to `--out` or stdout. It reads each
-run through `trace/reader.py`, never the raw file, so whatever the reader later masks on
-read (Gate 2, M11) is masked in the export too. Non-ASCII is escaped, so the file reads
-the same everywhere and a tracked copy cannot carry an em dash. `excerpt` and `stats`
-arrive in later milestones.
+run through the masked reader, never the raw file, so a forgotten value is masked in the
+export too. Non-ASCII is escaped, so the file reads the same everywhere and a tracked copy
+cannot carry an em dash. `excerpt` and `stats` arrive in later milestones.
 """
 
 from __future__ import annotations
@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Any
 
 from errand.config import PathSettings
-from errand.trace.reader import TraceFormatError, read_trace
+from errand.trace.masked import MaskUnavailable, masker_for
+from errand.trace.reader import TraceFormatError, read_trace, read_trace_masked
 
 
 def resolve(target: str, traces_dir: Path) -> Path | None:
@@ -180,8 +181,9 @@ def export_thread(thread: str, data_dir: Path, out: Path | None) -> int:
         return 2
     lines: list[str] = []
     try:
+        masker = masker_for(data_dir)
         for path in paths:
-            trace = read_trace(path)
+            trace = read_trace_masked(path, masker)
             if trace.truncated_tail is not None:
                 print(
                     f"errand-trace: warning: last line of {path} is truncated "
@@ -194,6 +196,9 @@ def export_thread(thread: str, data_dir: Path, out: Path | None) -> int:
     except TraceFormatError as exc:
         print(f"errand-trace: {exc}", file=sys.stderr)
         return 1
+    except MaskUnavailable as exc:
+        print(f"errand-trace: {exc}", file=sys.stderr)
+        return 3
     text = "\n".join(lines) + "\n"
     if out is None:
         sys.stdout.write(text)
@@ -212,10 +217,14 @@ def show(target: str, data_dir: Path) -> int:
         )
         return 2
     try:
-        trace = read_trace(path)
+        # A forgotten value never leaves the process unmasked (gate 2 decision 14).
+        trace = read_trace_masked(path, masker_for(data_dir))
     except TraceFormatError as exc:
         print(f"errand-trace: {exc}", file=sys.stderr)
         return 1
+    except MaskUnavailable as exc:
+        print(f"errand-trace: {exc}", file=sys.stderr)
+        return 3
     print(f"{path}")
     for line in render(trace.records):
         print(line)

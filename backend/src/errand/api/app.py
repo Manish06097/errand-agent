@@ -55,6 +55,7 @@ from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
 from errand.api import dev_routes, web_routes
+from errand.api.memory_routes import mount as mount_memory_routes
 from errand.api.reconciler import Reconciler
 from errand.api.runs import (
     Answer,
@@ -75,6 +76,7 @@ from errand.config import (
     BookingSettings,
     LangfuseKeys,
     LimitSettings,
+    MemorySettings,
     ModelSettings,
     PathSettings,
     ReconcilerSettings,
@@ -83,9 +85,13 @@ from errand.config import (
 from errand.domain.messages import MessageBody
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
+from errand.memory.hmac_key import load_or_create
+from errand.memory.scrub import scrub_brief
+from errand.memory.service import MemoryService
 from errand.store.agent_db import AgentDB
 from errand.store.repos.users import User
 from errand.tools.runtime import WorldAccess, open_in_process, over_http
+from errand.trace.masked import MaskUnavailable, masker_for
 from errand.trace.sinks import ProcessSink, make_sink, off_reason
 
 SERVICE = "errand-api"
@@ -346,6 +352,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             )
             app.state.manager = manager
             app.state.user_id = user_id
+            app.state.memory = MemoryService(
+                db,
+                lambda: to_ms(manager.clock.now()),
+                load_or_create(data_dir / MemorySettings().hmac_key_file),
+            )
             reconciler = Reconciler(manager, config.reconciler or ReconcilerSettings())
             app.state.reconciler = reconciler
             await reconciler.startup()  # before the first request is served (9.7)
@@ -357,6 +368,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 await manager.shutdown()
 
     app = FastAPI(title=SERVICE, lifespan=lifespan)
+    mount_memory_routes(app)
 
     @app.middleware("http")
     async def agent_clock_header(
@@ -424,6 +436,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 for a in await repos.approvals.list_for_conversation(conversation_id)
             }
         snapshot = await manager.graph.aget_state(run_config(conversation_id))
+        async with manager.db.session() as repos:
+            eligible = await repos.memories.eligible_ids(conversation.user_id)
         return {
             "conversation_id": conversation_id,
             "messages": [_message_view(m, approvals) for m in messages],
@@ -432,7 +446,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 for r in runs
             ],
             "active_run_id": manager.active_run(conversation_id),
-            "state": _state_view(snapshot.values, snapshot.next, bool(snapshot.interrupts)),
+            "state": _state_view(
+                snapshot.values, snapshot.next, bool(snapshot.interrupts), eligible
+            ),
             "clock": reading_of(manager.clock).__dict__,
         }
 
@@ -530,10 +546,16 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             yield ServerSentEvent(data={"error": "not_found", "run_id": run_id}, event="error")
             return
         start = after if after is not None else _parse_last_id(last_event_id)
+        try:
+            masker = masker_for(manager.traces_dir.parent)
+        except MaskUnavailable:
+            yield ServerSentEvent(data={"error": "mask_unavailable"}, event="error")
+            return
         async for event in stream_events(
             trace_file=manager.traces_dir / run.trace_path,
             stream=manager.broadcaster.get(run_id),
             last_event_id=start,
+            masker=masker,
         ):
             yield event
 
@@ -588,11 +610,17 @@ def _parse_last_id(value: str | None) -> int:
         return 0
 
 
-def _state_view(values: dict[str, Any], next_nodes: tuple[str, ...], interrupted: bool) -> Any:
+def _state_view(
+    values: dict[str, Any], next_nodes: tuple[str, ...], interrupted: bool, eligible: frozenset[str]
+) -> Any:
     if not values:
         return None
     state = ThreadState.model_validate(values)
     errand = state.errand
+    if errand is not None:
+        # A field sourced from a memory that is no longer eligible is not shown (decision 10).
+        brief, _ = scrub_brief(errand.brief, eligible)
+        errand = errand.model_copy(update={"brief": brief})
     return {
         "run_id": state.run_id,
         "outcome": state.outcome,

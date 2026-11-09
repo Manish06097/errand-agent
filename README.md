@@ -21,6 +21,10 @@ world or chat UI yet.
 uv (it fetches Python 3.11 if needed), Node 20.9 or newer, pnpm 10.24 or newer (10.x),
 git and make. macOS or Linux.
 
+## Memory and retention
+
+The agent remembers stable preferences you state ("I live in Indiranagar", "never before 10"), keeps the ones it guessed apart until you click Keep, and lets you see, correct and forget each one. Forgetting is final in `agent.sqlite`: the value is overwritten in every message you or the assistant wrote that held it and then removed from its row. Notices are redacted too, since the step-limit notice restates the brief. Other text the program renders itself, such as a booking line or a status line, records what happened and is left as it is. Three things outlive it on purpose. The JSONL traces under `data/`, older checkpoints of a conversation and Langfuse (when it is on) keep a forgotten value until you delete them; the app masks it on every read it serves but does not rewrite those files. The HMAC hashes that drive the masking stop the value being shown again, not someone who holds both `data/memory_hmac.key` and the database. And bookings stay: forgetting a preferred provider does not erase the booking history.
+
 ## Commands
 
 | Command | What it does |

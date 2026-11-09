@@ -1,0 +1,1145 @@
+{
+  "blocklist": [
+    {
+      "key": "access_note",
+      "reason": "forgotten",
+      "scope": "global"
+    },
+    {
+      "key": "access_note",
+      "reason": "forgotten",
+      "scope": "global"
+    },
+    {
+      "key": "avoid_days",
+      "reason": "forgotten",
+      "scope": "service:gardening"
+    },
+    {
+      "key": "budget_ceiling",
+      "reason": "forgotten",
+      "scope": "service:carpentry"
+    },
+    {
+      "key": "earliest_time",
+      "reason": "forgotten",
+      "scope": "service:cleaning"
+    },
+    {
+      "key": "earliest_time",
+      "reason": "forgotten",
+      "scope": "service:tutoring"
+    },
+    {
+      "key": "latest_time",
+      "reason": "forgotten",
+      "scope": "service:laundry"
+    },
+    {
+      "key": "preferred_provider",
+      "reason": "dismissed",
+      "scope": "service:electrician"
+    },
+    {
+      "key": "preferred_provider",
+      "reason": "dismissed",
+      "scope": "service:plumber"
+    }
+  ],
+  "canaries": {
+    "CANARY-FORGOTTEN-7731": {
+      "kind": "forgotten",
+      "places": [
+        {
+          "id": "msg_0192",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0194",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0195",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0196",
+          "kind": "message"
+        },
+        {
+          "id": "e_seed_6",
+          "kind": "errand"
+        },
+        {
+          "id": "BK-045",
+          "kind": "booking"
+        }
+      ]
+    },
+    "CANARY-FORGOTTEN-7732": {
+      "kind": "forgotten",
+      "places": [
+        {
+          "id": "msg_0197",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0199",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0200",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0201",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0238",
+          "kind": "message"
+        }
+      ]
+    },
+    "CANARY-FORGOTTEN-7733": {
+      "kind": "forgotten",
+      "places": [
+        {
+          "id": "msg_0202",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0204",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0205",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0206",
+          "kind": "message"
+        },
+        {
+          "id": "e_seed_1",
+          "kind": "errand"
+        },
+        {
+          "id": "BK-040",
+          "kind": "booking"
+        },
+        {
+          "id": "msg_0227",
+          "kind": "message"
+        }
+      ]
+    },
+    "CANARY-FORGOTTEN-7734": {
+      "kind": "forgotten",
+      "places": [
+        {
+          "id": "msg_0207",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0209",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0210",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0211",
+          "kind": "message"
+        },
+        {
+          "id": "e_seed_2",
+          "kind": "errand"
+        },
+        {
+          "id": "BK-041",
+          "kind": "booking"
+        },
+        {
+          "id": "msg_0235",
+          "kind": "message"
+        }
+      ]
+    },
+    "CANARY-FORGOTTEN-7735": {
+      "kind": "forgotten",
+      "places": [
+        {
+          "id": "msg_0212",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0214",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0215",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0216",
+          "kind": "message"
+        },
+        {
+          "id": "e_seed_3",
+          "kind": "errand"
+        },
+        {
+          "id": "BK-042",
+          "kind": "booking"
+        }
+      ]
+    },
+    "CANARY-FORGOTTEN-7736": {
+      "kind": "forgotten",
+      "places": [
+        {
+          "id": "msg_0217",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0219",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0220",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0221",
+          "kind": "message"
+        },
+        {
+          "id": "e_seed_4",
+          "kind": "errand"
+        },
+        {
+          "id": "BK-043",
+          "kind": "booking"
+        }
+      ]
+    },
+    "CANARY-FORGOTTEN-7737": {
+      "kind": "forgotten",
+      "places": [
+        {
+          "id": "msg_0222",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0224",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0225",
+          "kind": "message"
+        },
+        {
+          "id": "msg_0226",
+          "kind": "message"
+        },
+        {
+          "id": "e_seed_5",
+          "kind": "errand"
+        },
+        {
+          "id": "BK-044",
+          "kind": "booking"
+        }
+      ]
+    },
+    "CANARY-SUPERSEDED-1101": {
+      "kind": "superseded",
+      "places": [
+        {
+          "id": "msg_0190",
+          "kind": "message"
+        }
+      ]
+    },
+    "CANARY-SUPERSEDED-1102": {
+      "kind": "superseded",
+      "places": [
+        {
+          "id": "msg_0229",
+          "kind": "message"
+        }
+      ]
+    },
+    "CANARY-SUPERSEDED-1103": {
+      "kind": "superseded",
+      "places": [
+        {
+          "id": "msg_0128",
+          "kind": "message"
+        }
+      ]
+    },
+    "CANARY-SUPERSEDED-1104": {
+      "kind": "superseded",
+      "places": [
+        {
+          "id": "msg_0231",
+          "kind": "message"
+        }
+      ]
+    },
+    "CANARY-SUPERSEDED-1105": {
+      "kind": "superseded",
+      "places": [
+        {
+          "id": "msg_0140",
+          "kind": "message"
+        }
+      ]
+    },
+    "CANARY-UNDONE-5521": {
+      "kind": "undone",
+      "places": [
+        {
+          "id": "msg_0126",
+          "kind": "message"
+        }
+      ]
+    }
+  },
+  "conversation_id": "c_0001",
+  "counts": {
+    "active": 31,
+    "forgotten": 7,
+    "pending_confirmation": 9,
+    "rejected": 5,
+    "superseded": 8
+  },
+  "inference_declined": [
+    {
+      "scope": "service:plumber",
+      "value": "P7",
+      "why": "active_row_exists"
+    }
+  ],
+  "messages": 240,
+  "rows": [
+    {
+      "events": [
+        "written",
+        "rejected"
+      ],
+      "id": "m-01",
+      "key": "access_note",
+      "kind": "explicit",
+      "label": "undone",
+      "rejected_because": "undone",
+      "scope": "global",
+      "status": "rejected",
+      "value_hash": "f8ecafbfeb343841e9ef4671259391067cd55048a5e2c9d58e3032da0e431ca1"
+    },
+    {
+      "events": [
+        "written",
+        "superseded"
+      ],
+      "id": "m-02",
+      "key": "earliest_time",
+      "kind": "explicit",
+      "label": "pre0",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "superseded",
+      "value_hash": "c39c1c94cde575d6a9c30742933bf8e9f094ad9b5cdde30756d44a05b5392597"
+    },
+    {
+      "events": [
+        "corrected"
+      ],
+      "id": "m-03",
+      "key": "earliest_time",
+      "kind": "explicit",
+      "label": "cor0",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "active",
+      "value_hash": "f8c9662f7dae1018a4fdeb407ae2a484d4909cd7e74d64192d2556647eb6b666"
+    },
+    {
+      "events": [
+        "written",
+        "superseded"
+      ],
+      "id": "m-04",
+      "key": "budget_ceiling",
+      "kind": "explicit",
+      "label": "pre1",
+      "rejected_because": null,
+      "scope": "service:plumber",
+      "status": "superseded",
+      "value_hash": "82e83aa3e2c98c83d1a8ee0df18e25a57682ad57a40a6c09d81ce6a3b515d5e6"
+    },
+    {
+      "events": [
+        "corrected"
+      ],
+      "id": "m-05",
+      "key": "budget_ceiling",
+      "kind": "explicit",
+      "label": "cor1",
+      "rejected_because": null,
+      "scope": "service:plumber",
+      "status": "active",
+      "value_hash": "3f8b0e75000ecf1b3498a2e21a525b77453e147a4c1ffd7e1bccc270d1ee9d47"
+    },
+    {
+      "events": [
+        "written",
+        "superseded"
+      ],
+      "id": "m-06",
+      "key": "budget_ceiling",
+      "kind": "explicit",
+      "label": "pre2",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "superseded",
+      "value_hash": "3f8b0e75000ecf1b3498a2e21a525b77453e147a4c1ffd7e1bccc270d1ee9d47"
+    },
+    {
+      "events": [
+        "corrected"
+      ],
+      "id": "m-07",
+      "key": "budget_ceiling",
+      "kind": "explicit",
+      "label": "cor2",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "active",
+      "value_hash": "f7413e4e0edfb87276543e28335d8250e774f19d85a0f75baf52955aa7cdc988"
+    },
+    {
+      "events": [
+        "written",
+        "superseded"
+      ],
+      "id": "m-08",
+      "key": "avoid_days",
+      "kind": "explicit",
+      "label": "pre3",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "superseded",
+      "value_hash": "750a24a31499f55bac464c6504d58322b1cbb62b92215e74c279c831b73a9662"
+    },
+    {
+      "events": [
+        "corrected"
+      ],
+      "id": "m-09",
+      "key": "avoid_days",
+      "kind": "explicit",
+      "label": "cor3",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "active",
+      "value_hash": "a8931491f56122aa5075c91f06de356a73669f987ec0ec8bea2a4c9553c444dd"
+    },
+    {
+      "events": [
+        "written",
+        "superseded"
+      ],
+      "id": "m-10",
+      "key": "language",
+      "kind": "explicit",
+      "label": "pre4",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "superseded",
+      "value_hash": "dc0d5364ee6f9431ed1a1a3887d4c38d57ecabe07ae1fcb05153286b2cf6fee8"
+    },
+    {
+      "events": [
+        "corrected"
+      ],
+      "id": "m-11",
+      "key": "language",
+      "kind": "explicit",
+      "label": "cor4",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "active",
+      "value_hash": "aefcf071a392433e1120952dfbdceb73b0f13c89333a22d3185259559299b5b4"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-12",
+      "key": "avoid_provider",
+      "kind": "explicit",
+      "label": "avoid_p7",
+      "rejected_because": null,
+      "scope": "service:plumber",
+      "status": "active",
+      "value_hash": "aa2e04e6d0000f0218c8c926e6e75d45063ff5c468eb2c61b25c112a67048b23"
+    },
+    {
+      "events": [
+        "suggested",
+        "confirmed"
+      ],
+      "id": "m-13",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "plumber:P1",
+      "rejected_because": null,
+      "scope": "service:plumber",
+      "status": "active",
+      "value_hash": "32b0a9d2e83884b19a9bd540c17fff29b0fe85fb5bbdb9f32963efe4b91ced08"
+    },
+    {
+      "events": [
+        "suggested",
+        "rejected"
+      ],
+      "id": "m-14",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "plumber:P11",
+      "rejected_because": "superseded_by_keep",
+      "scope": "service:plumber",
+      "status": "rejected",
+      "value_hash": "844d7da07089a663cde5444d3f8c39175eb48da923d76635eb9dedaa656ee7a5"
+    },
+    {
+      "events": [
+        "suggested",
+        "rejected"
+      ],
+      "id": "m-15",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "plumber:P10",
+      "rejected_because": "dismissed",
+      "scope": "service:plumber",
+      "status": "rejected",
+      "value_hash": "37cfda53825a9b313e0b0d63e8211e207a88b7560f686d6f4942cfc5f2bbcf32"
+    },
+    {
+      "events": [
+        "suggested"
+      ],
+      "id": "m-16",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E2",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "cc86aa45e6501a4402955f442440a1d49fcefad44305527719679e409edef663"
+    },
+    {
+      "events": [
+        "suggested"
+      ],
+      "id": "m-17",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E5",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "0fe7dfb3e322ee54b99c169f1183db2289673206dd24c3eb76986683e2cd4831"
+    },
+    {
+      "events": [
+        "suggested"
+      ],
+      "id": "m-18",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E6",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "bfae0c60432194172e4223a42593ffffb5ab0af4dae07e6aa7764eca5a33de66"
+    },
+    {
+      "events": [
+        "suggested"
+      ],
+      "id": "m-19",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E7",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "008cd5291ccb451dc7b1657a30bc825296b988ba6cd859603b453cb341f3e39c"
+    },
+    {
+      "events": [
+        "suggested"
+      ],
+      "id": "m-20",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E8",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "3b6729f86fd99be05a17e6b4b0a133c2a5a2046cb6dd3a34c970f610997de67c"
+    },
+    {
+      "events": [
+        "suggested"
+      ],
+      "id": "m-21",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E10",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "5191871ecf4b5b3535e6792af15693f4a7eaf09bbd553789dc8ac3d4f16bd1e6"
+    },
+    {
+      "events": [
+        "suggested"
+      ],
+      "id": "m-22",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E11",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "3b9de8baedf2ebda393491fde3c492c10a8e2e5824ca4e3b1dc08442152b36cf"
+    },
+    {
+      "events": [
+        "suggested"
+      ],
+      "id": "m-23",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E12",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "0f1b7966db6c307b4b874e50138b762538aca2f195d06257b85a5d092cd4e6e1"
+    },
+    {
+      "events": [
+        "suggested"
+      ],
+      "id": "m-24",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E13",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "pending_confirmation",
+      "value_hash": "3049aa6595f28a7a66557e9a3bf211f985cfa0fb1209ede849db69bbe8ebc6fe"
+    },
+    {
+      "events": [
+        "suggested",
+        "rejected"
+      ],
+      "id": "m-25",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "electrician:E9",
+      "rejected_because": "dismissed",
+      "scope": "service:electrician",
+      "status": "rejected",
+      "value_hash": "db907ce58916531c011fc3a39fa8653d36fd4160004e795aa39142d3a78e22e0"
+    },
+    {
+      "events": [
+        "suggested",
+        "confirmed"
+      ],
+      "id": "m-26",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "ac_servicing:A1",
+      "rejected_because": null,
+      "scope": "service:ac_servicing",
+      "status": "active",
+      "value_hash": "83e6daffd3aec947ab7b70cf3b707a3d5b559bd1502dcb9d5bb1c530abbefadb"
+    },
+    {
+      "events": [
+        "suggested",
+        "rejected"
+      ],
+      "id": "m-27",
+      "key": "preferred_provider",
+      "kind": "inferred",
+      "label": "ac_servicing:A5",
+      "rejected_because": "superseded_by_explicit",
+      "scope": "service:ac_servicing",
+      "status": "rejected",
+      "value_hash": "880d1d6ba9fce3dc6734ab663924563e6cc79524f958f0f6b50acac31e083bfd"
+    },
+    {
+      "events": [
+        "suggested",
+        "confirmed"
+      ],
+      "id": "m-28",
+      "key": "latest_time",
+      "kind": "inferred",
+      "label": "latest:12",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "active",
+      "value_hash": "d4edf35ea06b9c474f2f3371306b9ec225b1c74965cdcbc89893d6fa0f29b2eb"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-29",
+      "key": "avoid_provider",
+      "kind": "explicit",
+      "label": "avoid_a5",
+      "rejected_because": null,
+      "scope": "service:ac_servicing",
+      "status": "active",
+      "value_hash": "aff0b3033bca3ccee2c82d73e31576caf501535590ba4bbf20ca50fe241b0eb4"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-30",
+      "key": "earliest_time",
+      "kind": "explicit",
+      "label": "single0",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "active",
+      "value_hash": "28b58dbc9e09b6e9b78bca82e4c37cf1a24b5b5cd73999480cab1644dac6e302"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-31",
+      "key": "budget_ceiling",
+      "kind": "explicit",
+      "label": "single1",
+      "rejected_because": null,
+      "scope": "service:ac_servicing",
+      "status": "active",
+      "value_hash": "65ff5bb157b46d494f7a11f2d8bd4cbc071047801c5e0cc3b0e12d29cea1bec6"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-32",
+      "key": "avoid_days",
+      "kind": "explicit",
+      "label": "single2",
+      "rejected_because": null,
+      "scope": "service:plumber",
+      "status": "active",
+      "value_hash": "750a24a31499f55bac464c6504d58322b1cbb62b92215e74c279c831b73a9662"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-33",
+      "key": "avoid_days",
+      "kind": "explicit",
+      "label": "single3",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "active",
+      "value_hash": "4b17fa0c72c4f17de388f3d06c5ab0501d63a81aa33e0c08ead2472741174c0e"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-34",
+      "key": "avoid_days",
+      "kind": "explicit",
+      "label": "single4",
+      "rejected_because": null,
+      "scope": "service:ac_servicing",
+      "status": "active",
+      "value_hash": "a7df6a8cba07e6dadc209f51c897bf2a8ffc2d9b31621aa260e313be251eb242"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-35",
+      "key": "avoid_provider",
+      "kind": "explicit",
+      "label": "single6",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "active",
+      "value_hash": "aded593a8d394ec09375ae08948b60bfa3230d4f7468e1d2c1b845f17d792978"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-36",
+      "key": "earliest_time",
+      "kind": "explicit",
+      "label": "single7",
+      "rejected_because": null,
+      "scope": "service:plumber",
+      "status": "active",
+      "value_hash": "abd85e2b60f1ced898961e47c1f6023b09765750f444cb0b19ce8211290b62ec"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-37",
+      "key": "latest_time",
+      "kind": "explicit",
+      "label": "single8",
+      "rejected_because": null,
+      "scope": "service:plumber",
+      "status": "active",
+      "value_hash": "d7fd62361d7bdd1fdff0fa53a61c3ff16f9e3466eca45d2b6cb5c5c6e8ca104a"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-38",
+      "key": "latest_time",
+      "kind": "explicit",
+      "label": "single9",
+      "rejected_because": null,
+      "scope": "service:electrician",
+      "status": "active",
+      "value_hash": "bc59cd31a5112da8b4c5ecd4c5fd69946ce333561828ca001351ee32efd4193a"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-39",
+      "key": "earliest_time",
+      "kind": "explicit",
+      "label": "single10",
+      "rejected_because": null,
+      "scope": "service:ac_servicing",
+      "status": "active",
+      "value_hash": "c39c1c94cde575d6a9c30742933bf8e9f094ad9b5cdde30756d44a05b5392597"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-40",
+      "key": "latest_time",
+      "kind": "explicit",
+      "label": "single11",
+      "rejected_because": null,
+      "scope": "service:ac_servicing",
+      "status": "active",
+      "value_hash": "d8e4359bbdea6ca38affb8ee127b5c572cef20549173646799a7607c056af51e"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-41",
+      "key": "budget_ceiling",
+      "kind": "explicit",
+      "label": "irrelevant0",
+      "rejected_because": null,
+      "scope": "service:pest_control",
+      "status": "active",
+      "value_hash": "ff8f0590c87bd109df7ab482a88c1b88cf16225a0289d54a14d8ac66fc707293"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-42",
+      "key": "avoid_days",
+      "kind": "explicit",
+      "label": "irrelevant1",
+      "rejected_because": null,
+      "scope": "service:pest_control",
+      "status": "active",
+      "value_hash": "102b1084ba1cdc521679e29b6dce22a3b100e4ac210db31fce6e24445e20d88b"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-43",
+      "key": "earliest_time",
+      "kind": "explicit",
+      "label": "irrelevant2",
+      "rejected_because": null,
+      "scope": "service:pest_control",
+      "status": "active",
+      "value_hash": "c39c1c94cde575d6a9c30742933bf8e9f094ad9b5cdde30756d44a05b5392597"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-44",
+      "key": "latest_time",
+      "kind": "explicit",
+      "label": "irrelevant3",
+      "rejected_because": null,
+      "scope": "service:pest_control",
+      "status": "active",
+      "value_hash": "41b4c41e25d7db9c1a4cf157ff5ecc140b6440ffd28be591c9d204ab750ec586"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-45",
+      "key": "budget_ceiling",
+      "kind": "explicit",
+      "label": "irrelevant4",
+      "rejected_because": null,
+      "scope": "service:painting",
+      "status": "active",
+      "value_hash": "a44c4b601407c9d0ed612e34b538d736d2433599790b3d8f79ea8129ced7062a"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-46",
+      "key": "avoid_days",
+      "kind": "explicit",
+      "label": "irrelevant5",
+      "rejected_because": null,
+      "scope": "service:painting",
+      "status": "active",
+      "value_hash": "1aac962b453ea53fa2eb818e75ec45869e297aeecec084533ea5759acdc0d24b"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-47",
+      "key": "earliest_time",
+      "kind": "explicit",
+      "label": "irrelevant6",
+      "rejected_because": null,
+      "scope": "service:painting",
+      "status": "active",
+      "value_hash": "28b58dbc9e09b6e9b78bca82e4c37cf1a24b5b5cd73999480cab1644dac6e302"
+    },
+    {
+      "events": [
+        "written"
+      ],
+      "id": "m-48",
+      "key": "contact_window",
+      "kind": "explicit",
+      "label": "irrelevant7",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "active",
+      "value_hash": "5765268ade29df268bd46f4d767739d52c21a29a5e52871d1e1c8ae1ff7ffc23"
+    },
+    {
+      "events": [
+        "written",
+        "superseded"
+      ],
+      "id": "m-49",
+      "key": "home_area",
+      "kind": "explicit",
+      "label": "home1",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "superseded",
+      "value_hash": "306a4c517ca5d2aae03960e80e7c1bf20b9bf8225fd09af0e97123d4b08b3e48"
+    },
+    {
+      "events": [
+        "written",
+        "superseded",
+        "forgotten"
+      ],
+      "id": "m-50",
+      "key": "access_note",
+      "kind": "explicit",
+      "label": "note1",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "forgotten",
+      "value_hash": "3004e19cfd6aed0c97d6c2ae4a29d6e0d5935133e1cc0f1d8c20d40d7f674181"
+    },
+    {
+      "events": [
+        "corrected",
+        "superseded",
+        "forgotten"
+      ],
+      "id": "m-51",
+      "key": "access_note",
+      "kind": "explicit",
+      "label": "note2",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "forgotten",
+      "value_hash": "3b94c49c1c447dc0b1c33895546d4266d4d0db5084b010840b985d430bc13d5f"
+    },
+    {
+      "events": [
+        "written",
+        "forgotten"
+      ],
+      "id": "m-52",
+      "key": "earliest_time",
+      "kind": "explicit",
+      "label": "forgotten0",
+      "rejected_because": null,
+      "scope": "service:cleaning",
+      "status": "forgotten",
+      "value_hash": "123699494b7bce2a8b2b6d5e114beba67e544786df072d23a1c2d031655527fa"
+    },
+    {
+      "events": [
+        "written",
+        "forgotten"
+      ],
+      "id": "m-53",
+      "key": "budget_ceiling",
+      "kind": "explicit",
+      "label": "forgotten1",
+      "rejected_because": null,
+      "scope": "service:carpentry",
+      "status": "forgotten",
+      "value_hash": "6acfa422457a4d8697c29949b8a79066a74ddb79c9c82c36701badc890a32623"
+    },
+    {
+      "events": [
+        "written",
+        "forgotten"
+      ],
+      "id": "m-54",
+      "key": "avoid_days",
+      "kind": "explicit",
+      "label": "forgotten2",
+      "rejected_because": null,
+      "scope": "service:gardening",
+      "status": "forgotten",
+      "value_hash": "8f2193f6e8c3376b0fa0a2cf2a6a15e6761b6f2e99b0c9c28a8c7a11f74ab9f0"
+    },
+    {
+      "events": [
+        "written",
+        "forgotten"
+      ],
+      "id": "m-55",
+      "key": "latest_time",
+      "kind": "explicit",
+      "label": "forgotten3",
+      "rejected_because": null,
+      "scope": "service:laundry",
+      "status": "forgotten",
+      "value_hash": "41b4c41e25d7db9c1a4cf157ff5ecc140b6440ffd28be591c9d204ab750ec586"
+    },
+    {
+      "events": [
+        "written",
+        "forgotten"
+      ],
+      "id": "m-56",
+      "key": "earliest_time",
+      "kind": "explicit",
+      "label": "forgotten4",
+      "rejected_because": null,
+      "scope": "service:tutoring",
+      "status": "forgotten",
+      "value_hash": "56685786f53dbb4e348d724e549113efdc93188f3ee3e83ee2014b0337b6cb6d"
+    },
+    {
+      "events": [
+        "corrected",
+        "superseded"
+      ],
+      "id": "m-57",
+      "key": "home_area",
+      "kind": "explicit",
+      "label": "home2",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "superseded",
+      "value_hash": "59c812bdea5f1fe3d63e208dc932a6c5103d57859bed9239b714d5d18df6a53d"
+    },
+    {
+      "events": [
+        "corrected",
+        "superseded"
+      ],
+      "id": "m-58",
+      "key": "access_note",
+      "kind": "explicit",
+      "label": "note_s1",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "superseded",
+      "value_hash": "b2a66b2c03482dc89c387f5daa66f24fb77b339597b8e69cbbcdeab6cf226ad0"
+    },
+    {
+      "events": [
+        "corrected"
+      ],
+      "id": "m-59",
+      "key": "home_area",
+      "kind": "explicit",
+      "label": "home3",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "active",
+      "value_hash": "73f5452313a925cafe385c26f5e8057b84712d10de40911b8eb029cceb92e21f"
+    },
+    {
+      "events": [
+        "corrected"
+      ],
+      "id": "m-60",
+      "key": "access_note",
+      "kind": "explicit",
+      "label": "note_head",
+      "rejected_because": null,
+      "scope": "global",
+      "status": "active",
+      "value_hash": "dce22a4f28939e00ec3c659c5b3c7c2d28343e008e151d4be5d2b7a58a6b29c3"
+    }
+  ],
+  "seed": "memory_rich_v1",
+  "user_id": "u_demo",
+  "user_words_kept": [
+    {
+      "end": 56,
+      "memory_id": "m-01",
+      "message_id": "msg_0126",
+      "start": 0
+    }
+  ]
+}

@@ -57,6 +57,12 @@ def test_api_has_exactly_the_m7_routes() -> None:
         "/api/approvals/{approval_id}/decision",
         "/api/messages/{message_id}/rendered",
         "/api/conversations/{conversation_id}/actions",
+        # N2: the memory API
+        "/api/memory",
+        "/api/memory/{memory_id}",
+        "/api/memory/{memory_id}/confirm",
+        "/api/memory/{memory_id}/dismiss",
+        "/api/memory/{memory_id}/undo",
     }
 
 

@@ -141,6 +141,12 @@ source_modules = [
 forbidden_modules = ["errand.execution.executor"]
 
 [[tool.importlinter.contracts]]
+name = "Context building and the model gateway read memory, they never write it (no errand.memory.service)"
+type = "forbidden"
+source_modules = ["errand.context", "errand.llm"]
+forbidden_modules = ["errand.memory.service"]
+
+[[tool.importlinter.contracts]]
 name = "The mock world never imports the agent"
 type = "forbidden"
 source_modules = ["errand.world"]

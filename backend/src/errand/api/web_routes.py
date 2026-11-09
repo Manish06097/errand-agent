@@ -22,6 +22,7 @@ from errand.api import events
 from errand.api.dev_routes import dev_enabled
 from errand.api.runs import RunManager
 from errand.trace import reader
+from errand.trace.masked import MaskUnavailable, masker_for
 
 router = APIRouter()
 
@@ -88,7 +89,8 @@ async def _run_trace(request: Request, run_id: str) -> tuple[Any, reader.TraceFi
     path = manager.traces_dir / run.trace_path
     if not path.is_file():
         return run, None
-    return run, reader.read_trace(path)
+    # every user-facing read masks forgotten values (gate 2 decision 14)
+    return run, reader.read_trace_masked(path, masker_for(manager.traces_dir.parent))
 
 
 @router.get(
@@ -97,7 +99,10 @@ async def _run_trace(request: Request, run_id: str) -> tuple[Any, reader.TraceFi
     responses={404: {"description": "unknown run"}},
 )
 async def run_trace(run_id: str, request: Request) -> Any:
-    run, trace = await _run_trace(request, run_id)
+    try:
+        run, trace = await _run_trace(request, run_id)
+    except MaskUnavailable:
+        return JSONResponse({"error": "mask_unavailable"}, status_code=503)
     if run is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
     records = [] if trace is None else trace.records
@@ -113,7 +118,10 @@ async def run_trace(run_id: str, request: Request) -> Any:
 
 @router.get("/api/runs/{run_id}/trace.jsonl", response_model=None)
 async def run_trace_jsonl(run_id: str, request: Request) -> Response:
-    run, trace = await _run_trace(request, run_id)
+    try:
+        run, trace = await _run_trace(request, run_id)
+    except MaskUnavailable:
+        return JSONResponse({"error": "mask_unavailable"}, status_code=503)
     if run is None:
         return JSONResponse({"error": "not_found"}, status_code=404)
     body = b"" if trace is None else reader.to_jsonl(trace)

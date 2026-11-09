@@ -16,13 +16,14 @@ sent twice. `token` events have no id and are never replayed. The stream ends af
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from fastapi.sse import ServerSentEvent
 
+from errand.trace.masked import Masker
 from errand.trace.reader import read_trace
 
 EVENT_NAMES = {
@@ -100,13 +101,17 @@ def token_event(text: str) -> ServerSentEvent:
 
 
 async def stream_events(
-    *, trace_file: Path, stream: RunStream | None, last_event_id: int
+    *, trace_file: Path, stream: RunStream | None, last_event_id: int, masker: Masker | None = None
 ) -> AsyncIterator[ServerSentEvent]:
+    """Replay then follow. A masker hides forgotten values on every record served (gate 2
+    decision 14); the trace file itself is never rewritten."""
+    mask: Callable[[Any], Any] = masker.record if masker is not None else (lambda r: r)
     queue = stream.subscribe() if stream is not None else None
     try:
         sent = last_event_id
         if trace_file.exists():
             for record in read_trace(trace_file).records:
+                record = mask(record)
                 seq = int(record["seq"])
                 if seq <= sent:
                     continue
@@ -127,7 +132,7 @@ async def stream_events(
             seq = int(item.record["seq"])
             if seq <= sent:
                 continue
-            yield record_event(item.record)
+            yield record_event(mask(item.record))
             sent = seq
             if item.record["type"] == "run.end":
                 return

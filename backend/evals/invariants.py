@@ -75,6 +75,14 @@ class Records:
     world_services: dict[str, str] = field(default_factory=dict)
     world_names: dict[str, str] = field(default_factory=dict)  # provider_id -> name
     world_user: str = "u_demo"
+    # agent.sqlite memory tables (N2); plain rows, read straight from the file
+    memories: list[dict[str, Any]] = field(default_factory=list)
+    memory_events: list[dict[str, Any]] = field(default_factory=list)
+    memory_blocklist: list[dict[str, Any]] = field(default_factory=list)
+    memory_hashes: list[dict[str, Any]] = field(default_factory=list)
+    redactions: list[dict[str, Any]] = field(default_factory=list)
+    known_booking_ids: list[str] = field(default_factory=list)
+    client_action_ids: list[str] = field(default_factory=list)
     # M5: agent.sqlite intent_attempts, whether the world dedupes keys (world.sqlite), and
     # the agent's retry budget (the harness sets it; it is configuration, not a record).
     attempts: list[dict[str, Any]] = field(default_factory=list)
@@ -104,9 +112,22 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
             dict(r) for r in conn.execute("SELECT * FROM approvals ORDER BY requested_at, rowid")
         ]
         intents = [dict(r) for r in conn.execute("SELECT * FROM action_intents ORDER BY rowid")]
-        attempts = [
-            dict(r) for r in conn.execute("SELECT * FROM intent_attempts ORDER BY intent_id, n")
+
+        def table(sql: str) -> list[dict[str, Any]]:
+            return [dict(r) for r in conn.execute(sql)]
+
+        memories = table("SELECT * FROM memories ORDER BY rowid")
+        memory_events = table("SELECT * FROM memory_events ORDER BY rowid")
+        memory_blocklist = table("SELECT * FROM memory_blocklist ORDER BY rowid")
+        memory_hashes = table("SELECT * FROM memory_surface_hashes ORDER BY rowid")
+        redactions = table(
+            'SELECT message_id, "start", "end", memory_id, kind FROM message_redactions'
+        )
+        known_booking_ids = [r[0] for r in conn.execute("SELECT booking_id FROM known_bookings")]
+        client_action_ids = [
+            r[0] for r in conn.execute("SELECT client_action_id FROM client_requests")
         ]
+        attempts = table("SELECT * FROM intent_attempts ORDER BY intent_id, n")
     finally:
         conn.close()
     traces: dict[str, list[dict[str, Any]]] = {}
@@ -126,6 +147,13 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
         world_services=services,
         world_names=_provider_names(root / "world.sqlite"),
         world_user=user,
+        memories=memories,
+        memory_events=memory_events,
+        memory_blocklist=memory_blocklist,
+        memory_hashes=memory_hashes,
+        redactions=redactions,
+        known_booking_ids=known_booking_ids,
+        client_action_ids=client_action_ids,
         attempts=attempts,
         world_dedupes=dedupes,
     )
@@ -1168,6 +1196,370 @@ def inv16_no_granted_approval_left(rec: Records) -> Violations:
     ]
 
 
+# ---------------------------------------------------------------- INV-05 (N2)
+
+# INV-05 has its own normaliser and its own word-run search. It must not use
+# errand.memory.mask, which is the code under test (M4's rule: an invariant must not vouch
+# for what it checks).
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def _words(text: str) -> list[str]:
+    return _WORD.findall(unicodedata.normalize("NFKC", text).casefold())
+
+
+def _contains_run(hay: list[str], needle: list[str]) -> bool:
+    if not needle or len(needle) > len(hay):
+        return False
+    first = needle[0]
+    return any(
+        hay[i] == first and hay[i : i + len(needle)] == needle
+        for i in range(len(hay) - len(needle) + 1)
+    )
+
+
+def _request_strings(record: dict[str, Any]) -> list[str]:
+    strings: list[str] = []
+    _strings(record.get("request"), strings)
+    return strings
+
+
+def _block(strings: list[str], tag: str) -> str:
+    """The text of one tagged block of the user turn (S3 `errand_state`, S4 `memory`)."""
+    for text in strings:
+        start = text.find(f"<{tag}>")
+        if start >= 0:
+            end = text.find(f"</{tag}>", start)
+            return text[start : end if end >= 0 else len(text)]
+    return ""
+
+
+def inv05_no_forgotten_value_in_requests(rec: Records) -> Violations:
+    """No forgotten, superseded or redacted canary appears in any model request, in any
+    section or role. The canaries come from the scenario (`notes["memory_canaries"]`, each
+    `{text, kind}`, loaded from the seed manifest or named by the scenario). An `undone`
+    canary may appear only inside the user's own words (the spans the seed manifest marks
+    `user_words_kept`), never in S4, an assistant message or a card (12.2). No pending or
+    dismissed (key, value) pair from the seed manifest appears in S3's brief or in S4.
+    A scenario that loads a seed and checks zero canaries is itself a violation.
+    """
+    canaries = [c for c in rec.notes.get("memory_canaries", []) if c.get("text")]
+    pairs = rec.notes.get("memory_inactive_pairs", [])
+    rec.notes["memory_canaries_checked"] = len(canaries)
+    out: Violations = []
+    if rec.notes.get("memory_seed") and not canaries:
+        return ["a seeded scenario checked zero canaries: INV-05 would pass vacuously"]
+    for record in rec.all_records():
+        if record["type"] != "model.call":
+            continue
+        strings = _request_strings(record)
+        words = [w for text in strings for w in [*_words(text), "\x00"]]
+        where = f"{record['run_id']} seq {record['seq']}"
+        for canary in canaries:
+            needle = _words(str(canary["text"]))
+            if not _contains_run(words, needle):
+                continue
+            if canary["kind"] == "undone" and _only_in_user_words(strings, needle):
+                continue
+            out.append(f"{where}: {canary['kind']} canary {canary['text']!r} reached the model")
+        memory_block, state_block = _block(strings, "memory"), _block(strings, "errand_state")
+        for pair in pairs:
+            key, value = str(pair["key"]), json.dumps(pair["value"], ensure_ascii=False)
+            if f'"{key}":{value}' in memory_block.replace(" ", ""):
+                out.append(f"{where}: {pair['status']} suggestion {key}={value} is in S4")
+            if (
+                key == "preferred_provider"
+                and f"provider_pref: prefer {pair['value']}" in state_block
+            ):
+                out.append(f"{where}: {pair['status']} suggestion {key}={value} is in S3's brief")
+    return out
+
+
+def _only_in_user_words(strings: list[str], needle: list[str]) -> bool:
+    """True if every string holding the needle is a user-voiced block: the current message
+    or a `user:` line of the recent turns."""
+    for text in strings:
+        if not _contains_run(_words(text), needle):
+            continue
+        for line in text.splitlines():
+            if _contains_run(_words(line), needle) and not (
+                line.startswith("user:") or "<current_message>" in text
+            ):
+                return False
+    return True
+
+
+# ---------------------------------------------------------------- INV-06 (N2)
+
+HARD_BUDGET = 12_000
+
+
+_BOUND_SKIP_KEYS = frozenset({"type", "role", "model"})
+_TOOLS_PREAMBLE = 400  # measured once (spikes C5); repeated here, not imported
+
+
+def _request_lower_bound(record: dict[str, Any]) -> int:
+    """ceil(utf8_bytes / 1.5) per string value in the recorded request, plus the tools
+    preamble when tools are bound. This is a lower bound on the estimator's own figure, not
+    on the real token count (bytes / 1.5 is above the real count, which is why the estimator
+    is conservative, ADR 0007): it counts the same bytes without keys or per-block overhead,
+    so a recorded estimate below it means the gateway under-reported."""
+    request = record.get("request") or {}
+    total = 0
+    stack: list[tuple[Any, str]] = [(request, "")]
+    while stack:
+        value, key = stack.pop()
+        if isinstance(value, str):
+            if key not in _BOUND_SKIP_KEYS:
+                total += -(-len(value.encode("utf-8")) * 2 // 3)
+        elif isinstance(value, list):
+            stack.extend((v, key) for v in value)
+        elif isinstance(value, dict):
+            stack.extend((v, k) for k, v in value.items())
+    return total + (_TOOLS_PREAMBLE if request.get("tools") else 0)
+
+
+def inv06_every_request_within_the_budget(rec: Records) -> Violations:
+    """Every request's estimate is within the budget, and in replay, record and live modes
+    the API-reported input tokens are too. It also checks that no request was sent that
+    its own `context.built` said was over the cap, and recomputes a lower bound from the
+    recorded request strings: over the budget, or above the recorded estimate, is a
+    violation, so the estimate the code under test writes is not the only witness."""
+    out: Violations = []
+    built: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for record in rec.all_records():
+        if record["type"] == "context.built":
+            built[(record["run_id"], str(record["manifest"].get("request_sha256")))].append(record)
+    biggest_est = biggest_reported = biggest_bound = 0
+    for record in rec.all_records():
+        if record["type"] != "model.call":
+            continue
+        where = f"{record['run_id']} seq {record['seq']}"
+        est = int(record.get("est_request_tokens", 0))
+        floor = int(record.get("floor_tokens", 0))
+        biggest_est = max(biggest_est, est, floor)
+        if max(est, floor) > HARD_BUDGET:
+            out.append(f"{where}: estimated {max(est, floor)} tokens, over {HARD_BUDGET}")
+        # An independent lower bound from the raw request strings in the record, so the
+        # gateway's own estimate is not the only witness. It never counts keys or
+        # structure, so an honest estimate is always above it.
+        bound = _request_lower_bound(record)
+        biggest_bound = max(biggest_bound, bound)
+        if bound > HARD_BUDGET:
+            out.append(f"{where}: independent lower bound {bound} tokens, over {HARD_BUDGET}")
+        elif bound > est:
+            out.append(
+                f"{where}: independent lower bound {bound} tokens, "
+                f"above the recorded estimate of {est}"
+            )
+        if int(record.get("budget_tokens", HARD_BUDGET)) > HARD_BUDGET:
+            out.append(f"{where}: the gateway's budget was {record['budget_tokens']}")
+        for cb in built.get((record["run_id"], str(record["request_sha256"])), []):
+            if cb["manifest"].get("sent") is False:
+                out.append(f"{where}: sent although context.built said it was over the cap")
+        if record.get("mode") in ("replay", "record", "live"):
+            usage = record.get("usage") or {}
+            reported = sum(
+                int(usage.get(k, 0))
+                for k in ("input_uncached", "cache_read", "cache_write_5m", "cache_write_1h")
+            )
+            biggest_reported = max(biggest_reported, reported)
+            if reported > HARD_BUDGET:
+                out.append(f"{where}: the API reported {reported} input tokens")
+    rec.notes["max_estimated_tokens"] = biggest_est
+    rec.notes["max_reported_input_tokens"] = biggest_reported
+    rec.notes["max_lower_bound_tokens"] = biggest_bound
+    return out
+
+
+# ---------------------------------------------------------------- INV-19 (N2)
+
+# INV-19 keeps its own cue table, not memory/cues.py.
+_CUES = (
+    "always", "never", "from now on", "every time", "i live in", "i prefer", "my usual",
+    "i moved to", "i've moved to", "i have moved to", "we moved to",
+)  # fmt: skip
+_ONE_OFF = ("this time", "today", "for now", "just for")
+_REMOVED = "[removed at your request]"
+
+
+def _has(text: str, phrases: Iterable[str]) -> str | None:
+    low = unicodedata.normalize("NFKC", text).casefold().replace("\u2019", "'")
+    return next((p for p in phrases if re.search(rf"(?<![\w']){re.escape(p)}(?!\w)", low)), None)
+
+
+def inv19_memory_authority(rec: Records) -> Violations:
+    """Memory authority: every active explicit row has a cue-bearing span from a user
+    message or a `ui_action`; every inferred row has rule evidence over booking ids; every
+    row that left `pending_confirmation` did so by a user action; every forgotten row has
+    a NULL value, its blocklist row, its redactions and no plaintext of the value left in
+    `messages`; `memory_events` holds an event for every status a row has had."""
+    out: Violations = []
+    messages = {m["message_id"]: m for m in rec.messages}
+    events: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for event in rec.memory_events:
+        events[event["memory_id"]].append(event)
+    block = {(b["key"], b["scope"], b["value_hash"]) for b in rec.memory_blocklist}
+    hashed = {h["memory_id"] for h in rec.memory_hashes if h["kind"] == "surface_form"}
+    redacted_msgs = {
+        (r["memory_id"], r["message_id"]) for r in rec.redactions if r["kind"] == "forgotten"
+    }
+    canaries = [c for c in rec.notes.get("memory_canaries", []) if c["kind"] == "forgotten"]
+    for row in rec.memories:
+        mid, status = row["memory_id"], row["status"]
+        ev = json.loads(row["evidence_json"]) if row["evidence_json"] else None
+        types = [e["type"] for e in events[mid]]
+        if row["kind"] == "explicit" and status in ("active", "superseded"):
+            out += _explicit_evidence(row, ev, messages, rec.client_action_ids)
+        if row["kind"] == "inferred":
+            ids = (ev or {}).get("booking_ids") or []
+            if (ev or {}).get("type") != "rule" or not ids:
+                out.append(f"{mid}: an inferred row without rule evidence over booking ids")
+            for booking in ids:
+                if booking not in rec.known_booking_ids:
+                    out.append(f"{mid}: evidence names booking {booking}, which does not exist")
+        # a row that left pending_confirmation did so by a user action
+        if row["kind"] == "inferred" and "suggested" in types:
+            for e in events[mid]:
+                if e["type"] == "confirmed" and e["actor"] != "user":
+                    out.append(f"{mid}: confirmed by {e['actor']}, not by the user")
+                if e["type"] == "rejected" and e["actor"] != "user":
+                    reason = json.loads(e["details_json"] or "{}").get("reason")
+                    if reason != "superseded_by_explicit":
+                        out.append(f"{mid}: rejected by {e['actor']} for {reason!r}")
+        if row["kind"] == "inferred" and status == "active" and "confirmed" not in types:
+            out.append(f"{mid}: an inferred row is active with no user confirmation")
+        # an event for every status the row has had
+        want = {
+            "active": {"written", "corrected", "confirmed"},
+            "pending_confirmation": {"suggested"},
+            "superseded": {"superseded"},
+            "rejected": {"rejected"},
+            "forgotten": {"forgotten"},
+        }[status]
+        if not want & set(types):
+            out.append(f"{mid}: status {status} but no {sorted(want)} event")
+        if "confirmed" in types and "suggested" not in types:
+            out.append(f"{mid}: confirmed without ever being suggested")
+        if status == "forgotten":
+            if row["value_json"] is not None:
+                out.append(f"{mid}: forgotten but its value is still stored")
+            if (row["key"], row["scope"], row["value_hash"]) not in block:
+                out.append(f"{mid}: forgotten without a blocklist row")
+            if mid not in hashed and row["key"] != "access_note":
+                out.append(f"{mid}: forgotten without surface-form hashes")
+            if ev and ev.get("type") == "user_msg" and (mid, ev["message_id"]) not in redacted_msgs:
+                out.append(f"{mid}: forgotten but its evidence message has no redaction")
+            if ev and "quote" in ev:
+                out.append(f"{mid}: forgotten but its quote is still stored")
+    for canary in canaries:
+        needle = _words(str(canary["text"]))
+        for m in rec.messages:
+            if _contains_run(_words(json.dumps(m["body"], ensure_ascii=False)), needle):
+                out.append(f"{m['message_id']}: plaintext of forgotten {canary['text']!r}")
+    return out
+
+
+def _sentence(text: str, start: int, end: int) -> str:
+    """The clauses of `text` that [start, end) touches, split by hand, not by memory/cues."""
+    lo, hi = 0, len(text)
+    for i, ch in enumerate(text):
+        stop = ch == "\n" or (ch in ".!?;" and (i + 1 == len(text) or text[i + 1].isspace()))
+        if not stop:
+            continue
+        if i < start:
+            lo = i + 1
+        elif i >= end:
+            hi = i
+            break
+    return text[lo:hi]
+
+
+def _explicit_evidence(
+    row: dict[str, Any],
+    ev: dict[str, Any] | None,
+    messages: dict[str, dict[str, Any]],
+    client_actions: list[str],
+) -> Violations:
+    mid = row["memory_id"]
+    if ev is None:
+        return [f"{mid}: an explicit row without evidence"]
+    if ev.get("type") == "ui_action":
+        if ev.get("client_action_id") not in client_actions:
+            return [f"{mid}: ui_action evidence names an action that never happened"]
+        return []
+    if ev.get("type") != "user_msg":
+        return [f"{mid}: explicit evidence of type {ev.get('type')!r}"]
+    message = messages.get(str(ev.get("message_id")))
+    if message is None or message["role"] != "user":
+        return [f"{mid}: evidence is not a user message"]
+    text = message["body"].get("text", "")
+    quote = ev.get("quote", "")
+    if text[ev["start"] : ev["end"]] != quote and _REMOVED not in text:
+        return [f"{mid}: the quote is not where the evidence says it is"]
+    # the cue must be in the quote; the one-off veto reads the whole sentence around it
+    # (INV-19's own split: a clause ends at . ! ? ; before a space or the end, or a newline)
+    whole = quote
+    if text[ev["start"] : ev["end"]] == quote:
+        whole = _sentence(text, ev["start"], ev["end"])
+    cue, veto = _has(quote, _CUES), _has(whole, _ONE_OFF)
+    if cue is None:
+        return [f"{mid}: evidence {quote!r} has no standing-preference cue"]
+    if veto is not None:
+        return [f"{mid}: evidence {quote!r} is a one-off ({veto!r})"]
+    return []
+
+
+# ---------------------------------------------------------------- INV-20 (N2)
+
+
+def inv20_the_manifest_tells_the_truth(rec: Records) -> Violations:
+    """Every `model.call` has exactly one `context.built` with the same `request_sha256`,
+    and what the manifest says went into the request is what the raw request holds: the
+    message ids it lists for S6 are the ones rendered in `<recent_turns>`. It reads the raw
+    request, so the manifest cannot vouch for itself."""
+    out: Violations = []
+    messages = {m["message_id"]: m for m in rec.messages}
+    for run, records in rec.run_records():
+        built: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for record in records:
+            if record["type"] == "context.built":
+                built[str(record["manifest"].get("request_sha256"))].append(record)
+        for record in records:
+            if record["type"] != "model.call":
+                continue
+            where = f"{run['run_id']} seq {record['seq']}"
+            matches = built.get(str(record["request_sha256"]), [])
+            if len(matches) != 1:
+                out.append(f"{where}: {len(matches)} context.built records for this request")
+                continue
+            manifest = matches[0]["manifest"]
+            if manifest.get("builder") != "context.builder":
+                continue  # loop calls carry the first call's manifest, merged
+            out += _check_recent(where, manifest, record, messages)
+    return out
+
+
+def _check_recent(
+    where: str, manifest: dict[str, Any], record: dict[str, Any], messages: dict[str, Any]
+) -> Violations:
+    included = list(manifest.get("messages_included") or [])
+    block = _block(_request_strings(record), "recent_turns")
+    lines = [ln for ln in block.splitlines()[1:] if ln.startswith(("user: ", "assistant: "))]
+    if len(lines) != len(included):
+        return [f"{where}: S6 holds {len(lines)} lines, the manifest lists {len(included)}"]
+    out: Violations = []
+    for message_id, line in zip(included, lines, strict=True):
+        message = messages.get(message_id)
+        if message is None:
+            out.append(f"{where}: the manifest lists {message_id}, which does not exist")
+        elif not line.startswith("user: " if message["role"] == "user" else "assistant: "):
+            out.append(
+                f"{where}: {message_id} is a {message['role']} message, rendered {line[:12]!r}"
+            )
+    return out
+
+
 # ---------------------------------------------------------------- INV-03 (M5)
 
 
@@ -1404,6 +1796,10 @@ INVARIANTS: dict[str, Callable[[Records], Violations]] = {
     "INV-13": inv13_no_ask_for_filled_or_asked,
     "INV-15": inv15_parked_on_every_live_card,
     "INV-16": inv16_no_granted_approval_left,
+    "INV-05": inv05_no_forgotten_value_in_requests,
+    "INV-06": inv06_every_request_within_the_budget,
+    "INV-19": inv19_memory_authority,
+    "INV-20": inv20_the_manifest_tells_the_truth,
     "INV-03": inv03_a_resend_follows_the_status_first_rule,
     "INV-18": inv18_no_attempt_left_unsettled,
 }

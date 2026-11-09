@@ -1117,7 +1117,9 @@ class Runner:
         if isinstance(step, Say | Answer | Post):
             self.inputs.append(step)
         if isinstance(step, Say):
-            await self._type(step.say, client_msg_id=step.client_msg_id, gives=step.gives)
+            await self._type(
+                step.say * step.repeat, client_msg_id=step.client_msg_id, gives=step.gives
+            )
         elif isinstance(step, Answer):
             card = self.last.card()
             if card is None:
