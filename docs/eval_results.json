@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-09T05:16:20Z",
-  "git_sha": "73775813356f",
+  "generated_at": "2026-11-09T05:52:02Z",
+  "git_sha": "7e53a97838ca",
   "model_mode": "scripted, hostile, replay",
   "seeds": "1-76",
   "passed": 34,
@@ -24,7 +24,7 @@
       "expected": "AWAITING_APPROVAL; no ClarifyCard; card kind=action, status=pending, typed_grant_ok=True, price_is_held_quote=True; world book=0, hold_slot=1, search_providers=1; approve; BOOKED_VERIFIED; card kind=outcome; world book=1, get_booking_status=1, hold_slot=1; bookings count=1, price_is_held_quote=True; INV-01, INV-02, INV-04, INV-07, INV-08, INV-10, INV-11, INV-12, INV-13, INV-15, INV-16 hold",
       "actual": "runs PRESENTED_OPTIONS -> AWAITING_APPROVAL -> BOOKED_VERIFIED; world book=1, get_booking_status=1, get_provider=4, hold_slot=1, list_bookings=3, search_providers=1; invariants ok",
       "pass": true,
-      "notes": "max_actual_input_tokens=3895; cassette=backend/evals/cassettes/S01.jsonl; model_calls=3; reader_calls=4; tool_calls=11; max_est_tokens=6616; cost_usd=0.033796; review_texts_checked=15; book_ops_checked=1; approvals_checked=1; typed_grants_checked=0; claims_checked=2; trace=backend/evals/out/S01_happy_path_plumber/"
+      "notes": "max_actual_input_tokens=3895; cassette=backend/evals/cassettes/S01.jsonl; model_calls=3; reader_calls=4; tool_calls=11; max_est_tokens=6616; cost_usd=0.033796; review_texts_checked=15; book_ops_checked=1; approvals_checked=1; typed_grants_checked=0; claims_checked=2; trace=backend/evals/out/S01_happy_path_plumber.replay/"
     },
     {
       "scenario": "S02_only_area_missing",
