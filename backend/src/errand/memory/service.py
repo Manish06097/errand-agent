@@ -725,7 +725,9 @@ class MemoryService:
                 )
                 if moved is not None:
                     kept.append(Redaction(message_id, moved[0], moved[1], old.memory_id, old.kind))
-            primary_owner = chain[0].memory_id
+            # The row whose evidence this message is owns its redaction (BUG-N2B-1); a message
+            # that only repeats a value belongs to the chain's newest row.
+            primary_owner = spans_here[0][2] if spans_here else chain[0].memory_id
             for s, e in redaction.new_spans(edited, redaction.FORGOTTEN_MARKER):
                 kept.append(Redaction(message_id, s, e, primary_owner, "forgotten"))
             await mem.replace_redactions(message_id, kept)

@@ -42,7 +42,7 @@ from errand.store.repos.messages import Message
 # The sheds, in order. Each level includes the ones before it.
 SHED_ORDER: tuple[str, ...] = ("recent", "ledger", "memory")
 UPCOMING_SHOWN = 5
-REDACTED_TAIL = 12  # messages whose redactions are looked up: the ones S6 can render
+REDACTED_TAIL = 80  # messages whose redactions are looked up: more than S6 can render
 
 
 @dataclass(frozen=True)
