@@ -43,6 +43,11 @@ test("a click on a stale card shows details changed and the refetched card is th
 
 test('typing "book it" with the synced clock is routed as a grant', async ({ page, request }) => {
   await loadWorld(request, "S01_happy_path_plumber");
+  // Put the agent clock a day ahead of the wall clock, whatever the time of day: a client
+  // that stamps Date.now() then composes before the card was requested and is never
+  // granted. (Behind the wall clock it would be refused as composed in the future, M4F.)
+  const moved = await request.post("/api/dev/clock/advance", { data: { seconds: 86_400 } });
+  expect(moved.ok()).toBe(true);
   const id = await newErrand(page);
   await say(page, OPENER);
   await expect(page.getByTestId("msg-action")).toBeVisible();

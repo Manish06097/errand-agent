@@ -43,15 +43,19 @@ test("a double click books once, and a second decision POST that skips the UI bo
   const approvalId = card.approval_id as string;
   const fingerprint = card.body.fingerprint as string;
 
+  // A real double click: two clicks on the button, whatever the UI does with the second.
   await page.getByTestId("approve-button").dblclick();
-  // The UI's disabled state is no guard: the same fingerprint with a fresh
-  // client_action_id, posted by the test, must be answered by the server alone.
+  await expect(page.getByTestId("verified-badge")).toBeVisible();
+  await waitIdle(request, id);
+
+  // The UI's disabled state is no guard. The same fingerprint with a fresh
+  // client_action_id, posted by the test after the booking, must be answered by the
+  // server alone: already approved, no new run, nothing booked.
   const second = await request.post(`/api/approvals/${approvalId}/decision`, {
     data: { decision: "approve", fingerprint, client_action_id: `ca_test_${Date.now()}` },
   });
-  expect([200, 202, 409]).toContain(second.status());
-
-  await expect(page.getByTestId("verified-badge")).toBeVisible();
+  expect(second.status()).toBe(200);
+  expect(((await second.json()) as { status: string }).status).toBe("already_approved");
   await waitIdle(request, id);
   const convo = await conversation(request, id);
   // One approval, however many messages (the card and the outcome) point at it.
