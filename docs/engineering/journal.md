@@ -333,3 +333,7 @@ Two things were needed to make parallel runs safe. Tests that run a scenario wro
 **Surprise.** The claim guard strips "cancelled" even in "recorded the booking as cancelled", so the odd-status phrase is "no longer active".
 
 **Open doubts.** A clean `confirmed` then `not_found` reuses `check_incomplete` (its sentence is honest but generic); a dedicated reason is a one-line change if the lead wants one.
+
+## M5, landing
+
+**What review caught, in one place.** Round 1: a `list_bookings` blip during verify was reported to the user as a mismatch (BUG-M5-3, reproduced end to end before the fix), and a clean `confirmed` then `not_found` was retried on the same key when it should escalate. Round 2: my migration 0004 for the issued hold clashed with the memory work's 0004, so two version-4 files would have stopped the app starting; the hold now rides on the stored card (`ActionCard.hold_id`) and the migration is gone. Accepted deviations stand as in architecture 9.8: the softer template wording the claim guard forces ("two bookings", "pulled out", "no longer active"), `check_incomplete` reused for the confirmed then not_found case, and the reconciler halves of S24, S68 and S69 left to N1.
