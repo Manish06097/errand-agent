@@ -7,7 +7,7 @@ tests/api/test_first_minute.py; the parser rows are in tests/agent/test_evidence
 
 from __future__ import annotations
 
-from errand.agent import evidence
+from errand.domain import evidence
 from tests.api.test_first_minute import (  # noqa: F401
     test_a_rupee_budget_in_any_common_spelling_fills_the_brief_and_searches,
 )
