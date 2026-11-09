@@ -1206,7 +1206,12 @@ def _actual(
     return f"runs {' -> '.join(parts)}; world {world}; {inv}"
 
 
-def _notes(scenario: Scenario, records: invariants.Records) -> str:
+def trace_name(scenario: Scenario, replay: ReplayRun | None) -> str:
+    """The directory under evals/out that holds this row's traces."""
+    return f"{scenario.id}.replay" if replay else scenario.id
+
+
+def _notes(scenario: Scenario, records: invariants.Records, replay: ReplayRun | None = None) -> str:
     model_calls = tool_calls = reader_calls = max_est = 0
     cost = 0.0
     for record in records.all_records():
@@ -1231,12 +1236,12 @@ def _notes(scenario: Scenario, records: invariants.Records) -> str:
         f"model_calls={model_calls}; reader_calls={reader_calls}; tool_calls={tool_calls}; "
         f"max_est_tokens={max_est}; "
         f"cost_usd={cost:.6f}; review_texts_checked={reviews}; {checked}"
-        f"trace=backend/evals/out/{scenario.id}/"
+        f"trace=backend/evals/out/{trace_name(scenario, replay)}/"
     )
 
 
 def save_traces(scenario: Scenario, root: Path, replay: ReplayRun | None = None) -> None:
-    name = f"{scenario.id}.replay" if replay else scenario.id
+    name = trace_name(scenario, replay)
     dest = Path(os.environ.get(TRACE_DIR_ENV) or OUT) / name
     if dest.exists():
         shutil.rmtree(dest)
@@ -1290,6 +1295,6 @@ async def run_scenario(
         expected=expected,
         actual=actual,
         passed=not failures,
-        notes=(replay.notes(records) if replay else "") + _notes(scenario, records),
+        notes=(replay.notes(records) if replay else "") + _notes(scenario, records, replay),
         failures=failures,
     )
