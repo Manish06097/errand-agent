@@ -66,23 +66,66 @@ def test_the_mix_is_decision_23_with_fixed_ids(rich: tuple[Path, dict[str, Any],
     rows = manifest["rows"]
     assert [r["id"] for r in rows] == [f"m-{i:02d}" for i in range(1, 61)]
     assert manifest["counts"] == {
-        "active": 32,  # 20 explicit + 4 inferred confirmed + 8 irrelevant
+        "active": 31,  # 20 explicit + 3 inferred confirmed + 8 irrelevant
         "pending_confirmation": 9,
         "superseded": 8,
         "forgotten": 7,
-        "rejected": 4,
+        "rejected": 5,
     }
     active = [r for r in rows if r["status"] == "active"]
     irrelevant = [
         r for r in active if r["scope"] in ("service:pest_control", "service:painting")
     ] + [r for r in active if r["key"] == "contact_window"]
     assert len(irrelevant) == 8
-    assert sum(1 for r in active if r["kind"] == "inferred") == 4
+    assert sum(1 for r in active if r["kind"] == "inferred") == 3
     assert sum(1 for r in active if r["kind"] == "explicit") - 8 == 20
     rejected = sorted(r["rejected_because"] for r in rows if r["status"] == "rejected")
-    assert rejected == ["dismissed", "dismissed", "superseded_by_explicit", "undone"]
+    assert rejected == [
+        "dismissed",
+        "dismissed",
+        "superseded_by_explicit",
+        "superseded_by_keep",
+        "undone",
+    ]
     assert all(r["kind"] == "inferred" for r in rows if r["status"] == "pending_confirmation")
     assert manifest["messages"] == TOTAL_MESSAGES
+
+
+def test_no_pending_row_shares_its_key_and_scope_with_an_active_row(
+    rich: tuple[Path, dict[str, Any], str],
+) -> None:
+    """Review round 1: all 9 pending rows had an active sibling, a state suggest() refuses
+    to create, so their Keep buttons could only answer 409."""
+    _, manifest, _ = rich
+    rows = manifest["rows"]
+    active = {(r["key"], r["scope"]) for r in rows if r["status"] == "active"}
+    pending = [r for r in rows if r["status"] == "pending_confirmation"]
+    assert len(pending) == 9
+    assert [(r["key"], r["scope"]) for r in pending if (r["key"], r["scope"]) in active] == []
+
+
+async def test_keep_works_on_every_pending_row_of_the_seed(
+    rich: tuple[Path, dict[str, Any], str], tmp_path: Path
+) -> None:
+    import shutil
+
+    from errand.memory.hmac_key import fixed_key
+    from errand.memory.service import MemoryService
+    from errand.seed.base import SEED_KEY_LABEL
+
+    path, manifest, _ = rich
+    pending = [r["id"] for r in manifest["rows"] if r["status"] == "pending_confirmation"]
+    for n, memory_id in enumerate(pending):
+        copy = tmp_path / f"copy{n}"
+        copy.mkdir()
+        shutil.copy(path / "agent.sqlite", copy / "agent.sqlite")
+        db = await AgentDB.open(copy / "agent.sqlite")
+        try:
+            service = MemoryService(db, lambda: 9_999_999_999_999, fixed_key(SEED_KEY_LABEL))
+            kept = await service.keep(user_id=USER, memory_id=memory_id, client_action_id="k")
+            assert kept["memory"]["status"] == "active", memory_id
+        finally:
+            await db.close()
 
 
 def test_the_three_version_home_area_chain_and_the_conflicts_on_purpose(
@@ -101,6 +144,9 @@ def test_the_three_version_home_area_chain_and_the_conflicts_on_purpose(
     # a pending inference rejected by a later explicit write
     sup = next(r for r in manifest["rows"] if r["rejected_because"] == "superseded_by_explicit")
     assert (sup["key"], sup["scope"]) == ("preferred_provider", "service:ac_servicing")
+    # and one rejected by a Keep on its sibling (12.4)
+    sib = next(r for r in manifest["rows"] if r["rejected_because"] == "superseded_by_keep")
+    assert (sib["key"], sib["scope"]) == ("preferred_provider", "service:plumber")
 
 
 def test_pending_and_dismissed_rows_are_typed_with_booking_evidence_only(
@@ -108,7 +154,7 @@ def test_pending_and_dismissed_rows_are_typed_with_booking_evidence_only(
 ) -> None:
     path, manifest, _ = rich
     inferred_ids = [r["id"] for r in manifest["rows"] if r["kind"] == "inferred"]
-    assert len(inferred_ids) == 16
+    assert len(inferred_ids) == 15
     for memory_id in inferred_ids:
         (evidence,) = _query(
             path, "SELECT evidence_json FROM memories WHERE memory_id = ?", memory_id
