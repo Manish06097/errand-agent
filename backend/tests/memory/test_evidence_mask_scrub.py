@@ -229,7 +229,7 @@ def test_an_existing_redaction_row_moves_with_an_earlier_edit_or_is_swallowed() 
     assert redaction.shift_after((0, 5), [(10, 13)], 25) == (0, 5)
 
 
-def test_redact_body_overwrites_primary_text_options_and_status_line() -> None:
+def test_redact_body_overwrites_primary_text_and_options() -> None:
     body = {
         "type": "clarify",
         "question": "Is 10 am still right for Indiranagar?",
@@ -237,9 +237,32 @@ def test_redact_body_overwrites_primary_text_options_and_status_line() -> None:
         "status_line": "Not booked yet",
     }
     new, edited = redaction.redact_body(body, ["10 am"])
+    assert new["status_line"] == "Not booked yet"
     assert new["question"] == "Is [removed at your request] still right for Indiranagar?"
     assert new["options"] == ["Yes, [removed at your request]", "No"]
     assert edited == [(3, 8)] and str(body["question"]).startswith("Is 10 am")
+
+
+def test_redact_body_leaves_code_rendered_text_alone() -> None:
+    """Decision 13: redaction covers what the user and the model wrote, never the text code
+    renders (a status line, an outcome title, a booking line). Forgetting 'not before 10'
+    must not wipe '10:00' from the record of a booking."""
+    status = "Waiting for you: 10 am slot held"
+    for body in (
+        {"type": "notice", "text": "Nothing at 10 am today", "status_line": status},
+        {"type": "outcome", "text": "Booked for 10 am", "title": "Booked 10 am", "lines": []},
+        {"type": "reminder", "text": "Still waiting on: 10 am", "status_line": status},
+        {"type": "text", "text": "Fine.", "status_line": status},
+    ):
+        new, edited = redaction.redact_body(body, ["10 am"])
+        assert new == body and edited == [], body["type"]
+    # what the model wrote in a card is still redacted
+    card, _ = redaction.redact_body(
+        {"type": "shortlist", "recommendation": "Take the 10 am one", "status_line": status},
+        ["10 am"],
+    )
+    assert card["recommendation"] == "Take the [removed at your request] one"
+    assert card["status_line"] == status
 
 
 def test_the_model_view_hides_a_superseded_span() -> None:
