@@ -40,6 +40,10 @@ class ModelSettings(BaseSettings):
     cassette_path: Path | None = None
 
 
+# p95 of a live planning turn in seconds, measured in M7 (16 turns; journal M7 entry).
+LIVE_PLANNING_TURN_P95_S = 11.5
+
+
 class LimitSettings(BaseSettings):
     """The limits from architecture 15.1 that are enforced in the model gateway so far."""
 
@@ -56,10 +60,12 @@ class LimitSettings(BaseSettings):
     # Per-run cost cap (15.1). M10 applies it to the quarantined reader only: a reader
     # call is skipped once the run has spent this much. M13 applies it to the planner.
     run_cost_cap_usd: float = 0.40
-    # The wall clock per run when the planner is the real model (15.1): ceil(2 x p95 of a
-    # planning turn) from the M7 live runs. Applied in live and record modes only; evals
-    # keep run_deadline_s. M13 owns the enforcement.
-    live_run_deadline_s: float = Field(default=23.0, gt=0)
+    # The wall clock per run when the planner is the real model (15.1), live and record
+    # modes only; evals keep run_deadline_s. M13 owns the enforcement.
+    # 43 = ceil(2 x p95 of a planning turn) + the reader's timeout: the reader is skipped
+    # once less run time is left than its timeout, so 2 x p95 alone turns it off on every
+    # cold-cache turn. tests/quarantine/test_live_deadline_leaves_reader_time.py pins it.
+    live_run_deadline_s: float = Field(default=43.0, gt=0)
 
 
 class ReaderSettings(BaseSettings):
