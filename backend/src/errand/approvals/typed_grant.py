@@ -24,6 +24,7 @@ answering a question and goes to the planner like any message.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import cast
@@ -31,6 +32,15 @@ from typing import cast
 from errand.approvals.confirm_grammar import Action, Typed, classify
 from errand.store.repos.approvals import ApprovalRow
 from errand.store.repos.messages import Message
+
+
+def is_rebook(row: ApprovalRow) -> bool:
+    """Whether the card's material names a booking it replaces (a Rebook card)."""
+    try:
+        material = json.loads(row.material_json)
+    except ValueError:
+        return False
+    return isinstance(material, dict) and material.get("replaces_booking_id") is not None
 
 
 @dataclass(frozen=True)
@@ -67,7 +77,7 @@ def decide(
     action = live.action
     if action not in ("book", "cancel", "reschedule"):
         return Verdict(Decision.ORDINARY, "unknown_action")
-    kind = classify(text, cast(Action, action))
+    kind = classify(text, cast(Action, action), rebook=is_rebook(live))
     latest_is_card = (
         latest is not None
         and latest.role == "assistant"

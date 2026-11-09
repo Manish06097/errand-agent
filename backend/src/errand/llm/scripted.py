@@ -11,7 +11,7 @@ from __future__ import annotations
 import copy
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 from langchain_anthropic.chat_models import convert_to_anthropic_tool
 from langchain_core.callbacks import (
@@ -22,7 +22,7 @@ from langchain_core.language_models import BaseChatModel, LanguageModelInput
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import ConfigDict, PrivateAttr, SkipValidation
 
 from errand.llm.anthropic import Canonicalizer, default_canonicalizer, request_sha256
 from errand.llm.errors import ScriptExhausted, check_tool_choice
@@ -49,7 +49,9 @@ class ScriptedChatModel(BaseChatModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    script: Policy | Sequence[AIMessage]
+    # A list may hold an exception instance in place of a response: that request raises it
+    # (an SDK error such as an overloaded 529), so a test reaches the gateway's mapping.
+    script: Annotated[Policy | Sequence[AIMessage | Exception], SkipValidation]
     canonicalizer: Canonicalizer | None = None
 
     _requests: list[ScriptedRequest] = PrivateAttr(default_factory=list)
@@ -112,7 +114,10 @@ class ScriptedChatModel(BaseChatModel):
                     f"script has {len(self.script)} responses, request #{request.n + 1} asked "
                     "for one more"
                 )
-            message = self.script[request.n]
+            scripted = self.script[request.n]
+            if isinstance(scripted, Exception):
+                raise scripted
+            message = scripted
         if not isinstance(message, AIMessage):
             raise TypeError(f"script must produce AIMessage, got {type(message).__name__}")
         message = message.model_copy(deep=True)
@@ -163,3 +168,39 @@ class ScriptedChatModel(BaseChatModel):
             if run_manager is not None:
                 await run_manager.on_llm_new_token(gen.text, chunk=gen)
             yield gen
+
+
+def sdk_failure(kind: str) -> Exception:
+    """A real Anthropic SDK exception, as the SDK raises it after its own retries.
+
+    `overloaded` (529), `server_error` (500), `rate_limit` (429), `connection`,
+    `timeout`, and `bad_request` (400, our bug). For scripts that must go through the
+    gateway's mapping, not around it.
+    """
+    import anthropic
+    import httpx2 as httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+
+    def status(code: int) -> Exception:
+        response = httpx.Response(code, request=request, json={"error": {"message": kind}})
+        cls = {
+            400: anthropic.BadRequestError,
+            429: anthropic.RateLimitError,
+            500: anthropic.InternalServerError,
+        }.get(code, anthropic.APIStatusError)
+        return cls(kind, response=response, body=None)
+
+    if kind == "overloaded":
+        return status(529)
+    if kind == "server_error":
+        return status(500)
+    if kind == "rate_limit":
+        return status(429)
+    if kind == "bad_request":
+        return status(400)
+    if kind == "connection":
+        return anthropic.APIConnectionError(request=request)
+    if kind == "timeout":
+        return anthropic.APITimeoutError(request=request)
+    raise ValueError(f"unknown SDK failure {kind!r}")

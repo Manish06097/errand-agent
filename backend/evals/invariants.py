@@ -50,6 +50,8 @@ from errand.domain.material import (
 from errand.domain.outcomes import RunOutcome
 from errand.trace.reader import read_trace
 from errand.world.contracts import Service
+from evals.invariants_followup import inv17_follow_up_acts_only_on_a_grant
+from evals.invariants_limits import inv09_counters_within_limits
 
 CONSEQUENTIAL = frozenset({"book", "cancel", "reschedule", "hold_slot", "get_booking_status"})
 
@@ -88,6 +90,10 @@ class Records:
     attempts: list[dict[str, Any]] = field(default_factory=list)
     world_dedupes: bool = True
     booking: dict[str, Any] | None = None
+    # N3: agent.sqlite follow-up jobs, bell rows and conversations (INV-17)
+    followup_jobs: list[dict[str, Any]] = field(default_factory=list)
+    notifications: list[dict[str, Any]] = field(default_factory=list)
+    conversations: list[dict[str, Any]] = field(default_factory=list)
 
     def run_records(self) -> Iterable[tuple[dict[str, Any], list[dict[str, Any]]]]:
         for run in self.runs:
@@ -128,6 +134,15 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
             r[0] for r in conn.execute("SELECT client_action_id FROM client_requests")
         ]
         attempts = table("SELECT * FROM intent_attempts ORDER BY intent_id, n")
+        followup_jobs = [
+            dict(r) for r in conn.execute("SELECT * FROM followup_jobs ORDER BY rowid")
+        ]
+        notifications = [
+            dict(r) for r in conn.execute("SELECT * FROM notifications ORDER BY rowid")
+        ]
+        conversations = [
+            dict(r) for r in conn.execute("SELECT * FROM conversations ORDER BY rowid")
+        ]
     finally:
         conn.close()
     traces: dict[str, list[dict[str, Any]]] = {}
@@ -156,6 +171,9 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
         client_action_ids=client_action_ids,
         attempts=attempts,
         world_dedupes=dedupes,
+        followup_jobs=followup_jobs,
+        notifications=notifications,
+        conversations=conversations,
     )
 
 
@@ -207,11 +225,28 @@ Violations = list[str]
 
 
 def inv07_one_end_per_run(rec: Records) -> Violations:
-    """Exactly one run.end per run.start, one outcome, a non-empty user message."""
+    """Exactly one run.end per run.start for every run. A conversation run also has one
+    outcome and a non-empty user message; a watch run (`kind: watch`, N3) has neither an
+    outcome nor a runs row."""
     out: Violations = []
     known = {r["run_id"] for r in rec.runs}
-    for run_id in sorted(set(rec.traces) - known):
+    watch = {
+        run_id
+        for run_id, records in rec.traces.items()
+        if any(r["type"] == "run.start" and r.get("kind") == "watch" for r in records)
+    }
+    for run_id in sorted(set(rec.traces) - known - watch):
         out.append(f"{run_id}: a trace with no runs row")
+    for run_id in sorted(watch):
+        records = rec.traces[run_id]
+        starts = [r for r in records if r["type"] == "run.start"]
+        ends = [r for r in records if r["type"] == "run.end"]
+        if run_id in known:
+            out.append(f"{run_id}: a watch run has a runs row")
+        if len(starts) != 1 or len(ends) != 1 or records[-1]["type"] != "run.end":
+            out.append(f"{run_id}: watch run has {len(starts)} run.start and {len(ends)} run.end")
+        elif ends[0].get("outcome") is not None:
+            out.append(f"{run_id}: a watch run has an outcome")
     for run, records in rec.run_records():
         rid = run["run_id"]
         starts = [r for r in records if r["type"] == "run.start"]
@@ -495,8 +530,12 @@ def _consumptions(rec: Records) -> tuple[dict[str, dict[str, Any]], dict[str, st
     return consumed, intent_of_key
 
 
-def _world_material(rec: Records, hold_id: str, book_seq_ts: int) -> BookMaterial | None:
-    """A book's material rebuilt from the world's rows only."""
+def _world_material(
+    rec: Records, hold_id: str, book_seq_ts: int, replaces: str | None = None
+) -> BookMaterial | None:
+    """A book's material rebuilt from the world's rows only. `replaces_booking_id` is not in
+    any world row (the world's op args do not carry it): the caller reads it from the
+    consumed approval's material."""
     hold = rec.world_holds.get(hold_id)
     if hold is None:
         return None
@@ -523,10 +562,21 @@ def _world_material(rec: Records, hold_id: str, book_seq_ts: int) -> BookMateria
         slot_end=ist_seconds(from_ms(int(hold["slot_end"]))),
         quoted_price_inr=int(hold["quoted_price_inr"]),
         same_service_nearby=nearby,
+        replaces_booking_id=replaces,
     )
 
 
 # ---------------------------------------------------------------- INV-01
+
+
+def _replaces_of(rec: Records, consumed: dict[str, Any]) -> str | None:
+    """The booking a consumed approval's material says it replaces (INV-01 reads it from
+    the approval, because the world's op args do not carry it)."""
+    for a in rec.approvals:
+        if a["approval_id"] == consumed.get("approval_id"):
+            value = json.loads(a["material_json"]).get("replaces_booking_id")
+            return str(value) if value else None
+    return None
 
 
 def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
@@ -561,7 +611,9 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
         if row["op"] != "book":
             out += _change_violations(rec, row, args, record, where)
             continue
-        material = _world_material(rec, str(args.get("hold_id")), int(row["sim_ts"]))
+        material = _world_material(
+            rec, str(args.get("hold_id")), int(row["sim_ts"]), _replaces_of(rec, record)
+        )
         if material is None:
             out.append(f"{where}: the world has no hold {args.get('hold_id')}")
             continue
@@ -1021,7 +1073,10 @@ def inv04_success_only_after_the_source_of_truth(rec: Records) -> Violations:
                     if not backed:
                         out.append(f"{rid}: unbacked success claim {sentence!r}")
         open_errand = phases.get(rid, INITIAL_PHASE.value) != Phase.COMPLETED.value
-        if mine and open_errand and not (mine[-1]["body"].get("status_line") or "").strip():
+        # A proactive line is written into a conversation the run does not own, below
+        # whatever that conversation shows; the run's own last message carries the line.
+        own = [m for m in mine if m.get("kind") != "proactive"]
+        if own and open_errand and not (own[-1]["body"].get("status_line") or "").strip():
             out.append(f"{rid}: the last message has no status line ({phases.get(rid)})")
     rec.notes["claims_checked"] = claims
     return out
@@ -1119,6 +1174,8 @@ def inv15_parked_on_every_live_card(rec: Records) -> Violations:
         if not pending and parked is not None:
             out.append(f"{rid}: parked on {parked}, which is not a live card")
         if pending:
+            # A `proactive` line is looked past (14, INV-15): it carries no approval and no
+            # question, and a run that does not own the conversation wrote it.
             shown = [
                 m
                 for m in rec.messages
@@ -1126,6 +1183,7 @@ def inv15_parked_on_every_live_card(rec: Records) -> Violations:
                 and m["role"] == "assistant"
                 # memory chips are transcript lines of no run, never the card on screen
                 and not str(m["body"].get("type", "")).startswith("memory_")
+                and m.get("kind") != "proactive"
                 and _run_index(rec, m["run_id"]) <= _run_index(rec, rid)
             ]
             last = shown[-1] if shown else None
@@ -1169,6 +1227,7 @@ def _typed_grants(rec: Records) -> Violations:
             for m in rec.messages
             if m["conversation_id"] == user["conversation_id"]
             and m["role"] == "assistant"
+            and m.get("kind") != "proactive"
             and m["row_no"] < user["row_no"]
         ]
         latest = before[-1] if before else None
@@ -1850,12 +1909,14 @@ INVARIANTS: dict[str, Callable[[Records], Violations]] = {
     "INV-04": inv04_success_only_after_the_source_of_truth,
     "INV-07": inv07_one_end_per_run,
     "INV-08": inv08_transitions_allowed,
+    "INV-09": inv09_counters_within_limits,
     "INV-10": inv10_no_review_text_in_planner_requests,
     "INV-11": inv11_no_consequential_tool_listed,
     "INV-12": inv12_material_change_invalidates,
     "INV-13": inv13_no_ask_for_filled_or_asked,
     "INV-15": inv15_parked_on_every_live_card,
     "INV-16": inv16_no_granted_approval_left,
+    "INV-17": inv17_follow_up_acts_only_on_a_grant,
     "INV-05": inv05_no_forgotten_value_in_requests,
     "INV-06": inv06_every_request_within_the_budget,
     "INV-19": inv19_memory_authority,

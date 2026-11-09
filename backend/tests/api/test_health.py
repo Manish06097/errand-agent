@@ -63,6 +63,10 @@ def test_api_has_exactly_the_m7_routes() -> None:
         "/api/memory/{memory_id}/confirm",
         "/api/memory/{memory_id}/dismiss",
         "/api/memory/{memory_id}/undo",
+        # N3: the bell and the user's event stream (api/followup_routes.py)
+        "/api/notifications",
+        "/api/notifications/{notification_id}/read",
+        "/api/users/me/events",
     }
 
 

@@ -9,6 +9,7 @@ import { ActionCard } from "./cards/action-card";
 import { CardReminder } from "./cards/card-reminder";
 import { ClarifyCard } from "./cards/clarify-card";
 import { OutcomeCard } from "./cards/outcome-card";
+import { ProactiveLine } from "./cards/proactive-line";
 import { OutcomeNotice, VerifyingCard } from "./cards/outcome-notice";
 import { ProviderComparisonCard } from "./cards/provider-comparison-card";
 import { LatestMessage } from "./cards/status-line";
@@ -57,6 +58,8 @@ function Body({ message, live }: { message: MessageOut; live: boolean }) {
       return <CardReminder body={body} approval={message.approval} live />;
     case "outcome":
       return <OutcomeCard body={body} />;
+    case "proactive":
+      return <ProactiveLine body={body} />;
     case "notice":
       return body.outcome === "PENDING_VERIFICATION" ? (
         <VerifyingCard body={body} live={live} />

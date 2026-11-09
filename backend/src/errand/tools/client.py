@@ -16,13 +16,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import timedelta
 from types import TracebackType
 from typing import Protocol, TypeVar
 
 import httpx
 from pydantic import ValidationError
 
-from errand.clock import CLOCK_HEADER, TrackingClock
+from errand.clock import CLOCK_HEADER, SimClock, TrackingClock
 from errand.tools.errors import ToolTimeout, ToolTransient, ToolUnexpected
 from errand.tools.timeouts import ToolTimeouts, effective_timeout
 from errand.world.contracts import (
@@ -213,6 +214,11 @@ class InProcessTransport(_Transport):
             await clock.sleep(max(0.0, timeout - elapsed))
             raise ToolTimeout(tool, timeout)
         if elapsed >= timeout:
+            # The world answered after the client gave up. In simulated time the client
+            # was back at `started + timeout`, not when the world finished: otherwise a
+            # read capped by the run deadline would run past it (BUG-N3-1).
+            if isinstance(clock, SimClock):
+                clock.set(started + timedelta(seconds=timeout))
             raise ToolTimeout(tool, timeout)
         return response.status, response.body
 

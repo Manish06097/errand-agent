@@ -155,6 +155,8 @@ class Reconciler:
                         run, recovered_by=None, status_line=await self._status_line(run)
                     )
                     report.closed_runs.append(run.run_id)
+            for extra in PASSES:
+                report.recovery_runs.extend(await extra(self, True))
             await self.manager.wait_idle()
             return report
 

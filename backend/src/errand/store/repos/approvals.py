@@ -254,6 +254,34 @@ class ApprovalsRepo:
         )
         return cur.rowcount == 1
 
+    async def live_for_booking(self, booking_id: str, *actions: str) -> list[ApprovalRow]:
+        """Pending or granted cancel/reschedule cards that name this booking in their
+        material (the watcher invalidates them when the provider cancels it)."""
+        marks = ", ".join("?" * len(actions))
+        async with self._conn.execute(
+            f"SELECT {_COLUMNS} FROM approvals WHERE status IN ('pending', 'granted') "
+            f"AND action IN ({marks}) AND json_extract(material_json, '$.booking_id') = ?",
+            (*actions, booking_id),
+        ) as cur:
+            return [_row(r) for r in await cur.fetchall()]
+
+    async def invalidated_for_booking(self, booking_id: str, reason: str) -> list[ApprovalRow]:
+        async with self._conn.execute(
+            f"SELECT {_COLUMNS} FROM approvals WHERE status = 'invalidated' "
+            "AND invalidated_reason = ? AND action IN ('cancel', 'reschedule') "
+            "AND json_extract(material_json, '$.booking_id') = ? ORDER BY requested_at, rowid",
+            (reason, booking_id),
+        ) as cur:
+            return [_row(r) for r in await cur.fetchall()]
+
+    async def live_rebook_for(self, booking_id: str) -> list[ApprovalRow]:
+        async with self._conn.execute(
+            f"SELECT {_COLUMNS} FROM approvals WHERE status IN ('pending', 'granted') "
+            "AND action = 'book' AND json_extract(material_json, '$.replaces_booking_id') = ?",
+            (booking_id,),
+        ) as cur:
+            return [_row(r) for r in await cur.fetchall()]
+
     # ---------------------------------------------------------- pending resumes
 
     async def insert_resume(

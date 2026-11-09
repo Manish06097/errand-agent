@@ -9,6 +9,7 @@ import { ChatProvider } from "./chat-context";
 import { Composer } from "./composer";
 import { ConversationList } from "./conversation-list";
 import { DevDrawer } from "./dev-drawer";
+import { NotificationBell } from "./notifications";
 import { MessageList } from "./message-list";
 import { StatePanel } from "./state-panel";
 import { TracePanel } from "./trace-panel";
@@ -87,6 +88,7 @@ export function ChatView({ conversationId }: { conversationId: string }) {
               <Menu className="h-4 w-4" aria-hidden />
             </Button>
             <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">Errand {conversationId}</h1>
+            <NotificationBell />
             {meta.data?.dev && <DevDrawer />}
             <Button
               variant="ghost"

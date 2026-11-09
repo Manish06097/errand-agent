@@ -4,7 +4,7 @@ category: [context]
 seed: 422
 model: scripted:growing
 memory_seed: memory_rich_v1
-context_budget_tokens: 9000
+limits: {context_budget_tokens: 9000}
 user:
   persona: cooperative
   goal: {}

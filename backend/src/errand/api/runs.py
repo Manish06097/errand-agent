@@ -43,9 +43,9 @@ from langgraph.types import Command
 
 from errand.agent import critical, memory_runend
 from errand.agent.deps import ConsequentialLocks, RunDeps
-from errand.agent.graph import Graph, RoutedAs, invoke, route_input
+from errand.agent.graph import Graph, RoutedAs, invoke, route_input, run_config
 from errand.agent.planner_tools import PLANNER_TOOLS
-from errand.agent.templates import internal_error
+from errand.agent.templates import backstop_notice, internal_error
 from errand.api.locks import LeaseKeeper, ThreadLocks, UserLocks, thread_key
 from errand.api.sse import Broadcaster, RunStream
 from errand.approvals import service
@@ -59,14 +59,17 @@ from errand.config import (
     ReaderSettings,
 )
 from errand.domain.counters import RunCounters
+from errand.domain.errand import Errand
 from errand.domain.inbound import (
     ApprovalDeclined,
     ApprovalGranted,
     Inbound,
+    SystemEvent,
     UiAction,
     UserMessage,
 )
-from errand.domain.outcomes import PendingCheck, RunOutcome
+from errand.domain.messages import OutcomeNotice
+from errand.domain.outcomes import Limit, PendingCheck, RunOutcome
 from errand.ids import IdFactory, message_id_for, message_id_for_user
 from errand.llm.gateway import LLMGateway
 from errand.memory.service import MemoryService
@@ -147,6 +150,7 @@ class _Run:
     trigger: str
     lease: LeaseKeeper
     stream: RunStream
+    deadline_s: float = 0.0
     user_message_id: str | None = None
     client: dict[str, Any] | None = None
     deps: RunDeps | None = None
@@ -203,6 +207,8 @@ class RunManager:
         self.consequential: ConsequentialLocks = consequential or UserLocks(db, self._holder)
         # Set by the app once the memory service exists (it needs the manager's clock).
         self.memory: MemoryService | None = None
+        # The follow-up watcher, set by the lifespan; the reconciler's follow-up pass reads it.
+        self.followup_watcher: Any = None
 
     @property
     def approval_policy(self) -> service.ApprovalPolicy:
@@ -495,6 +501,31 @@ class RunManager:
             await self._remember(client_action_id, "actions", answer)
             return answer
 
+    async def submit_system(self, conversation_id: str, event: SystemEvent) -> Admission:
+        """Start a run the system asked for (a follow-up delivery or lapse, 14). Same
+        admission as any input: the thread lock and lease, so a busy conversation raises
+        `RunInProgress` and the caller tries again on its next tick."""
+        if self._closing:
+            raise ShuttingDown()
+        async with self._locks.get(conversation_id):
+            async with self.db.session() as repos:
+                conversation = await repos.conversations.get(conversation_id)
+            if conversation is None:
+                raise UnknownConversation(conversation_id)
+            lease = await self._take_lease(conversation_id)
+            try:
+                return await self._admit(
+                    self.ids.run_id(),
+                    conversation_id,
+                    conversation.user_id,
+                    event,
+                    lease,
+                    trigger=event.kind,
+                )
+            except BaseException:
+                await lease.release()
+                raise
+
     async def _nothing_to_check(self, conversation_id: str) -> Answer | None:
         """`check_now` needs an intent that is waiting on the provider; otherwise 409 with
         the state of the conversation's latest intent (None if it never had one)."""
@@ -564,6 +595,7 @@ class RunManager:
             "run_id": run_id,
             "inbound": inbound,
             "counters": counters,
+            "node_failed": False,
         }
         graph_input, entered = await route_input(self.graph, conversation_id, run_input)
         routed_as: RoutedAs = routed or entered
@@ -617,6 +649,7 @@ class RunManager:
             trigger=trigger,
             lease=lease,
             stream=self.broadcaster.open(run_id),
+            deadline_s=deadline_s,
             user_message_id=user_message_id,
             client=client,
         )
@@ -675,6 +708,7 @@ class RunManager:
         )
         outcome: RunOutcome = RunOutcome.INTERNAL_ERROR
         parked: str | None = None
+        limit: str | None = None
         cancelled = False
         try:
             tracer.start_run(
@@ -682,21 +716,30 @@ class RunManager:
                 inbound_type=run.inbound.type,
                 user_message_id=run.user_message_id,
                 routed_as=run.routed_as,
+                limits=self.limits.recorded(run.deadline_s),
                 **(run.client or {}),
             )
-            async with asyncio.timeout(self.limits.run_backstop_s):
+            backstop = asyncio.timeout(self.limits.run_backstop_s)
+            async with backstop:
                 run.deps = self._deps(run, tracer)
                 final = await invoke(self.graph, run.conversation_id, run.graph_input, run.deps)
             if final.state.outcome is None:
                 raise RuntimeError("the run ended without an outcome")
             outcome = final.state.outcome
             parked = final.parked_on
+            if final.state.result is None and isinstance(final.state.plan_result, Limit):
+                limit = final.state.plan_result.limit
         except BaseException as exc:
             cancelled = isinstance(exc, asyncio.CancelledError)
-            outcome = await self._fail(run, tracer, exc)
+            outcome = await self._fail(
+                run,
+                tracer,
+                exc,
+                backstop_hit=isinstance(exc, TimeoutError) and backstop.expired(),
+            )
         finally:
             await self._memory_run_end(run, tracer, outcome)
-            await self._finish(run, tracer, outcome, parked)
+            await self._finish(run, tracer, outcome, parked, limit)
         if cancelled:
             raise asyncio.CancelledError()
 
@@ -725,6 +768,7 @@ class RunManager:
             limits=self.limits,
             transport=self.model_factory(),
             counters=run.counters,
+            clock=self.clock,
         )
         tools = ToolGateway(
             self.world.client,
@@ -764,14 +808,33 @@ class RunManager:
             memory=self.memory,
         )
 
-    async def _fail(self, run: _Run, tracer: Tracer, exc: BaseException) -> RunOutcome:
+    async def _checkpointed_errand(self, run: _Run) -> Errand | None:
+        """The thread's last committed errand, for the backstop notice. The checkpointer
+        commits at step boundaries (`durability="sync"`), so a node cut mid-way leaves the
+        previous step's state, never a half-written one. Any failure reading it falls back
+        to the bare notice."""
+        try:
+            snapshot = await self.graph.aget_state(run_config(run.conversation_id))
+            errand = snapshot.values.get("errand")
+            return errand if isinstance(errand, Errand) else None
+        except Exception:
+            log.warning("run %s: could not read the checkpointed errand", run.run_id)
+            return None
+
+    async def _fail(
+        self, run: _Run, tracer: Tracer, exc: BaseException, *, backstop_hit: bool = False
+    ) -> RunOutcome:
         """The outer handler: an error record and a templated message, whatever broke.
 
         An exception or the backstop with an intent still open is not INTERNAL_ERROR: the
         provider may already have acted, so the run ends PENDING_VERIFICATION and the
-        reconciler settles it (the critical section's one exit, 15.1).
+        reconciler settles it (the critical section's one exit, 15.1). The 90 s backstop
+        with no intent open is a time limit, not a bug: WALL_CLOCK_EXCEEDED.
         """
-        log.error("run %s failed", run.run_id, exc_info=exc)
+        if backstop_hit:
+            log.warning("run %s hit the %s s backstop", run.run_id, self.limits.run_backstop_s)
+        else:
+            log.error("run %s failed", run.run_id, exc_info=exc)
         with contextlib.suppress(Exception):
             tracer.emit(
                 "error",
@@ -791,14 +854,16 @@ class RunManager:
             )
         except Exception:
             log.exception("run %s: could not settle its open intent", run.run_id)
-        body = (
-            critical.pending_notice(pending, self.tz)
-            if pending is not None
-            else internal_error(run.run_id)
-        )
-        outcome = (
-            RunOutcome.PENDING_VERIFICATION if pending is not None else RunOutcome.INTERNAL_ERROR
-        )
+        body: OutcomeNotice
+        if pending is not None:
+            body = critical.pending_notice(pending, self.tz)
+            outcome = RunOutcome.PENDING_VERIFICATION
+        elif backstop_hit:
+            body = backstop_notice(await self._checkpointed_errand(run))
+            outcome = RunOutcome.WALL_CLOCK_EXCEEDED
+        else:
+            body = internal_error(run.run_id)
+            outcome = RunOutcome.INTERNAL_ERROR
         message = Message(
             message_id=message_id_for(run.run_id, "notice"),
             conversation_id=run.conversation_id,
@@ -821,7 +886,12 @@ class RunManager:
         return outcome
 
     async def _finish(
-        self, run: _Run, tracer: Tracer, outcome: RunOutcome, parked: str | None
+        self,
+        run: _Run,
+        tracer: Tracer,
+        outcome: RunOutcome,
+        parked: str | None,
+        limit: str | None = None,
     ) -> None:
         if run.deps is not None:
             try:
@@ -834,6 +904,7 @@ class RunManager:
                 outcome=outcome.value,
                 user_message_id=run.user_message_id,
                 parked_approval_id=parked,
+                limit=limit,
             )
             totals = end["totals"]
             async with self.db.session() as repos:

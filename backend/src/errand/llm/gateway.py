@@ -20,6 +20,7 @@ rather than at the API.
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import inspect
 import json
@@ -29,6 +30,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import anthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -40,6 +42,7 @@ from langchain_core.messages import (
 )
 from pydantic import SecretStr
 
+from errand.clock import Clock
 from errand.config import LimitSettings, ModelMode, ModelSettings, load_anthropic_credentials
 from errand.domain.counters import RunCounters
 from errand.llm.anthropic import (
@@ -58,6 +61,8 @@ from errand.llm.errors import (
     LoopPrefixViolation,
     MissingUsage,
     ModelCallLimit,
+    ModelDeadline,
+    ModelUnavailable,
     check_tool_choice,
 )
 from errand.llm.messages import aggregate
@@ -151,6 +156,7 @@ class LLMGateway:
         cassette_path: Path | None = None,
         api_key: SecretStr | None = None,
         counters: RunCounters | None = None,
+        clock: Clock | None = None,
     ) -> None:
         # Refused before anything is built, so a forced choice never reaches ChatAnthropic,
         # which would drop it with only a warning when thinking is on (spike C7).
@@ -160,6 +166,8 @@ class LLMGateway:
         self.tracer = tracer
         # Shared with the run's ToolGateway: one counter object per run (domain.counters).
         self.counters = counters if counters is not None else RunCounters()
+        # Only for the time left on the run's deadline, which caps each call (15.1).
+        self.clock = clock
         self.mode: ModelMode = self.settings.model_mode
 
         uses_api = self.mode == "live" or (self.mode == "record" and transport is None)
@@ -272,27 +280,10 @@ class LLMGateway:
         with self.tracer.opening("model.call", self.settings.planner_model):
             perf = self.tracer.perf
             started = perf()
-            first: float | None = None
-            chunks: list[AIMessageChunk] = []
+            timeout_s, capped_by_deadline = self._call_timeout()
             try:
-                async for chunk in self._bound.astream(list(messages)):
-                    if not isinstance(chunk, AIMessageChunk):
-                        raise TypeError(
-                            f"stream yielded {type(chunk).__name__}, not AIMessageChunk"
-                        )
-                    if first is None and _carries_output(chunk):
-                        first = perf()
-                    chunks.append(chunk)
-                    if on_token is not None and chunk.text:
-                        result = on_token(chunk.text)
-                        if inspect.isawaitable(result):
-                            await result
-                if not chunks:
-                    raise RuntimeError("the model stream produced no chunks")
-                message = aggregate(chunks)
-                if not message.usage_metadata:
-                    raise MissingUsage("response has no usage_metadata; it cannot be priced")
-                usage = usage_from_metadata(message.usage_metadata)
+                async with asyncio.timeout(timeout_s):
+                    message, usage, first = await self._stream(messages, on_token, perf)
             except Exception as exc:
                 self.tracer.emit(
                     "error",
@@ -300,6 +291,19 @@ class LLMGateway:
                     exception_type=type(exc).__name__,
                     message=str(exc)[:2000],
                 )
+                self._record_failed_call(
+                    sha=sha,
+                    canonical=canonical,
+                    started=started,
+                    ended=perf(),
+                    est=est,
+                    floor=floor,
+                    budget=budget,
+                    exc=exc,
+                )
+                failure = self._classify(exc, capped_by_deadline)
+                if failure is not None:
+                    raise failure from exc
                 raise
             ended = perf()
 
@@ -331,6 +335,104 @@ class LLMGateway:
         self.counters.cost += Decimal(str(record["cost_usd"]))
         return ModelTurn(message, usage, float(record["cost_usd"]), sha, stop_reason, record)
 
+    def _call_timeout(self) -> tuple[float, bool]:
+        """The planner call timeout, capped by the run time left (15.1), and whether the
+        cap is the deadline's."""
+        timeout = self.limits.planner_timeout_s
+        if self.clock is None or self._real_call_on_simulated_time():
+            return timeout, False
+        left = self.counters.time_left_s(self.clock.now())
+        if left is None or left >= timeout:
+            return timeout, False
+        return max(left, 0.0), True
+
+    def _real_call_on_simulated_time(self) -> bool:
+        """A live or recording model call takes real seconds, which a SimClock never
+        counts, so the simulated time left is no cap on it. Scripted and replayed calls
+        take no real time and keep the cap, which is how the offline suite exercises it."""
+        if self.settings.model_mode not in ("record", "live"):
+            return False
+        try:
+            return getattr(self.clock, "mode", None) == "sim"
+        except RuntimeError:  # a TrackingClock that has not synced yet
+            return False
+
+    async def _stream(
+        self,
+        messages: Sequence[BaseMessage],
+        on_token: TokenCallback | None,
+        perf: Callable[[], float],
+    ) -> tuple[AIMessage, Usage, float | None]:
+        first: float | None = None
+        chunks: list[AIMessageChunk] = []
+        async for chunk in self._bound.astream(list(messages)):
+            if not isinstance(chunk, AIMessageChunk):
+                raise TypeError(f"stream yielded {type(chunk).__name__}, not AIMessageChunk")
+            if first is None and _carries_output(chunk):
+                first = perf()
+            chunks.append(chunk)
+            if on_token is not None and chunk.text:
+                result = on_token(chunk.text)
+                if inspect.isawaitable(result):
+                    await result
+        if not chunks:
+            raise RuntimeError("the model stream produced no chunks")
+        message = aggregate(chunks)
+        if not message.usage_metadata:
+            raise MissingUsage("response has no usage_metadata; it cannot be priced")
+        return message, usage_from_metadata(message.usage_metadata), first
+
+    @staticmethod
+    def _classify(exc: Exception, capped_by_deadline: bool) -> Exception | None:
+        """What the SDK raised after its own retries, as a typed failure; None for anything
+        else (a 400 or other 4xx is our bug and stays an internal error)."""
+        if isinstance(exc, TimeoutError):
+            return ModelDeadline() if capped_by_deadline else ModelUnavailable("timeout")
+        if isinstance(exc, anthropic.APIStatusError):
+            status = exc.status_code
+            if status == 429 or status >= 500:
+                return ModelUnavailable(f"http {status}")
+            return None
+        if isinstance(exc, anthropic.APIConnectionError):
+            # APITimeoutError is a subclass.
+            return ModelUnavailable(type(exc).__name__)
+        return None
+
+    def _record_failed_call(
+        self,
+        *,
+        sha: str,
+        canonical: Mapping[str, Any],
+        started: float,
+        ended: float,
+        est: int,
+        floor: int,
+        budget: int,
+        exc: Exception,
+    ) -> None:
+        """A call that failed still writes its model.call record: the error, no usage, no cost.
+        It counts as a model call, because the request went out."""
+        self.tracer.model_call(
+            model=self.settings.planner_model,
+            usage=Usage(),
+            cost=Decimal(0),
+            started=started,
+            first_token=None,
+            ended=ended,
+            mode=self.mode,
+            effort=self.settings.planner_effort,
+            thinking_display=PLANNER_THINKING["display"],
+            request_sha256=sha,
+            request=dict(canonical),
+            response={"text": "", "tool_calls": [], "thinking": []},
+            stop_reason=None,
+            est_request_tokens=est,
+            floor_tokens=floor,
+            budget_tokens=budget,
+            error=f"{type(exc).__name__}: {str(exc)[:300]}",
+        )
+        self.counters.model_calls += 1
+
 
 def _element_bytes(element: Any) -> bytes:
     return json.dumps(element, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -357,6 +459,10 @@ class LoopSession:
         self._appended: list[BaseMessage] = []
         self._pending_tool_ids: set[str] = set()
         self._calls = 0
+        # What the last call() started from, so retry_last() can put it back.
+        self._before: (
+            tuple[dict[str, Any], list[BaseMessage], dict[str, Any] | None, Usage | None] | None
+        ) = None
         # Set when a response cannot be carried forward byte for byte; the next call raises.
         self._broken: str | None = None
 
@@ -392,6 +498,7 @@ class LoopSession:
             raise ValueError("the request must end with a user turn; assistant prefill is not used")
         canonical = self._gateway.canonical(self._messages)
         self._check_prefix(canonical)
+        self._before = (canonical, list(self._appended), self._expected, self._prev_usage)
         turn = await self._gateway.send(
             self._messages,
             canonical,
@@ -408,6 +515,25 @@ class LoopSession:
         self._appended = []
         self._pending_tool_ids = {str(tc["id"]) for tc in turn.message.tool_calls}
         return turn
+
+    async def retry_last(self, *, on_token: TokenCallback | None = None) -> ModelTurn:
+        """Send the previous request again, unchanged, as a new model call.
+
+        The only exception to the append rule. It is for a response that was cut off
+        (`max_tokens`): that response is dropped, never sent back, because a truncated
+        tool_use or thinking block is not valid input. The request bytes must equal the
+        previous request's, or this raises.
+        """
+        if self._before is None or not isinstance(self._messages[-1], AIMessage):
+            raise ValueError("retry_last needs a completed call to repeat")
+        canonical, appended, expected, prev_usage = self._before
+        self._messages.pop()
+        self._appended, self._expected, self._prev_usage = appended, expected, prev_usage
+        self._pending_tool_ids = set()
+        self._broken = None
+        if self._gateway.canonical(self._messages) != canonical:
+            raise AssertionError("retry_last must re-send the previous request byte for byte")
+        return await self.call(on_token=on_token)
 
     def _snapshot(self, canonical: Mapping[str, Any], response: AIMessage) -> dict[str, Any]:
         """The previous request plus `response`, in the form the next request must start with.

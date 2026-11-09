@@ -1,0 +1,20 @@
+id: S44b_loop_forever_model_calls
+title: LoopForeverPolicy with 12 loop iterations; the 8 model calls bind, LIMIT_REACHED with a partial result and nothing booked
+category: [limit exhaustion]
+seed: 441
+limits: {loop_iterations: 12}
+model: hostile:loop_forever
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings}
+steps:
+  - say: "Find a plumber in Indiranagar this week, mornings."
+    gives: [service, area, window]
+  - expect_outcome: LIMIT_REACHED
+  - expect_limit: model_calls
+  - expect_transcript: {last_includes: ["So far I have: plumber, Indiranagar", "Nothing was booked"]}
+  - expect_notice: retry
+  - expect_world: {list_bookings: 7, hold_slot: 0, book: 0, cancel: 0, reschedule: 0}
+  - expect_no_side_effects: {}
+expect:
+  invariants: [default]

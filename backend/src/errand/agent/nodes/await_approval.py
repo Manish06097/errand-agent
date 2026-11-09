@@ -11,11 +11,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
+from errand.agent.deps import RunDeps
 from errand.agent.state import ThreadState
 
 
-def await_approval(state: ThreadState) -> dict[str, Any]:
+async def await_approval(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     inbound = interrupt({"approval_id": state.errand.approval_id if state.errand else None})
     return {"inbound": inbound}

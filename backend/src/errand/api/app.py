@@ -54,7 +54,7 @@ from errand import faults
 from errand.agent.brief_ops import INVALIDATES, missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
-from errand.api import dev_routes, web_routes
+from errand.api import dev_routes, followup_routes, web_routes
 from errand.api.memory_routes import MEMORY_ACTIONS, memory_chat_action
 from errand.api.memory_routes import mount as mount_memory_routes
 from errand.api.reconciler import Reconciler
@@ -75,6 +75,7 @@ from errand.clock import AGENT_CLOCK_HEADER, IST, encode_clock_header, reading_o
 from errand.config import (
     ApprovalSettings,
     BookingSettings,
+    FollowupSettings,
     LangfuseKeys,
     LimitSettings,
     MemorySettings,
@@ -84,7 +85,9 @@ from errand.config import (
     TraceSettings,
 )
 from errand.domain.brief import BriefField
+from errand.domain.inbound import SystemEvent
 from errand.domain.messages import MessageBody
+from errand.followup.watcher import Watcher
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
 from errand.memory.hmac_key import load_or_create
@@ -138,6 +141,8 @@ class AppConfig:
     user_id: str | None = None
     approval_settings: ApprovalSettings | None = None
     booking_settings: BookingSettings | None = None
+    # The watcher's interval (0 turns it off); evals and tests tick it by hand.
+    followup_settings: FollowupSettings | None = None
     reconciler: ReconcilerSettings | None = None
     # Tests replace the per-user consequential lock (the S28 backstop test runs two
     # executes with no lock at all).
@@ -188,6 +193,8 @@ class ActionIn(BaseModel):
         "select_slot",
         "refresh_hold",
         "check_now",
+        "widen_followup",
+        "dismiss_followup",
         "keep_memory",
         "confirm_forget",
         "update_memory",
@@ -380,13 +387,32 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 card_keys=card_invalidating_keys(),
             )
             manager.memory = app.state.memory
+
+            async def start_followup(conversation_id: str, event: SystemEvent) -> None:
+                await manager.submit_system(conversation_id, event)
+
+            watcher = Watcher(
+                db=db,
+                world=world,
+                tz=config.tz,
+                traces_dir=data_dir / "traces",
+                start=start_followup,
+                interval_s=config.followup_settings.watch_interval_s
+                if config.followup_settings is not None
+                else FollowupSettings().watch_interval_s,
+                extra_users=lambda: [user_id],
+            )
+            app.state.watcher = watcher
+            manager.followup_watcher = watcher  # the reconciler's follow-up pass reads it
             reconciler = Reconciler(manager, config.reconciler or ReconcilerSettings())
             app.state.reconciler = reconciler
             await reconciler.startup()  # before the first request is served (9.7)
             reconciler.start_periodic()
+            watcher.start_task()
             try:
                 yield
             finally:
+                await watcher.stop()
                 await reconciler.stop()
                 await manager.shutdown()
 
@@ -423,7 +449,20 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 "state": "off",
                 "reason": off_reason(TraceSettings(), LangfuseKeys()) or "not_started",
             }
-        return {"status": "ok", "service": SERVICE, "langfuse": langfuse}
+        watcher: Watcher | None = getattr(request.app.state, "watcher", None)
+        health: dict[str, Any] = {"status": "ok", "service": SERVICE, "langfuse": langfuse}
+        if watcher is not None:
+            # Lag since the last tick that listed every user's bookings (16.5).
+            health["watcher"] = (
+                {
+                    "state": "on",
+                    "lag_s": watcher.health.lag_s(manager_of(request).clock.now()),
+                    "failing_users": watcher.health.failing_users,
+                }
+                if watcher.interval_s > 0
+                else {"state": "off"}
+            )
+        return health
 
     @app.post("/api/conversations", status_code=201)
     async def create_conversation(request: Request) -> dict[str, str]:
@@ -587,6 +626,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             yield event
 
     web_routes.register(app)
+    followup_routes.register(app)
     dev_routes.register(app)
     return app
 

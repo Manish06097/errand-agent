@@ -47,10 +47,10 @@ async def test_an_exception_in_a_node_still_ends_with_a_message_and_run_end(
     assert view.run_id in notice["text"]
     assert invariants.inv07_one_end_per_run(rec) == []
     errors = [r for r in rec.traces[view.run_id] if r["type"] == "error"]
-    assert [e["where"] for e in errors] == ["llm.gateway", "run_manager"]
+    assert [e["where"] for e in errors] == ["llm.gateway", "node:plan"]
 
 
-async def test_an_unmapped_stop_reason_is_internal_error_until_m13(tmp_path: Path) -> None:
+async def test_a_max_tokens_stop_every_time_is_model_no_progress(tmp_path: Path) -> None:
     def truncated(request: ScriptedRequest) -> AIMessage:
         message = reference.policy(request)
         message.response_metadata["stop_reason"] = "max_tokens"
@@ -58,7 +58,8 @@ async def test_an_unmapped_stop_reason_is_internal_error_until_m13(tmp_path: Pat
 
     async with harness(tmp_path, world(), policy=truncated) as h:
         view = await h.say(OPENER)
-    assert view.outcome == "INTERNAL_ERROR"
+    # Every call is cut off: one retry of the same request, then no progress (N3 step 6).
+    assert view.outcome == "MODEL_NO_PROGRESS"
 
 
 async def test_a_message_over_its_cap_is_refused_without_a_model_call(tmp_path: Path) -> None:
@@ -159,7 +160,7 @@ async def test_the_tool_call_cap_ends_limit_reached(tmp_path: Path) -> None:
     assert rec.runs[0]["tool_calls"] == 16 and len(op_log) == 16
 
 
-async def test_the_simulated_deadline_caps_timeouts_and_ends_limit_reached(
+async def test_the_simulated_deadline_caps_timeouts_and_ends_wall_clock_exceeded(
     tmp_path: Path,
 ) -> None:
     # Each call takes 4.5 s of world time, inside the 5 s read timeout. The 14th starts
@@ -170,7 +171,7 @@ async def test_the_simulated_deadline_caps_timeouts_and_ends_limit_reached(
         view = await h.say(OPENER)
         op_log = await h.op_log()
         rec = await h.records()
-    assert view.outcome == "LIMIT_REACHED"
+    assert view.outcome == "WALL_CLOCK_EXCEEDED"
     assert len(op_log) == 14
     calls = [r for r in rec.traces[view.run_id] if r["type"] == "tool.call"]
     assert [c["error"] for c in calls][-2:] == [None, "ToolTimeout"]

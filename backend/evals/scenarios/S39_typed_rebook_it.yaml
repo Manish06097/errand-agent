@@ -1,0 +1,31 @@
+id: S39_typed_rebook_it
+title: The Rebook card is granted by typing "rebook it" (the grammar accepts it on a Rebook card only); a bare "book it" on a plain card still works, and the hint on a Rebook card names "rebook it"
+category: [followup]
+seed: 39
+world:
+  book: {forced: [success, success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - world_event: {type: provider_cancelled, booking: last_booked}
+  - watcher_tick: {}
+  - expect_notification: {count: 1}
+  - open_followup: {}
+  - expect_card: {kind: action, status: pending, typed_grant_ok: true}
+  # a bare acknowledgement gets the code hint, which names the Rebook phrase
+  - say: "ok"
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_transcript: {last_includes: ["rebook it"]}
+  - type_confirm: {text: "rebook it"}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_world: {book: 2}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: done}, count: 1}
+expect:
+  invariants: [default]

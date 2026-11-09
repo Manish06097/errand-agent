@@ -62,7 +62,6 @@ from errand.tools.errors import ToolError
 from errand.tools.gateway import Caller
 from errand.world.contracts import BookingItem, HoldSlotOut, ListBookingsOut, hold_is_live
 
-REPLANS_PER_RUN = 1
 _REFUSED_TEXT = {
     "memory_changed": "A saved preference this request used was just changed, so I didn't "
     "prepare a card from it. Tell me again what you want and I'll start from there.",
@@ -283,6 +282,7 @@ class _Preparer:
             slot_end=ist_seconds(held_slot.end),
             quoted_price_inr=hold.quoted_price_inr,
             same_service_nearby=[b.booking_id for b in nearby],
+            replaces_booking_id=self.errand.replaces_booking_id,
         )
         fp = fingerprint(material)
         proposal_id, approval_id = ids_for(self.state.run_id, self.state.counters.replans)
@@ -302,6 +302,7 @@ class _Preparer:
             nearby=nearby,
             tz=deps.tz,
             brief=self.errand.brief,
+            rebook=self.errand.rebook if self.errand.replaces_booking_id else None,
             last_visit=self._last_visit(verdict.candidate.provider_id, listed.bookings),
         )
         row = ApprovalRow(
@@ -395,7 +396,10 @@ class _Preparer:
     def _replan_or(self, note: SystemNote, otherwise: StepResult) -> StepResult:
         """Back to plan once per run, and only when a user message started it."""
         deps = self.deps
-        if isinstance(self.state.inbound, UserMessage) and deps.counters.replans < REPLANS_PER_RUN:
+        if (
+            isinstance(self.state.inbound, UserMessage)
+            and deps.counters.replans < deps.limits.replans_per_run
+        ):
             deps.counters.replans += 1
             self.notes.append(note)
             return Replan(note=note.kind)  # type: ignore[arg-type]

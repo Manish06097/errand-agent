@@ -352,6 +352,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Notifications */
+        get: operations["list_notifications_api_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/{notification_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read Notification */
+        post: operations["read_notification_api_notifications__notification_id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{run_id}/events": {
         parameters: {
             query?: never;
@@ -403,6 +437,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users/me/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** User Events */
+        get: operations["user_events_api_users_me_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -433,6 +484,8 @@ export interface components {
             expires_at: string;
             /** Fingerprint */
             fingerprint: string;
+            /** Header */
+            header?: string | null;
             /** Hold Expires At */
             hold_expires_at: string;
             /** Hold Id */
@@ -479,7 +532,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "select_slot" | "refresh_hold" | "check_now" | "keep_memory" | "confirm_forget" | "update_memory" | "save_memory";
+            kind: "select_slot" | "refresh_hold" | "check_now" | "widen_followup" | "dismiss_followup" | "keep_memory" | "confirm_forget" | "update_memory" | "save_memory";
             /** Payload */
             payload?: {
                 [key: string]: string;
@@ -526,6 +579,8 @@ export interface components {
             provider_id: string;
             /** Quoted Price Inr */
             quoted_price_inr: number;
+            /** Replaces Booking Id */
+            replaces_booking_id?: string | null;
             /** Same Service Nearby */
             same_service_nearby?: string[];
             service: components["schemas"]["Service"];
@@ -660,7 +715,7 @@ export interface components {
              * Body
              * @default null
              */
-            body: (components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["OutcomeCard"] | components["schemas"]["MemorySavedChip"] | components["schemas"]["MemorySuggestionChip"] | components["schemas"]["MemoryOfferChip"] | components["schemas"]["MemoryUpdateChip"] | components["schemas"]["MemoryForgetChip"] | components["schemas"]["MemoryListCard"]) | null;
+            body: (components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["ProactiveLine"] | components["schemas"]["OutcomeCard"] | components["schemas"]["MemorySavedChip"] | components["schemas"]["MemorySuggestionChip"] | components["schemas"]["MemoryOfferChip"] | components["schemas"]["MemoryUpdateChip"] | components["schemas"]["MemoryForgetChip"] | components["schemas"]["MemoryListCard"]) | null;
             /**
              * Errand Id
              * @default null
@@ -812,8 +867,16 @@ export interface components {
             conversation_id: string;
             /** Created At */
             created_at: number;
+            /**
+             * Kind
+             * @default chat
+             * @enum {string}
+             */
+            kind: "chat" | "followup";
             /** Last Activity At */
             last_activity_at: number;
+            /** Origin Booking Id */
+            origin_booking_id?: string | null;
             /** Preview */
             preview?: string | null;
             /** Title */
@@ -992,7 +1055,7 @@ export interface components {
             /** Approval Id */
             approval_id?: string | null;
             /** Body */
-            body: components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["OutcomeCard"] | components["schemas"]["MemorySavedChip"] | components["schemas"]["MemorySuggestionChip"] | components["schemas"]["MemoryOfferChip"] | components["schemas"]["MemoryUpdateChip"] | components["schemas"]["MemoryForgetChip"] | components["schemas"]["MemoryListCard"];
+            body: components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["ProactiveLine"] | components["schemas"]["OutcomeCard"] | components["schemas"]["MemorySavedChip"] | components["schemas"]["MemorySuggestionChip"] | components["schemas"]["MemoryOfferChip"] | components["schemas"]["MemoryUpdateChip"] | components["schemas"]["MemoryForgetChip"] | components["schemas"]["MemoryListCard"];
             /** Created At */
             created_at: number;
             /** Kind */
@@ -1058,15 +1121,56 @@ export interface components {
         NoticeAction: {
             /** Approval Id */
             approval_id?: string | null;
+            /** Field */
+            field?: ("days" | "price" | "time") | null;
             /**
              * Kind
              * @enum {string}
              */
-            kind: "retry" | "narrow_search" | "shorten" | "answer" | "refresh_hold" | "raise_budget" | "options" | "check_now" | "cancel" | "quick_reply";
+            kind: "retry" | "narrow_search" | "shorten" | "answer" | "refresh_hold" | "raise_budget" | "options" | "check_now" | "cancel" | "quick_reply" | "widen_followup" | "dismiss_followup" | "select_slot";
             /** Label */
             label: string;
             /** Reply */
             reply?: string | null;
+            /** Slot Ref */
+            slot_ref?: string | null;
+            /** Value */
+            value?: string | null;
+        };
+        /** NotificationOut */
+        NotificationOut: {
+            /** Booking Id */
+            booking_id?: string | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Created At */
+            created_at: number;
+            /** Kind */
+            kind: string;
+            /** Notification Id */
+            notification_id: string;
+            /**
+             * Quiet
+             * @default false
+             */
+            quiet: boolean;
+            /** Read */
+            read: boolean;
+            /** Ready */
+            ready?: boolean | null;
+            /** Seq */
+            seq: number;
+            /** Title */
+            title: string;
+            /** Urgency */
+            urgency: string;
+        };
+        /** NotificationsOut */
+        NotificationsOut: {
+            /** Notifications */
+            notifications: components["schemas"]["NotificationOut"][];
+            /** Unread */
+            unread: number;
         };
         /**
          * OutcomeCard
@@ -1141,6 +1245,27 @@ export interface components {
             reason: "hold_live" | "status_unavailable" | "material_mismatch" | "check_incomplete" | "fenced_off";
             /** Recorded */
             recorded?: string | null;
+        };
+        /**
+         * ProactiveLine
+         * @description One line the agent writes into a conversation its run does not own (14.2, INV-15): the
+         *     origin chat hears about a cancel and, later, a rebooking. It carries no approval and no
+         *     question; the typed-grant binding looks past it.
+         */
+        ProactiveLine: {
+            /** Booking Id */
+            booking_id: string;
+            /** Followup Conversation Id */
+            followup_conversation_id: string;
+            /** Status Line */
+            status_line?: string | null;
+            /** Text */
+            text: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "proactive";
         };
         /** ReconcileOut */
         ReconcileOut: {
@@ -2150,6 +2275,57 @@ export interface operations {
             };
         };
     };
+    list_notifications_api_notifications_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationsOut"];
+                };
+            };
+        };
+    };
+    read_notification_api_notifications__notification_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_events_api_runs__run_id__events_get: {
         parameters: {
             query?: {
@@ -2241,6 +2417,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    user_events_api_users_me_events_get: {
+        parameters: {
+            query?: {
+                once?: boolean;
+            };
+            header?: {
+                "last-event-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
                 };
             };
             /** @description Validation Error */

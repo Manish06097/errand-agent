@@ -22,7 +22,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import SecretStr
 
 from errand.llm.anthropic import canonical_bytes, canonical_from_payload, request_sha256
-from errand.llm.errors import ForcedToolChoiceError
+from errand.llm.errors import ForcedToolChoiceError, ModelUnavailable
 from errand.llm.scripted import ScriptedChatModel
 from tests.llm.support import S4_USAGE, SYSTEM, Rig, rig, text
 
@@ -175,17 +175,17 @@ async def test_live_mode_sends_the_binding_beta_and_strict_settings(
 async def test_planner_retries_are_an_explicit_setting_that_reaches_the_sdk(
     tmp_path: Path,
 ) -> None:
-    fake = FakeAnthropic(overloaded=2)
+    fake = FakeAnthropic(overloaded=1)
     r = _live(tmp_path, fake)
-    assert r.gateway.settings.planner_max_retries == 2
-    assert r.gateway.wire.max_retries == 2
-    assert r.gateway.wire._async_client.max_retries == 2
+    assert r.gateway.settings.planner_max_retries == 1
+    assert r.gateway.wire.max_retries == 1
+    assert r.gateway.wire._async_client.max_retries == 1
 
     turn = await r.gateway.session(system=SYSTEM, messages=[HumanMessage("Say OK.")]).call()
     assert turn.message.text == "OK"
-    # Two 529s, then the answer: three HTTP requests inside one model.call. The trace
-    # has one record for them, so latency includes the retries (M13 sets the value).
-    assert [q.headers["x-stainless-retry-count"] for q in fake.requests] == ["0", "1", "2"]
+    # One 529, then the answer: two HTTP requests inside one model.call. The trace has
+    # one record for them, so latency includes the retry (N3 sets the value to 1).
+    assert [q.headers["x-stainless-retry-count"] for q in fake.requests] == ["0", "1"]
     assert len(r.of_type("model.call")) == 1
     assert r.gateway.counters.model_calls == 1
 
@@ -194,13 +194,16 @@ async def test_with_retries_off_one_overloaded_answer_fails_the_call(tmp_path: P
     fake = FakeAnthropic(overloaded=1)
     r = _live(tmp_path, fake, model_settings={"planner_max_retries": 0})
     assert r.gateway.wire._async_client.max_retries == 0
-    with pytest.raises(anthropic.APIStatusError) as exc:
+    with pytest.raises(ModelUnavailable) as exc:
         await r.gateway.session(system=SYSTEM, messages=[HumanMessage("Say OK.")]).call()
-    assert exc.value.status_code == 529
+    assert exc.value.reason == "http 529"
+    assert isinstance(exc.value.__cause__, anthropic.APIStatusError)
     assert len(fake.requests) == 1
     (err,) = r.of_type("error")
     assert err["where"] == "llm.gateway"
-    assert r.of_type("model.call") == []
+    # The failed call still writes its model.call record: the error, no usage, no cost.
+    (call,) = r.of_type("model.call")
+    assert "529" in call["error"] and call["cost_usd"] == 0 and call["usage"]["output"] == 0
 
 
 async def test_canonical_request_is_what_the_sdk_sends_and_hashes_the_same_in_every_mode(

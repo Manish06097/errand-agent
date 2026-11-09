@@ -123,6 +123,13 @@ class ToolDown(_Result):
     error_class: str
 
 
+class ModelDown(_Result):
+    """The planning model could not be reached after the SDK's retry (N3, 15.2)."""
+
+    kind: Literal["model_down"] = "model_down"
+    reason: str
+
+
 class TooLarge(_Result):
     kind: Literal["too_large"] = "too_large"
     section: str
@@ -145,6 +152,18 @@ class Failure(_Result):
     reason: str
 
 
+class Refused(_Result):
+    """The model refused (stop_reason refusal): MODEL_REFUSED, no retry, no fallback."""
+
+    kind: Literal["refused"] = "refused"
+
+
+class Truncated(_Result):
+    """stop_reason max_tokens with no reprompt left, or twice: MODEL_NO_PROGRESS."""
+
+    kind: Literal["truncated"] = "truncated"
+
+
 PlanResult = Annotated[
     Reply
     | Ask
@@ -153,6 +172,9 @@ PlanResult = Annotated[
     | Proposal
     | Limit
     | ToolDown
+    | ModelDown
+    | Refused
+    | Truncated
     | TooLarge
     | Exhausted
     | Failure
@@ -303,6 +325,12 @@ class BookCalled(_Result):
     price_inr: int | None = None
 
 
+class FollowupDone(_Result):
+    """The followup node decided and handed `respond` a notice (the context is in state)."""
+
+    kind: Literal["followup_done"] = "followup_done"
+
+
 # ---------------------------------------------------------------- cancel and reschedule (N1)
 #
 # The same intent and attempt flow as a booking, with no hold (9.5). `BookCalled` is also
@@ -349,7 +377,8 @@ class ChangeFailed(_Result):
 
 
 StepResult = Annotated[
-    CardReady
+    FollowupDone
+    | CardReady
     | ProposalRefused
     | HoldFailed
     | OverBudget

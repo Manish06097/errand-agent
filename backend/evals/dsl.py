@@ -19,8 +19,16 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
+from errand.config import LimitSettings
 from errand.domain.brief import BriefField
 from errand.domain.outcomes import RunOutcome
 from errand.world.scenario import FaultsConfig, ScenarioConfig, WorldConfig
@@ -394,6 +402,26 @@ class ExpectBrief(_Strict):
     expect_brief: BriefSpec
 
 
+class ExpectLimit(_Strict):
+    """The cap that ended the last run, as `run.end` names it (N3)."""
+
+    expect_limit: Literal["model_calls", "iterations", "tool_calls", "deadline"]
+
+
+class MarkerSpec(_Strict):
+    # strings that must appear in no planner request of the scenario
+    markers: list[str] = Field(min_length=1)
+    # tools whose results the planner must never have been given back
+    no_tool_result_for: list[str] = Field(default_factory=list)
+
+
+class ExpectNotInRequests(_Strict):
+    """Nothing from a malformed tool answer reached the model (S63): its marker is in no
+    model.call request, and no tool_result exists for the call that got it."""
+
+    expect_not_in_requests: MarkerSpec
+
+
 class BookCallsSpec(_Strict):
     # `book` calls the agent made (tool.call records), `book` rows in the world's op_log
     # (a duplicate delivery adds a row without a second agent call), distinct keys and
@@ -413,7 +441,15 @@ class ExpectBookCalls(_Strict):
 
 class RowsSpec(_Strict):
     table: Literal[
-        "action_intents", "intent_attempts", "followup_jobs", "known_bookings", "approvals"
+        "action_intents",
+        "intent_attempts",
+        "followup_jobs",
+        "known_bookings",
+        "approvals",
+        "notifications",
+        "memories",
+        "memory_events",
+        "holds",
     ]
     where: dict[str, str | int] = Field(default_factory=dict)
     count: int
@@ -492,6 +528,59 @@ class ExpectApprovals(_Strict):
     expect_approvals: list[str]
 
 
+class WorldEventSpec(_Strict):
+    type: Literal["provider_cancelled"] = "provider_cancelled"
+    # Which booking: `created:N` (the N-th the agent booked), `last_booked`, or a seeded
+    # booking by its index in the world's seeded history.
+    booking: str = Field(pattern=r"^(created:\d+|last_booked|seeded:\d+)$")
+
+
+class WorldEvent(_Strict):
+    """N3: the world fires an event now (a provider cancels), outside any run."""
+
+    world_event: WorldEventSpec
+
+
+class WatcherTick(_Strict):
+    """N3: one watcher tick, as the lifespan task would run it. Any follow-up run it starts is
+    finished before the step returns; the client of that conversation then sees it."""
+
+    watcher_tick: dict[str, Any] = Field(default_factory=dict)
+
+
+class NotificationSpec(_Strict):
+    count: int
+    urgency: Literal["normal", "urgent"] | None = None
+    quiet: bool | None = None
+    unread: int | None = None
+
+
+class ExpectNotification(_Strict):
+    """N3: the bell, as `GET /api/notifications` serves it."""
+
+    expect_notification: NotificationSpec
+
+
+class OpenFollowup(_Strict):
+    """N3: the client opens the follow-up conversation the bell points to (the n-th)."""
+
+    open_followup: dict[str, Any] = Field(default_factory=dict)
+
+
+class ClickFollowup(_Strict):
+    """N3: a follow-up notice button. `widen` presses the named widening button, `dismiss`
+    is "I'll sort it myself"."""
+
+    click_followup: Literal["widen", "dismiss"]
+    field: Literal["days", "price", "time"] | None = None
+
+
+class ExpectFollowup(_Strict):
+    """N3: facts about the latest follow-up run, from its records."""
+
+    expect_followup: dict[str, Any]
+
+
 STEP_TYPES: dict[str, type[BaseModel]] = {
     "say": Say,
     "answer": Answer,
@@ -528,6 +617,8 @@ STEP_TYPES: dict[str, type[BaseModel]] = {
     "expect_planner": ExpectPlanner,
     "expect_no_side_effects": ExpectNoSideEffects,
     "expect_brief": ExpectBrief,
+    "expect_limit": ExpectLimit,
+    "expect_not_in_requests": ExpectNotInRequests,
     "if_dedupe": IfDedupe,
     "expect_book_calls": ExpectBookCalls,
     "expect_rows": ExpectRows,
@@ -535,6 +626,12 @@ STEP_TYPES: dict[str, type[BaseModel]] = {
     "expect_shortlist": ExpectShortlist,
     "expect_options": ExpectOptions,
     "expect_approvals": ExpectApprovals,
+    "world_event": WorldEvent,
+    "watcher_tick": WatcherTick,
+    "expect_notification": ExpectNotification,
+    "open_followup": OpenFollowup,
+    "click_followup": ClickFollowup,
+    "expect_followup": ExpectFollowup,
 }
 STEP_TYPES.update(memory_steps.MEMORY_STEP_TYPES)
 
@@ -574,6 +671,8 @@ Step = (
     | ExpectPlanner
     | ExpectNoSideEffects
     | ExpectBrief
+    | ExpectLimit
+    | ExpectNotInRequests
     | IfDedupe
     | ExpectBookCalls
     | ExpectRows
@@ -586,12 +685,18 @@ Step = (
     | memory_steps.ExpectChip
     | memory_steps.ExpectMemory
     | memory_steps.ExpectContext
+    | WorldEvent
+    | WatcherTick
+    | ExpectNotification
+    | OpenFollowup
+    | ClickFollowup
+    | ExpectFollowup
 )
 
 
 # A step that grants an approval can reach `book`; a scenario with one runs in both
 # dedupe modes unless it says otherwise.
-GRANTING = ("approve", "approve_concurrently", "type_confirm")
+GRANTING = ("approve", "approve_concurrently", "type_confirm", "world_event")
 
 
 def parse_step(raw: Any) -> Step:
@@ -620,6 +725,8 @@ class UserSpec(_Strict):
 
 class FinalExpect(_Strict):
     invariants: list[str] = Field(default_factory=lambda: ["default"])
+    # The scenario must finish within this much real time (S45: no hang).
+    max_real_s: float | None = Field(default=None, gt=0)
 
 
 CrashPoint = Literal["after_intent_write", "after_world_book", "after_grant_commit"]
@@ -631,6 +738,8 @@ PlannerName = Literal[
     "hostile:false_claim",
     "hostile:paraphrase_claim",
     "hostile:cross_service_cite",
+    "hostile:loop_forever",
+    "hostile:loop_forever_x3",
     "hostile:matching_quote",
     "hostile:no_evidence",
     "hostile:no_day_part",
@@ -661,6 +770,8 @@ class Scenario(_Strict):
     crash_at: CrashPoint | None = None
     world: WorldConfig = Field(default_factory=WorldConfig)
     faults: FaultsConfig = Field(default_factory=FaultsConfig)
+    # LimitSettings fields only (strict): overrides for this scenario, to prove each cap binds.
+    limits: dict[str, float | int] = Field(default_factory=dict)
     user: UserSpec
     steps: list[Annotated[Step, BeforeValidator(parse_step)]]
     expect: FinalExpect = Field(default_factory=FinalExpect)
@@ -669,8 +780,6 @@ class Scenario(_Strict):
     # conversation becomes this scenario's chat) and harness-side triggers (S49b).
     memory_seed: Literal["memory_demo", "memory_rich_v1"] | None = None
     hooks: list[memory_steps.CallHook] = Field(default_factory=list)
-    # A lowered hard cap for the gateway (S42d's second leg): the section caps stay as they are.
-    context_budget_tokens: int | None = Field(default=None, ge=1_000)
     # M5: the world's dedupe modes this scenario runs in. Default: both for a scenario
     # that can reach `book`, else just the one `world.enforce_idempotency` says. A single
     # mode that is not forced by `world.enforce_idempotency` needs a reason (one line).
@@ -721,6 +830,21 @@ class Scenario(_Strict):
     def for_mode(self, mode: Dedupe) -> Scenario:
         world = self.world.model_copy(update={"enforce_idempotency": mode == "on"})
         return self.model_copy(update={"world": world})
+
+    @field_validator("limits")
+    @classmethod
+    def _limits_are_settings(cls, value: dict[str, float | int]) -> dict[str, float | int]:
+        unknown = sorted(set(value) - set(LimitSettings.model_fields))
+        if unknown:
+            raise ValueError(
+                f"limits: {unknown} are not LimitSettings fields "
+                f"(known: {sorted(LimitSettings.model_fields)})"
+            )
+        LimitSettings(**value)  # type: ignore[arg-type]
+        return value
+
+    def limit_settings(self) -> LimitSettings:
+        return LimitSettings(**self.limits)  # type: ignore[arg-type]
 
     def world_config(self) -> ScenarioConfig:
         return ScenarioConfig(id=self.id, seed=self.seed, world=self.world, faults=self.faults)

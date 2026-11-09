@@ -30,6 +30,7 @@ from errand.store.repos.known_bookings import KnownBookingsRepo
 from errand.store.repos.leases import LeasesRepo
 from errand.store.repos.memories import MemoriesRepo
 from errand.store.repos.messages import MessagesRepo
+from errand.store.repos.notifications import NotificationsRepo
 from errand.store.repos.reader_cache import ReaderCacheRepo
 from errand.store.repos.reader_refusals import ReaderRefusalsRepo
 from errand.store.repos.runs import RunsRepo
@@ -49,6 +50,7 @@ class Repos:
     intents: IntentsRepo
     known_bookings: KnownBookingsRepo
     followups: FollowupsRepo
+    notifications: NotificationsRepo
     client_requests: ClientRequestsRepo
     reader_cache: ReaderCacheRepo
     reader_refusals: ReaderRefusalsRepo
@@ -72,6 +74,7 @@ class AgentDB:
             intents=IntentsRepo(conn),
             known_bookings=KnownBookingsRepo(conn),
             followups=FollowupsRepo(conn),
+            notifications=NotificationsRepo(conn),
             client_requests=ClientRequestsRepo(conn),
             reader_cache=ReaderCacheRepo(conn),
             reader_refusals=ReaderRefusalsRepo(conn),

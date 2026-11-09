@@ -214,10 +214,10 @@ class _Verify:
     # ------------------------------------------------------------------ status
 
     async def _status_pass(self, key: str) -> tuple[BookingStatusOut | None, int]:
-        """Up to 4 checks, waiting 0.5, 1, 2 and 4 s (simulated) before them."""
+        """Up to `status_checks_per_run` (4) checks, waiting 0.5, 1, 2 and 4 s (simulated)."""
         deps = self.deps
         checks = 0
-        for delay in BACKOFF_S:
+        for delay in BACKOFF_S[: deps.limits.status_checks_per_run]:
             await deps.clock.sleep(delay)
             checks += 1
             try:
@@ -352,7 +352,9 @@ class _Verify:
                     job_id=f"fj_{booking_id}_provider_cancel",
                     booking_id=booking_id,
                     event_kind="provider_cancel",
-                    conversation_id=deps.conversation_id,
+                    # NULL: the column means the follow-up conversation, which delivery
+                    # creates; the origin conversation is on known_bookings (14.2).
+                    conversation_id=None,
                     now_ms=now_ms,
                 )
         deps.tracer.emit(

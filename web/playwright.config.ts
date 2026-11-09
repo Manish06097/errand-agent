@@ -47,6 +47,8 @@ export default defineConfig({
       ERRAND_DEV: "1",
       ERRAND_MODEL_MODE: "scripted",
       ERRAND_LANGFUSE: "off",
+      // The follow-up watcher polls every second here instead of every 15 s.
+      ERRAND_FOLLOWUP_WATCH_INTERVAL_S: "1",
       ERRAND_DATA_DIR: dataDir,
       ERRAND_WORLD_DB: path.join(dataDir, "world.sqlite"),
       ERRAND_WORLD_PORT: worldPort,

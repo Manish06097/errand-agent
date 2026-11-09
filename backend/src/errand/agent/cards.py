@@ -12,7 +12,7 @@ from datetime import datetime, tzinfo
 from errand.agent.brief_ops import render_value
 from errand.approvals.confirm_grammar import suggestion
 from errand.domain.brief import Brief, BriefField, ErrandKind
-from errand.domain.errand import Phase
+from errand.domain.errand import Phase, RebookInfo
 from errand.domain.material import BookMaterial, CancelMaterial, RescheduleMaterial
 from errand.domain.messages import (
     ActionCard,
@@ -103,8 +103,22 @@ def service_words(service: str) -> str:
     return {"ac_servicing": "AC servicing"}.get(service, service.replace("_", " ").capitalize())
 
 
-def button_label(quote: int) -> str:
-    return f"Book for {rupees(quote)}"
+def button_label(quote: int, *, rebook: bool = False) -> str:
+    return f"{'Rebook' if rebook else 'Book'} for {rupees(quote)}"
+
+
+def rebook_header(info: RebookInfo) -> str:
+    return f"Replaces {info.booking_id}, cancelled by {info.provider_name}"
+
+
+def rebook_delta(quote: int, info: RebookInfo) -> str | None:
+    """How the new price compares with the cancelled booking's; None when we never knew it."""
+    if info.price_inr is None:
+        return None
+    diff = quote - info.price_inr
+    if diff == 0:
+        return f"Same price as {info.booking_id}"
+    return f"{rupees(abs(diff))} {'more' if diff > 0 else 'less'} than {info.booking_id}"
 
 
 def book_card(
@@ -122,6 +136,7 @@ def book_card(
     nearby: list[BookingItem],
     tz: tzinfo,
     brief: Brief | None = None,
+    rebook: RebookInfo | None = None,
     last_visit: BookingItem | None = None,
 ) -> ActionCard:
     quote = material.quoted_price_inr
@@ -140,6 +155,10 @@ def book_card(
         MaterialLine(label="When", value=label),
         MaterialLine(label="Price", value=price),
     ]
+    if rebook is not None:
+        delta_line = rebook_delta(quote, rebook)
+        if delta_line is not None:
+            lines.append(MaterialLine(label="Compared with", value=delta_line))
     if last_visit is not None:
         # A provider chosen by history (7.3): the click approves this held quote, and the
         # card says where it comes from. The contract gives no price paid before, so the
@@ -164,7 +183,7 @@ def book_card(
         errand_id=errand_id,
         action="book",
         fingerprint=fingerprint,
-        title=f"Book {candidate.name}",
+        title=f"{'Rebook' if rebook is not None else 'Book'} {candidate.name}",
         lines=lines,
         provider_id=candidate.provider_id,
         provider_name=candidate.name,
@@ -178,12 +197,18 @@ def book_card(
         hold_id=hold_id,
         hold_expires_at=hold_expires_at.isoformat(),
         expires_at=expires_at.isoformat(),
-        button_label=button_label(quote),
+        button_label=button_label(quote, rebook=rebook is not None),
+        decline_label="Not this one" if rebook is not None else "Decline",
+        header=rebook_header(rebook) if rebook is not None else None,
         nearby=near,
         material=material,
         status_line=STATUS_LINES[Phase.AWAITING_APPROVAL],
         brief=brief_chips(brief) if brief is not None else [],
     )
+
+
+def _is_rebook(card: ActionCard) -> bool:
+    return getattr(card.material, "replaces_booking_id", None) is not None
 
 
 def _approval_line(action: str) -> str:
@@ -192,7 +217,7 @@ def _approval_line(action: str) -> str:
 
 
 def reminder(card: ActionCard, *, typed_grant_ok: bool) -> CardReminder:
-    phrase = suggestion(card.action)
+    phrase = suggestion(card.action, rebook=_is_rebook(card))
     hint = (
         f"Tap '{card.button_label}' or type '{phrase}' to confirm."
         if typed_grant_ok
@@ -207,6 +232,7 @@ def reminder(card: ActionCard, *, typed_grant_ok: bool) -> CardReminder:
             else f"Still waiting on: {card.title}, {card.slot_label}"
         ),
         button_label=card.button_label,
+        decline_label=card.decline_label,
         typed_grant_ok=typed_grant_ok,
         hint=hint,
         status_line=_approval_line(card.action),
@@ -214,7 +240,10 @@ def reminder(card: ActionCard, *, typed_grant_ok: bool) -> CardReminder:
 
 
 def confirm_hint(card: ActionCard) -> str:
-    return f"To confirm, tap '{card.button_label}' or type '{suggestion(card.action)}'."
+    return (
+        f"To confirm, tap '{card.button_label}' or type "
+        f"'{suggestion(card.action, rebook=_is_rebook(card))}'."
+    )
 
 
 def booked_card(card: ActionCard, booking_id: str, *, after_restart: bool = False) -> OutcomeCard:

@@ -71,6 +71,11 @@ export function ActionCard({
           {status}
         </Badge>
       </div>
+      {body.header && (
+        <p data-testid="card-header" className="mt-1 text-sm text-neutral-700 dark:text-neutral-300">
+          {body.header}
+        </p>
+      )}
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
         {body.lines.map((line) => (
           <div key={line.label} className="contents">

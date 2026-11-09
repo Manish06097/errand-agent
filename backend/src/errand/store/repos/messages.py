@@ -168,10 +168,14 @@ class MessagesRepo:
             return [_row(r) for r in await cur.fetchall()]
 
     async def latest_assistant(self, conversation_id: str) -> Message | None:
+        """The latest assistant message the typed-grant binding looks at. A `proactive` line
+        (written by a run that does not own the conversation) never carries an approval or a
+        question, so it is looked past (14, INV-15)."""
         async with self._conn.execute(
             f"SELECT {_COLUMNS} FROM messages WHERE conversation_id = ? AND role = 'assistant' "
             # memory chips are lines in the transcript, never the card a typed grant targets
-            "AND json_extract(body_json, '$.type') NOT LIKE 'memory\\_%' ESCAPE '\\' "
+            "AND kind != 'proactive' "
+            "AND COALESCE(json_extract(body_json, '$.type'), '') NOT LIKE 'memory\\_%' ESCAPE '\\' "
             "ORDER BY created_at DESC, rowid DESC LIMIT 1",
             (conversation_id,),
         ) as cur:
