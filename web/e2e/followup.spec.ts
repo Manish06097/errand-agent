@@ -1,5 +1,17 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { OPENER, createdBookings, loadWorld, newErrand, say, WORLD } from "./helpers";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
+import {
+  OPENER,
+  createdBookings,
+  loadWorld,
+  newErrand,
+  say,
+  WORLD,
+} from "./helpers";
 
 // A provider cancels a verified booking. With no message sent, the watcher notices, the
 // bell shows one entry, and the follow-up conversation holds a Rebook card that only the
@@ -38,9 +50,9 @@ test("provider cancels: the bell shows 1 with no message sent, the Rebook card b
   await expect(page.getByTestId("card-header")).toContainText("Replaces");
   await expect(page.getByTestId("approve-button")).toContainText("Rebook for");
   await expect(page.getByTestId("decline-button")).toHaveText("Not this one");
-  await expect(page.getByTestId("messages").getByTestId("assistant-message").last()).toContainText(
-    "Rebook",
-  );
+  await expect(
+    page.getByTestId("messages").getByTestId("assistant-message").last(),
+  ).toContainText("Rebook");
   expect(await createdBookings(request)).toHaveLength(1); // the card alone books nothing
 
   await page.getByTestId("approve-button").click();
@@ -48,21 +60,49 @@ test("provider cancels: the bell shows 1 with no message sent, the Rebook card b
 
   // The original stays cancelled_by_provider and exactly one new booking exists.
   const all = await createdBookings(request);
-  expect(all.map((b) => b.status).sort()).toEqual(["cancelled_by_provider", "confirmed"]);
+  expect(all.map((b) => b.status).sort()).toEqual([
+    "cancelled_by_provider",
+    "confirmed",
+  ]);
   const dev = await request.get(`${WORLD}/dev/bookings`);
-  expect(((await dev.json()) as { status: string }[]).filter((b) => b.status === "confirmed").length).toBeGreaterThan(0);
+  expect(
+    ((await dev.json()) as { status: string }[]).filter(
+      (b) => b.status === "confirmed",
+    ).length,
+  ).toBeGreaterThan(0);
 
   // Another watcher interval adds no notification.
   await page.waitForTimeout(3000);
   const bell = await request.get("/api/notifications");
-  expect(((await bell.json()) as { notifications: unknown[] }).notifications).toHaveLength(1);
+  expect(
+    ((await bell.json()) as { notifications: unknown[] }).notifications,
+  ).toHaveLength(1);
 });
 
 // Gate 3 decision 7: an urgent cancel noticed outside the saved contact window is delivered
 // at once, with the badge only. The control test is the same cancel with no window saved,
 // where the banner shows.
 
-async function cancelBookedPlumber(page: Page, request: APIRequestContext): Promise<void> {
+/** The data directory outlives each test, so clear the bell before the one under test. Each of
+ * these tests also loads its own world: a booking id repeats within a world, and a job is
+ * unique per booking, so a second cancel of the same id would notify nobody. */
+async function freshBell(
+  request: APIRequestContext,
+  scenario: string,
+): Promise<void> {
+  await loadWorld(request, scenario);
+  const bell = (await (await request.get("/api/notifications")).json()) as {
+    notifications: { notification_id: string }[];
+  };
+  for (const n of bell.notifications) {
+    await request.post(`/api/notifications/${n.notification_id}/read`);
+  }
+}
+
+async function cancelBookedPlumber(
+  page: Page,
+  request: APIRequestContext,
+): Promise<void> {
   await newErrand(page);
   await say(page, OPENER);
   await page.getByTestId("approve-button").click();
@@ -76,7 +116,9 @@ async function cancelBookedPlumber(page: Page, request: APIRequestContext): Prom
 }
 
 /** A one-hour contact window about twelve hours from the agent's clock, so it never holds it. */
-async function saveWindowAwayFromNow(request: APIRequestContext): Promise<string> {
+async function saveWindowAwayFromNow(
+  request: APIRequestContext,
+): Promise<string> {
   const health = await request.get("/api/health");
   const header = health.headers()["x-agent-clock"] ?? "";
   const nowMs = Number(/now_ms=(\d+)/.exec(header)?.[1]);
@@ -93,11 +135,18 @@ async function saveWindowAwayFromNow(request: APIRequestContext): Promise<string
     },
   });
   expect(saved.ok(), await saved.text()).toBe(true);
-  const body = (await saved.json()) as { memory_id?: string; memory?: { memory_id: string } };
+  const body = (await saved.json()) as {
+    memory_id?: string;
+    memory?: { memory_id: string };
+  };
   return (body.memory_id ?? body.memory?.memory_id) as string;
 }
 
-test("an urgent cancel with no contact window saved shows the banner", async ({ page, request }) => {
+test("an urgent cancel with no contact window saved shows the banner", async ({
+  page,
+  request,
+}) => {
+  await freshBell(request, "S10_approval_claims_in_text");
   await cancelBookedPlumber(page, request);
   await expect(page.getByTestId("bell-count")).toHaveText("1");
   await expect(page.getByTestId("urgent-banner")).toBeVisible();
@@ -107,6 +156,7 @@ test("an urgent cancel outside the saved contact window is quiet: the badge, no 
   page,
   request,
 }) => {
+  await freshBell(request, "S11_yes_but_at_11");
   const memoryId = await saveWindowAwayFromNow(request);
   try {
     await cancelBookedPlumber(page, request);
@@ -116,12 +166,18 @@ test("an urgent cancel outside the saved contact window is quiet: the badge, no 
     await expect(page.getByTestId("urgent-banner")).toHaveCount(0);
     await expect(page.getByTestId("toast")).toHaveCount(0);
     const bell = (await (await request.get("/api/notifications")).json()) as {
-      notifications: { urgency: string; quiet: boolean }[];
+      notifications: { urgency: string; quiet: boolean; read: boolean }[];
     };
-    expect(bell.notifications).toHaveLength(1);
-    expect(bell.notifications[0]).toMatchObject({ urgency: "urgent", quiet: true });
+    // earlier tests left theirs in the bell (read); this test's is the newest and the only unread
+    expect(bell.notifications.filter((n) => !n.read)).toHaveLength(1);
+    expect(bell.notifications.at(-1)).toMatchObject({
+      urgency: "urgent",
+      quiet: true,
+    });
   } finally {
     // the data directory outlives the test: leave no contact window behind
-    await request.delete(`/api/memory/${memoryId}?client_action_id=e2e-window-forget-${Date.now()}`);
+    await request.delete(
+      `/api/memory/${memoryId}?client_action_id=e2e-window-forget-${Date.now()}`,
+    );
   }
 });

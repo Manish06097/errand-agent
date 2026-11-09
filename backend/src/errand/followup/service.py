@@ -144,24 +144,6 @@ async def wake_deferred(db: AgentDB, *, now: datetime, user_id: str | None = Non
     return woken
 
 
-async def _same_service_in_mirror(
-    repos: Repos, known: KnownBooking, interval: search.Interval | None
-) -> str | None:
-    """A confirmed booking of the same service inside the window, from the watcher's mirror
-    (the gate has no provider read; the run itself asks the provider afresh)."""
-    if interval is None:
-        return None
-    for other in await repos.known_bookings.for_user(known.user_id):
-        if (
-            other.booking_id != known.booking_id
-            and other.status == "confirmed"
-            and other.service == known.service
-            and interval.start <= from_ms(other.slot_start) < interval.end
-        ):
-            return other.booking_id
-    return None
-
-
 @dataclass(frozen=True)
 class Gate:
     defer_until: datetime | None = None  # outside the window and not urgent
@@ -171,15 +153,16 @@ class Gate:
 async def contact_gate(
     repos: Repos, job: Job, known: KnownBooking, *, now: datetime, tz: tzinfo
 ) -> Gate:
-    """Decision 7 for one `detected` job: deliver as usual, defer, or deliver quietly."""
+    """Decision 7 for one `detected` job: deliver as usual, defer, or deliver quietly.
+
+    Urgent means the policy's own reading (a slot within 24 h that a replacement could still
+    serve). The gate has no provider read, so it cannot see the same-service booking of
+    policy row 2: that notice, if it falls within 24 h, is treated as urgent here and goes
+    out quietly rather than waiting for the window. The run itself decides what to say."""
     window = quiet.saved(await repos.memories.for_user(known.user_id))
     if window is None or window.contains(now, tz):
         return Gate()
-    slot_start = from_ms(known.slot_start)
-    same = await _same_service_in_mirror(
-        repos, known, search.replacement_window(slot_start, now, tz)
-    )
-    got = await gather(repos, job, now=now, tz=tz, same_service=same)
+    got = await gather(repos, job, now=now, tz=tz)
     if got is not None and got.decision.urgency is policy.Urgency.URGENT and got.decision.searches:
         return Gate(quiet=True)
     return Gate(defer_until=window.next_opening(now, tz))
