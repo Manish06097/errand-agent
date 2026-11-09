@@ -25,6 +25,7 @@ from typing import Any, Literal
 
 from langgraph.runtime import Runtime
 
+from errand.agent.changes import verify as changes_verify
 from errand.agent.deps import RunDeps
 from errand.agent.state import ThreadState
 from errand.agent.transitions import transition
@@ -43,6 +44,8 @@ from errand.world.contracts import BookingStatusOut, ListBookingsOut, hold_is_li
 async def verify(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     deps = runtime.context
     assert state.errand is not None and isinstance(state.result, BookCalled)
+    if await changes_verify.is_change(deps, state.result.intent_id):
+        return await changes_verify.run_node(deps, state)  # cancel, reschedule (N1)
     with deps.tracer.node("verify", phase_before=state.errand.phase.value) as span:
         check = _Verify(deps, state.errand, state.result)
         try:

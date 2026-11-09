@@ -39,7 +39,12 @@ from errand.agent.transitions import ALLOWED, INITIAL_PHASE
 from errand.approvals.fingerprint import fingerprint
 from errand.clock import from_ms, to_ms
 from errand.domain.errand import Phase
-from errand.domain.material import BookMaterial, ist_seconds
+from errand.domain.material import (
+    BookMaterial,
+    CancelMaterial,
+    RescheduleMaterial,
+    ist_seconds,
+)
 from errand.domain.outcomes import RunOutcome
 from errand.trace.reader import read_trace
 from errand.world.contracts import Service
@@ -501,7 +506,8 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
             out.append(f"{where}: no approval.consumed for key {key}")
             continue
         if row["op"] != "book":
-            continue  # cancel and reschedule material lands with M9
+            out += _change_violations(rec, row, args, record, where)
+            continue
         material = _world_material(rec, str(args.get("hold_id")), int(row["sim_ts"]))
         if material is None:
             out.append(f"{where}: the world has no hold {args.get('hold_id')}")
@@ -523,6 +529,64 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
             if not same:
                 out.append(f"{where}: booking {b['booking_id']} differs from the approved material")
     rec.notes["book_ops_checked"] = checked
+    return out
+
+
+def _slot_before(rec: Records, booking_id: str, seq: int) -> int | None:
+    """The booking's slot start (epoch ms) in the world's own latest `list_bookings` answer
+    before op `seq`: what the booking looked like when the change was made."""
+    for row in sorted(rec.op_log, key=lambda r: int(r["seq"]), reverse=True):
+        if row["op"] != "list_bookings" or int(row["seq"]) >= seq or not row.get("response_json"):
+            continue
+        for item in json.loads(row["response_json"]).get("bookings") or []:
+            if item.get("booking_id") == booking_id:
+                return _ms(str(item["slot"]["start"]))
+    return None
+
+
+def _change_violations(
+    rec: Records,
+    row: dict[str, Any],
+    args: dict[str, Any],
+    consumed: dict[str, Any],
+    where: str,
+) -> list[str]:
+    """A cancel or reschedule's material rebuilt from the world's own records (the booking
+    row, the list it last answered, the slot the call carried), against the fingerprint the
+    approval was consumed at (N1)."""
+    out: list[str] = []
+    booking_id = str(args.get("booking_id"))
+    booking = next((b for b in rec.world_bookings if b["booking_id"] == booking_id), None)
+    if booking is None:
+        return [f"{where}: the world has no booking {booking_id}"]
+    provider = str(booking["provider_id"])
+    before = _slot_before(rec, booking_id, int(row["seq"]))
+    if row["op"] == "cancel":
+        start = before if before is not None else int(booking["slot_start"])
+        rebuilt: CancelMaterial | RescheduleMaterial = CancelMaterial(
+            user_id=rec.world_user,
+            booking_id=booking_id,
+            provider_id=provider,
+            slot_start=ist_seconds(from_ms(start)),
+        )
+    else:
+        slot = args.get("slot") or {}
+        if before is None or "start" not in slot or "end" not in slot:
+            return [f"{where}: no earlier list or no slot to rebuild the reschedule from"]
+        rebuilt = RescheduleMaterial(
+            user_id=rec.world_user,
+            booking_id=booking_id,
+            provider_id=provider,
+            from_start=ist_seconds(from_ms(before)),
+            to_start=ist_seconds(slot["start"]),
+            to_end=ist_seconds(slot["end"]),
+        )
+    if fingerprint(rebuilt) != consumed.get("fingerprint"):
+        out.append(
+            f"{where}: consumed fingerprint {consumed.get('fingerprint')} is not the one "
+            f"rebuilt from the world's records ({row['op']} {booking_id}, "
+            f"{getattr(rebuilt, 'slot_start', None) or getattr(rebuilt, 'to_start', None)})"
+        )
     return out
 
 
@@ -555,6 +619,20 @@ def inv02_one_side_effect_per_approval(rec: Records) -> Violations:
         replaced = row.get("replaces_booking_id")
         if replaced and row["state"] in ("open", "needs_attention", "succeeded"):
             replacements[str(replaced)] += 1
+    # A cancel or reschedule is effect-idempotent, so the same call may be applied twice at
+    # the world; what must never happen is one approval's key touching two effects.
+    effects: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+    for row in rec.op_log:
+        if row["op"] not in ("cancel", "reschedule") or row["outcome"] != "ok":
+            continue
+        args = json.loads(row["args_json"])
+        key = str(args.get("idempotency_key"))
+        slot = (args.get("slot") or {}).get("start", "")
+        effects[key].add((row["op"], str(args.get("booking_id")), str(slot)))
+    for key, made in sorted(effects.items()):
+        approval = consumed.get(intent_of_key.get(key, ""), {}).get("approval_id")
+        if len(made) > 1:
+            out.append(f"approval {approval} (key {key}) applied {len(made)} different changes")
     out += [f"{n} live intents on booking {t}" for t, n in live_targets.items() if n > 1]
     out += [f"{n} replacements for booking {t}" for t, n in replacements.items() if n > 1]
     material_of = {a["approval_id"]: json.loads(a["material_json"]) for a in rec.approvals}
@@ -776,6 +854,30 @@ def _confirmed_by_world(rec: Records, record: dict[str, Any]) -> str | None:
     return str(result.get("booking_id"))
 
 
+def _changed_by_world(rec: Records, record: dict[str, Any]) -> set[str]:
+    """Booking ids a `list_bookings` record shows cancelled, or confirmed at the slot the
+    world's own row has, where the world's row agrees (N1): what verifies a cancel or a
+    reschedule, since those are checked through the list, not a status."""
+    if record["type"] != "tool.call" or record.get("tool") != "list_bookings":
+        return set()
+    seq = record.get("world_seq")
+    if next((r for r in rec.op_log if r["seq"] == seq), None) is None:
+        return set()
+    rows = {str(b["booking_id"]): b for b in rec.world_bookings}
+    out: set[str] = set()
+    for item in (record.get("result") or {}).get("bookings") or []:
+        row = rows.get(str(item.get("booking_id")))
+        if row is None or row["status"] != item.get("status"):
+            continue
+        if item.get("status") in ("cancelled", "cancelled_by_provider"):
+            out.add(str(item["booking_id"]))
+        elif item.get("status") == "confirmed":
+            slot = (item.get("slot") or {}).get("start")
+            if slot and ist_seconds(slot) == ist_seconds(from_ms(int(row["slot_start"]))):
+                out.add(str(item["booking_id"]))
+    return out
+
+
 def _final_phases(rec: Records) -> dict[str, str]:
     """The errand phase at the end of each run, from the transition records."""
     phase: dict[str, str] = defaultdict(lambda: INITIAL_PHASE.value)
@@ -808,10 +910,21 @@ def inv04_success_only_after_the_source_of_truth(rec: Records) -> Violations:
     for run, records in rec.run_records():
         rid = run["run_id"]
         checked_here = False
+        via_list = any(
+            r["type"] == "run.end"
+            and r.get("outcome") in ("CANCELLED_VERIFIED", "RESCHEDULED_VERIFIED")
+            for r in records
+        )
         for record in records:
             if record["type"] == "tool.call" and record.get("tool") == "search_providers":
                 found_in = (record.get("result") or {}).get("providers") or []
                 known.update(str(p["name"]) for p in found_in if p.get("name"))
+            # A cancel or a reschedule is verified through list_bookings (9.5); a booking
+            # never is, so only those two outcomes may use the list as their check.
+            changed = _changed_by_world(rec, record) if via_list else set()
+            if changed:
+                confirmed |= changed
+                checked_here = True
             booking = _confirmed_by_world(rec, record)
             if booking is not None:
                 confirmed.add(booking)

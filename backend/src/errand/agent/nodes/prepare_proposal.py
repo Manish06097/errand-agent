@@ -28,6 +28,7 @@ from typing import Any
 from langgraph.runtime import Runtime
 
 from errand.agent.cards import book_card
+from errand.agent.changes import prepare as changes_prepare
 from errand.agent.deps import RunDeps
 from errand.agent.records import emit_swept, open_bookings
 from errand.agent.state import SystemNote, ThreadState
@@ -84,6 +85,8 @@ def ids_for(run_id: str, k: int) -> tuple[str, str]:
 async def prepare_proposal(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     deps = runtime.context
     assert state.errand is not None
+    if isinstance(state.plan_result, Proposal) and state.plan_result.action != "book":
+        return await changes_prepare.run_node(deps, state)  # cancel, reschedule (N1)
     with deps.tracer.node("prepare_proposal", phase_before=state.errand.phase.value) as span:
         prep = _Preparer(deps, state)
         result = await prep.run()

@@ -52,6 +52,7 @@ from langgraph.runtime import Runtime
 from pydantic import ValidationError
 
 from errand.agent import ask_guard, brief_ops, timewin
+from errand.agent.changes.validate import check_cancel_proposal
 from errand.agent.deps import RunDeps
 from errand.agent.planner_tools import (
     ASK_OPTION_MAX_CHARS,
@@ -62,6 +63,7 @@ from errand.agent.planner_tools import (
     AskUserArgs,
     GetProviderArgs,
     ProposeBookingArgs,
+    ProposeCancelArgs,
     UpdateBriefArgs,
 )
 from errand.agent.records import open_bookings, state_extras
@@ -71,6 +73,7 @@ from errand.agent.templates import recommendation_line
 from errand.agent.transitions import transition
 from errand.agent.validation import Rejected, check_book_proposal
 from errand.context.builder import build_context
+from errand.domain.booking_refs import BOOKING_REF, assign
 from errand.domain.brief import BriefField, TimeWindowExpr
 from errand.domain.errand import Errand, Phase
 from errand.domain.inbound import UserMessage
@@ -148,6 +151,9 @@ class PlannerLoop:
         self.notes = list(notes or [])
         self.searched = False
         self.booking_providers: set[str] = set()
+        # B1, B2, ... of the list_bookings view this run issued (N1): the only way a
+        # proposal names a booking, and valid for this run only.
+        self.booking_refs: dict[str, BookingItem] = {}
 
     # ------------------------------------------------------------------ loop
 
@@ -255,6 +261,8 @@ class PlannerLoop:
                 return self._ask_user(args)
             if name == "propose_booking":
                 return await self._propose_booking(args)
+            if name == "propose_cancel":
+                return await self._propose_cancel(args)
             if name in TOOLS:
                 # Not a planner tool: let the gateway refuse it, so its allowlist is the
                 # control that is exercised, not just this branch.
@@ -366,6 +374,7 @@ class PlannerLoop:
         if not isinstance(result, ListBookingsOut):
             return views.render_error("unavailable"), True
         self.booking_providers |= {b.provider_id for b in result.bookings}
+        self.booking_refs = assign(result.bookings, views.BOOKINGS_MAX)
         return views.render(views.bookings_view(result, self.deps.tz)), False
 
     # ------------------------------------------------------------------ brief tools
@@ -521,6 +530,44 @@ class PlannerLoop:
         return _End(
             Proposal(action="book", provider_id=parsed.provider_id, slot_ref=parsed.slot_ref)
         )
+
+    async def _propose_cancel(self, args: Mapping[str, Any]) -> tuple[str, bool] | _End:
+        try:
+            parsed = ProposeCancelArgs.model_validate(dict(args))
+        except ValidationError:
+            return views.render_error("invalid_arguments", expected={"booking_ref": "B1"}), True
+        deps = self.deps
+        if not BOOKING_REF.fullmatch(parsed.booking_ref):
+            self._reject("propose_cancel", "bad_booking_ref")
+            return views.render_error(
+                "bad_booking_ref", detail=f"{parsed.booking_ref!r} is not a handle such as B1"
+            ), True
+        booking = self.booking_refs.get(parsed.booking_ref)
+        if booking is None:
+            self._reject("propose_cancel", "unknown_booking_ref")
+            return views.render_error(
+                "unknown_booking_ref",
+                detail=(
+                    f"{parsed.booking_ref} is not in a list_bookings result from this turn; "
+                    "call list_bookings first"
+                ),
+            ), True
+        listed = await deps.tools.call(Caller.PROPOSER, "list_bookings", {"user_id": deps.user_id})
+        if not isinstance(listed, ListBookingsOut):
+            return views.render_error("unavailable", detail="bookings could not be read"), True
+        async with deps.db.session() as repos:
+            live = await repos.intents.live_targets(deps.user_id)
+        verdict = check_cancel_proposal(
+            self.errand,
+            booking.booking_id,
+            listed.bookings,
+            now=deps.clock.now(),
+            live_targets=live,
+        )
+        if isinstance(verdict, Rejected):
+            self._reject("propose_cancel", verdict.code)
+            return views.render_error(verdict.code, detail=verdict.message), True
+        return _End(Proposal(action="cancel", booking_id=booking.booking_id))
 
 
 def answer_text(message: AIMessage) -> str:

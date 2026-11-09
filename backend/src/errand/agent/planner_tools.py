@@ -134,6 +134,15 @@ PROPOSE_BOOKING: dict[str, Any] = {
     "input_schema": _object({"provider_id": {"type": "string"}, "slot_ref": {"type": "string"}}),
 }
 
+# N1: cancel by a booking handle from this run's list_bookings view (B1, B2, ...). The
+# model never writes a booking id. Bound after propose_booking (10.3) once M8's 3,800
+# token S2 cap is in; until then the handler exists and the tool is not offered.
+PROPOSE_CANCEL: dict[str, Any] = {
+    "name": "propose_cancel",
+    "description": "Propose cancelling one booking by its list_bookings handle; the user approves.",
+    "input_schema": _object({"booking_ref": {"type": "string"}}),
+}
+
 PLANNER_TOOLS: tuple[dict[str, Any], ...] = (
     SEARCH_PROVIDERS,
     GET_PROVIDER,
@@ -142,7 +151,7 @@ PLANNER_TOOLS: tuple[dict[str, Any], ...] = (
     ASK_USER,
     PROPOSE_BOOKING,
 )
-PROPOSE_TOOLS: frozenset[str] = frozenset({"propose_booking"})
+PROPOSE_TOOLS: frozenset[str] = frozenset({"propose_booking", "propose_cancel"})
 PLANNER_TOOL_NAMES: tuple[str, ...] = tuple(t["name"] for t in PLANNER_TOOLS)
 
 
@@ -200,6 +209,11 @@ class ProposeBookingArgs(_Args):
     # code (agent/validation.py), not here.
     provider_id: str = Field(min_length=1, max_length=40)
     slot_ref: str = Field(min_length=1, max_length=8)
+
+
+class ProposeCancelArgs(_Args):
+    # Strict mode rejects pattern and maxLength; the handle's shape is checked in code.
+    booking_ref: str = Field(min_length=1, max_length=8)
 
 
 class AskUserArgs(_Args):

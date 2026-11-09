@@ -31,6 +31,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from errand.llm.scripted import ScriptedRequest
+from evals.policies import changes
 from evals.policies.common import TurnView, answer, read, tool_calls
 
 SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
@@ -315,6 +316,9 @@ def after_proposal_error(request: ScriptedRequest, result: Any) -> AIMessage:
 
 def policy(request: ScriptedRequest) -> AIMessage:
     view = read(request)
+    cancel = changes.step(request, view)  # cancel and reschedule moves (N1)
+    if cancel is not None:
+        return cancel
     if not view.loop:
         move = booking_move(request, view)
         if move is not None:

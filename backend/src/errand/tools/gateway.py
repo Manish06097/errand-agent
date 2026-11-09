@@ -141,17 +141,18 @@ class ToolGateway:
         return await self._call(caller, tool, args, critical=critical)
 
     async def _consequential(
-        self, caller: Caller, tool: ToolName, args: Mapping[str, Any]
+        self, caller: Caller, tool: ToolName, args: Mapping[str, Any], *, attempt: int = 1
     ) -> WireModel:
         """book, cancel or reschedule. Only `errand.tools.consequential` calls this.
 
         One attempt, never retried here (execute and verify own those rules), inside
         the critical section: no cap refuses it and the run's time left does not
-        shorten its timeout.
+        shorten its timeout. `attempt` numbers the call in the tool.call record when the
+        caller re-sends inside one attempt (cancel's 503 retry, 9.5).
         """
         if caller is not Caller.EXECUTOR or tool not in SIDE_EFFECT_TOOLS:
             self._refuse(caller, tool)
-        return await self._call(caller, tool, args, critical=True)
+        return await self._call(caller, tool, args, critical=True, first_attempt=attempt)
 
     def _refuse(self, caller: Caller, tool: ToolName) -> NoReturn:
         if caller is Caller.PLANNER:
@@ -169,7 +170,13 @@ class ToolGateway:
         raise PlannerToolRejected(tool, f"{caller.value} may not call {tool}")
 
     async def _call(
-        self, caller: Caller, tool: ToolName, args: Mapping[str, Any], *, critical: bool
+        self,
+        caller: Caller,
+        tool: ToolName,
+        args: Mapping[str, Any],
+        *,
+        critical: bool,
+        first_attempt: int = 1,
     ) -> WireModel:
         try:
             request = SPECS[tool].input.model_validate(dict(args))
@@ -189,7 +196,9 @@ class ToolGateway:
             time_left = None if critical else self._check_budget(tool)
             try:
                 with self._tracer.opening("tool.call", tool):
-                    return await self._attempt(caller, tool, request, attempt, time_left)
+                    return await self._attempt(
+                        caller, tool, request, attempt + first_attempt - 1, time_left
+                    )
             except (ToolTimeout, ToolTransient) as exc:
                 last = exc
                 if tool not in READ_TOOLS:

@@ -41,9 +41,10 @@ async def live_approval(deps: RunDeps) -> ApprovalRow | None:
 def card_line(row: ApprovalRow) -> str:
     card = row.card
     state = "pending, waiting for the user" if row.status == "pending" else row.status
+    price = f", ₹{card['quoted_price_inr']:,}" if row.action == "book" else ""
     return (
-        f"{state}: {card['title']} ({card['provider_id']}), {card['slot_label']}, "
-        f"₹{card['quoted_price_inr']:,}. Only the user approves it, on the card."
+        f"{state}: {card['title']} ({card['provider_id']}), {card['slot_label']}{price}. "
+        "Only the user approves it, on the card."
     )
 
 

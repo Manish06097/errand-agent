@@ -215,3 +215,24 @@ class IntentsRepo:
             "AND a.state IN ('prepared', 'in_flight', 'unknown')) ORDER BY i.created_at, i.rowid"
         ) as cur:
             return [_intent(r) for r in await cur.fetchall()]
+
+    async def live_targets(self, user_id: str) -> set[str]:
+        """Booking ids a cancel or reschedule intent is still working on (the partial
+        unique index `one_live_action_per_target` enforces one per booking)."""
+        async with self._conn.execute(
+            "SELECT target_booking_id FROM action_intents WHERE user_id = ? "
+            "AND action IN ('cancel', 'reschedule') AND state IN ('open', 'needs_attention') "
+            "AND target_booking_id IS NOT NULL",
+            (user_id,),
+        ) as cur:
+            return {str(r[0]) for r in await cur.fetchall()}
+
+    async def succeeded_changes(self, user_id: str) -> list[IntentRow]:
+        """Cancel and reschedule intents that ended verified, oldest first."""
+        async with self._conn.execute(
+            f"SELECT {_INTENT} FROM action_intents WHERE user_id = ? "
+            "AND action IN ('cancel', 'reschedule') AND state = 'succeeded' "
+            "ORDER BY created_at, rowid",
+            (user_id,),
+        ) as cur:
+            return [_intent(r) for r in await cur.fetchall()]

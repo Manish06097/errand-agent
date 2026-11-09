@@ -208,6 +208,21 @@ class CheckNow(_Strict):
     check_now: dict[str, Any] = Field(default_factory=dict)
 
 
+class CancelSpec(_Strict):
+    # world cancel ops (every call, the 503 ones included)
+    calls: int
+    # every call carried the same idempotency key
+    same_key: bool = True
+    # the target booking's status in the world's own store afterwards
+    booking_status: Literal["confirmed", "cancelled", "cancelled_by_provider"] | None = None
+
+
+class ExpectCancel(_Strict):
+    """What the world saw of the cancel, and where the booking ended up."""
+
+    expect_cancel: CancelSpec
+
+
 class SwitchConversation(_Strict):
     """Make `name` the current conversation, creating it on first use. "main" is the one
     every scenario starts in."""
@@ -359,6 +374,7 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "restart": Restart,
     "reconciler_tick": ReconcilerTick,
     "check_now": CheckNow,
+    "expect_cancel": ExpectCancel,
     "expect_card": ExpectCard,
     "expect_transcript": ExpectTranscript,
     "expect_booking": ExpectBooking,
@@ -394,6 +410,7 @@ Step = (
     | Restart
     | ReconcilerTick
     | CheckNow
+    | ExpectCancel
     | ExpectCard
     | ExpectTranscript
     | ExpectBooking

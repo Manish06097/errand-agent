@@ -56,6 +56,7 @@ from evals.dsl import (
     Decline,
     ExpectBooking,
     ExpectBrief,
+    ExpectCancel,
     ExpectCard,
     ExpectNoCard,
     ExpectNoSideEffects,
@@ -495,6 +496,11 @@ def describe(step: Step) -> str | None:
             if m
         ]
         return f"type {t.text!r}" + (f" ({', '.join(mods)})" if mods else "")
+    if isinstance(step, ExpectCancel):
+        c = step.expect_cancel
+        key = "one key" if c.same_key else "any keys"
+        status = f", booking {c.booking_status}" if c.booking_status else ""
+        return f"{c.calls} world cancel calls, {key}{status}"
     if isinstance(step, ExpectCard):
         spec = step.expect_card.model_dump(exclude_none=True)
         return "card " + ", ".join(f"{k}={v}" for k, v in spec.items())
@@ -861,6 +867,24 @@ class Runner:
                 f"card price {action.get('quoted_price_inr')}, world hold quote {quote}",
             )
 
+    async def _expect_cancel(self, step: ExpectCancel) -> None:
+        spec = step.expect_cancel
+        ops = [r for r in await self.h.op_log() if r["op"] == "cancel"]
+        self.expect(len(ops) == spec.calls, f"world cancel calls: {len(ops)}, want {spec.calls}")
+        args = [json.loads(r["args_json"]) for r in ops]
+        keys = {a.get("idempotency_key") for a in args}
+        if spec.same_key:
+            self.expect(len(keys) <= 1, f"cancel calls used {len(keys)} different keys: {keys}")
+        targets = {a.get("booking_id") for a in args}
+        if spec.booking_status is not None:
+            self.expect(len(targets) == 1, f"cancel calls named bookings {targets}")
+            by_id = {b.booking_id: b.status for b in await self.h.inspector.bookings()}
+            for target in targets:
+                self.expect(
+                    by_id.get(target) == spec.booking_status,
+                    f"{target}: world status {by_id.get(target)}, want {spec.booking_status}",
+                )
+
     async def _expect_transcript(self, step: ExpectTranscript) -> None:
         spec = step.expect_transcript
         convo = await self.h.conversation()
@@ -987,6 +1011,8 @@ class Runner:
             await self._check_now()
         elif isinstance(step, ExpectCard):
             await self._expect_card(step)
+        elif isinstance(step, ExpectCancel):
+            await self._expect_cancel(step)
         elif isinstance(step, ExpectTranscript):
             await self._expect_transcript(step)
         elif isinstance(step, ExpectBooking):

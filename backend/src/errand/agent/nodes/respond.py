@@ -31,6 +31,7 @@ from typing import Any
 from langgraph.runtime import Runtime
 
 from errand.agent import cards, critical, recovery
+from errand.agent.changes import render as changes_render
 from errand.agent.claim_guard import BOOKING_ID, guard
 from errand.agent.deps import RunDeps
 from errand.agent.records import live_approval, verified_records
@@ -53,6 +54,8 @@ from errand.domain.outcomes import (
     Ask,
     Booked,
     CardReady,
+    Changed,
+    ChangeFailed,
     ConfirmHint,
     Declined,
     HoldFailed,
@@ -169,7 +172,7 @@ class _Respond:
             and self._cited_is_ours()
         ):
             return f"Booked: {self.cited_booking}, confirmed with the provider."
-        return cards.status_line(phase)
+        return cards.status_line(phase, self.errand.kind)
 
     def _cited_is_ours(self) -> bool:
         """The cited booking belongs to this errand: same service as its brief, or the brief
@@ -292,6 +295,10 @@ class _Respond:
                     NoticeAction(kind="options", label="See options"),
                 )
             ]
+        if isinstance(result, Changed):
+            return await changes_render.render_changed(self.deps, result)
+        if isinstance(result, ChangeFailed):
+            return changes_render.render_failed(result)
         if isinstance(result, Booked):
             card = await self._card_of(result.approval_id)
             assert card is not None

@@ -39,6 +39,7 @@ from typing import Any, Literal
 
 from langgraph.runtime import Runtime
 
+from errand.agent.changes import execute as changes_execute
 from errand.agent.deps import RunDeps
 from errand.agent.records import emit_swept
 from errand.agent.state import ThreadState
@@ -75,6 +76,8 @@ TERMINAL_INTENT = frozenset({"succeeded", "failed"})
 async def execute(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     deps = runtime.context
     assert state.errand is not None and isinstance(state.inbound, ApprovalGranted)
+    if await changes_execute.action_of(deps, state.inbound.approval_id) != "book":
+        return await changes_execute.run_node(deps, state)  # cancel, reschedule (N1)
     with deps.tracer.node("execute", phase_before=state.errand.phase.value) as span:
         run = _Execute(deps, state.errand, state.inbound.approval_id)
         try:

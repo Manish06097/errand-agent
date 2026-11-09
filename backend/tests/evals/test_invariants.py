@@ -338,6 +338,62 @@ def test_inv02_fails_on_a_same_day_second_visit_the_card_did_not_list(s01: Recor
     assert any("did not list it" in v for v in fails("INV-02", doctored))
 
 
+# INV-01 and INV-02 for cancel (N1)
+
+
+@pytest.fixture
+async def s47(tmp_path: Path) -> Records:
+    return await records_of("S47_cancel_503_then_success", tmp_path / "s47")
+
+
+def test_the_change_clauses_check_the_cancel_ops_they_find(s47: Records) -> None:
+    assert invariants.check(s47) == {name: [] for name in invariants.DEFAULT}
+    assert s47.notes["book_ops_checked"] == 2  # both cancel calls, the 503 one included
+
+
+def test_inv01_fails_on_a_cancel_with_no_consumed_approval(s47: Records) -> None:
+    doctored = copy.deepcopy(s47)
+    for run_id, records in doctored.traces.items():
+        doctored.traces[run_id] = [r for r in records if r["type"] != "approval.consumed"]
+    assert any("no approval.consumed" in v for v in fails("INV-01", doctored))
+
+
+def test_inv01_fails_when_the_cancel_was_for_another_booking_than_approved(s47: Records) -> None:
+    # The approval was consumed for one booking; the call named another one of the user's
+    # (the world's own row for it is what the material is rebuilt from).
+    doctored = copy.deepcopy(s47)
+    other = next(b for b in doctored.world_bookings if b["booking_id"] != _cancelled(doctored))
+    for row in doctored.op_log:
+        if row["op"] == "cancel":
+            args = json.loads(row["args_json"])
+            args["booking_id"] = other["booking_id"]
+            row["args_json"] = json.dumps(args)
+    assert any("not the one rebuilt" in v for v in fails("INV-01", doctored))
+
+
+def _cancelled(rec: Records) -> str:
+    return str(
+        json.loads(next(r for r in rec.op_log if r["op"] == "cancel")["args_json"])["booking_id"]
+    )
+
+
+def test_inv02_fails_on_two_live_intents_on_one_booking(s47: Records) -> None:
+    doctored = copy.deepcopy(s47)
+    live = {**doctored.intents[0], "intent_id": "in_other", "state": "needs_attention"}
+    doctored.intents[0]["state"] = "open"
+    doctored.intents.append(live)
+    assert any("2 live intents on booking" in v for v in fails("INV-02", doctored))
+
+
+def test_inv02_fails_when_one_approvals_key_applied_two_changes(s47: Records) -> None:
+    doctored = copy.deepcopy(s47)
+    applied = next(r for r in doctored.op_log if r["op"] == "cancel" and r["outcome"] == "ok")
+    args = json.loads(applied["args_json"])
+    args["booking_id"] = "B-9999"
+    doctored.op_log.append({**applied, "seq": 10_000, "args_json": json.dumps(args)})
+    assert any("applied 2 different changes" in v for v in fails("INV-02", doctored))
+
+
 # INV-04
 
 

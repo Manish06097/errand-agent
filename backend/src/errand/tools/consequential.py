@@ -31,22 +31,26 @@ async def book(gateway: ToolGateway, *, hold_id: str, idempotency_key: str) -> B
 
 
 async def cancel(
-    gateway: ToolGateway, *, booking_id: str, idempotency_key: str
+    gateway: ToolGateway, *, booking_id: str, idempotency_key: str, attempt: int = 1
 ) -> CancelOut | CancelError:
     result = await gateway._consequential(
-        Caller.EXECUTOR, "cancel", {"booking_id": booking_id, "idempotency_key": idempotency_key}
+        Caller.EXECUTOR,
+        "cancel",
+        {"booking_id": booking_id, "idempotency_key": idempotency_key},
+        attempt=attempt,
     )
     assert isinstance(result, CancelOut | CancelError)
     return result
 
 
 async def reschedule(
-    gateway: ToolGateway, *, booking_id: str, slot: Slot, idempotency_key: str
+    gateway: ToolGateway, *, booking_id: str, slot: Slot, idempotency_key: str, attempt: int = 1
 ) -> RescheduleOut | RescheduleError:
     result = await gateway._consequential(
         Caller.EXECUTOR,
         "reschedule",
         {"booking_id": booking_id, "slot": slot, "idempotency_key": idempotency_key},
+        attempt=attempt,
     )
     assert isinstance(result, RescheduleOut | RescheduleError)
     return result

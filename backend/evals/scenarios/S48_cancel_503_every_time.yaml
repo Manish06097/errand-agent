@@ -1,0 +1,21 @@
+id: S48_cancel_503_every_time
+title: The provider answers 503 to every cancel; three calls with one key, then list_bookings is checked, the booking still shows confirmed, and the user hears that nothing was cancelled
+category: [cancel, idempotency]
+seed: 48
+faults:
+  cancel: always_503
+user:
+  persona: cooperative
+  goal: {}
+steps:
+  - say: "Please cancel my AC servicing."
+  - expect_outcome: AWAITING_APPROVAL
+  - approve: {}
+  - expect_outcome: ACTION_FAILED
+  - expect_world: {cancel: 3}
+  - expect_cancel: {calls: 3, same_key: true, booking_status: confirmed}
+  - expect_transcript:
+      last_includes: ["Nothing was cancelled"]
+      excludes: ["Cancelled:"]
+expect:
+  invariants: [default]
