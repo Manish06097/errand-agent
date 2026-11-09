@@ -10,7 +10,7 @@ user:
     window: this week mornings
     budget_max_inr: "1500"
 steps:
-  # 56 characters x 900 = 50,400 characters
+  # 58 characters x 900 = 52,200 characters
   - say: "My kitchen tap drips all night and the washer looks worn. "
     repeat: 900
   - expect_outcome: CONTEXT_TOO_LARGE
