@@ -247,3 +247,38 @@ async def test_a_failing_inference_leaves_the_outcome_and_the_single_run_end(
         assert sum(1 for r in trace if r["type"] == "run.end") == 1
     errors = [r for r in records.all_records() if r["type"] == "error"]
     assert any(e["where"] == "memory.run_inference" for e in errors)
+
+
+async def test_a_card_cannot_be_created_from_a_memory_that_is_no_longer_eligible(
+    tmp_path: Path,
+) -> None:
+    """prepare_proposal lists the memory ids behind the brief; the insert checks, in its own
+    transaction, that each is still eligible (decision 11)."""
+    from errand.approvals import service
+    from errand.store.repos.approvals import ApprovalRow
+    from evals.runner import harness
+    from tests.api.support import world
+
+    def row(n: int) -> ApprovalRow:
+        return ApprovalRow(
+            f"ap_{n}", "c_0001", "e_1", f"pr_{n}", "book", f"fp{n}", "{}", "{}", None,
+            "pending", None, None, None, None, 1000, None, None, 10_000_000,
+        )  # fmt: skip
+
+    policy = service.ApprovalPolicy(ttl_ms=600_000, grace_ms=20_000)
+    async with harness(tmp_path, world(), memory_seed="memory_demo") as h:
+        db = h.app.state.manager.db
+        conversation = h.conversation_id
+        keep = ApprovalRow(**{**row(1).__dict__, "conversation_id": conversation})
+        ok = await service.create(db, keep, policy, ["m-01"])
+        assert ok.created and not ok.stale_memory
+        gone = await h.client.delete("/api/memory/m-01", params={"client_action_id": "d1"})
+        assert gone.status_code == 200
+        # the pending card that listed m-01 was invalidated by the forget itself
+        async with db.session() as repos:
+            assert (await repos.approvals.get("ap_1")).status == "invalidated"
+        late = ApprovalRow(**{**row(2).__dict__, "conversation_id": conversation})
+        refused = await service.create(db, late, policy, ["m-01"])
+        assert not refused.created and refused.stale_memory == ("m-01",)
+        async with db.session() as repos:
+            assert await repos.approvals.get("ap_2") is None
