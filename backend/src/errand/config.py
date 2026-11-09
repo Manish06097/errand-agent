@@ -111,6 +111,11 @@ class ReconcilerSettings(BaseSettings):
     # process. 0 turns the periodic task off; the evals set it to 0 and drive every tick
     # themselves, so they stay deterministic.
     interval_s: float = Field(default=30.0, ge=0)
+    # The periodic task asks the provider about an intent again only this long (agent
+    # clock) after the last answer, or at once when its hold has lapsed since: a pending
+    # message every 30 s would bury the conversation. An explicit tick (Check now, the dev
+    # drawer, the evals) never waits.
+    recheck_after_s: float = Field(default=120.0, ge=0)
 
 
 class PathSettings(BaseSettings):

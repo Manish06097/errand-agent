@@ -66,6 +66,17 @@ class AttemptRow:
     updated_at: int
 
 
+# An intent still waiting on the provider: an attempt it may or may not have seen, or a
+# check that could not be finished (M5's `check_incomplete`, which N1's reconciler keeps
+# re-checking: "I'll keep checking and update you here").
+_WAITING = (
+    "EXISTS (SELECT 1 FROM intent_attempts a WHERE a.intent_id = i.intent_id "
+    "AND a.state IN ('prepared', 'in_flight', 'unknown')) "
+    "OR (i.state = 'needs_attention' "
+    "AND json_extract(i.result_json, '$.reason') = 'check_incomplete')"
+)
+
+
 def _intent(row: Any) -> IntentRow:
     return IntentRow(*(row[i] for i in range(15)))
 
@@ -215,13 +226,13 @@ class IntentsRepo:
             return [_intent(r) for r in await cur.fetchall()]
 
     async def recoverable(self) -> list[IntentRow]:
-        """Unresolved intents that have an attempt the world may or may not have seen
-        (`prepared`, `in_flight` or `unknown`): what the reconciler re-checks. One indexed
-        read of our own tables; LangGraph's `next` is never consulted (9.7)."""
+        """Unresolved intents the reconciler can still settle: an attempt the world may or
+        may not have seen (`prepared`, `in_flight` or `unknown`), or a check that could not
+        be finished (`check_incomplete`: the booking was seen, the list was not). One
+        indexed read of our own tables; LangGraph's `next` is never consulted (9.7)."""
         async with self._conn.execute(
             f"SELECT {_INTENT} FROM action_intents i WHERE i.state IN ('open', 'needs_attention') "
-            "AND EXISTS (SELECT 1 FROM intent_attempts a WHERE a.intent_id = i.intent_id "
-            "AND a.state IN ('prepared', 'in_flight', 'unknown')) ORDER BY i.created_at, i.rowid"
+            f"AND ({_WAITING}) ORDER BY i.created_at, i.rowid"
         ) as cur:
             return [_intent(r) for r in await cur.fetchall()]
 
@@ -247,14 +258,11 @@ class IntentsRepo:
             return [_intent(r) for r in await cur.fetchall()]
 
     async def awaiting_provider(self, conversation_id: str) -> bool:
-        """Is any intent of the conversation waiting on the provider's answer (an attempt
-        still `prepared`, `in_flight` or `unknown`)? A mismatch the provider recorded is
-        settled for this purpose: nothing is left to ask it."""
+        """Is any intent of the conversation waiting on the provider's answer? A mismatch
+        the provider recorded is settled for this purpose: nothing is left to ask it."""
         async with self._conn.execute(
             "SELECT 1 FROM action_intents i WHERE i.conversation_id = ? "
-            "AND i.state IN ('open', 'needs_attention') AND EXISTS ("
-            "SELECT 1 FROM intent_attempts a WHERE a.intent_id = i.intent_id "
-            "AND a.state IN ('prepared', 'in_flight', 'unknown')) LIMIT 1",
+            f"AND i.state IN ('open', 'needs_attention') AND ({_WAITING}) LIMIT 1",
             (conversation_id,),
         ) as cur:
             return await cur.fetchone() is not None

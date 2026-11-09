@@ -308,7 +308,7 @@ async def test_the_periodic_task_settles_a_pending_intent_without_being_asked(
     async with harness(tmp_path, status_down_once()) as h:
         await approve_to_pending(h)
         # the lifespan did not start the task (the harness sets no interval): start one fast
-        periodic = Reconciler(h.manager, ReconcilerSettings(interval_s=0.05))
+        periodic = Reconciler(h.manager, ReconcilerSettings(interval_s=0.05, recheck_after_s=0))
         periodic.start_periodic()
         try:
             for _ in range(100):
@@ -324,3 +324,59 @@ async def test_the_periodic_task_settles_a_pending_intent_without_being_asked(
     assert [i["state"] for i in rec.intents] == ["succeeded"]
     assert sum(1 for r in rec.op_log if r["op"] == "book") == 1
     assert [r["trigger"] for r in rec.runs][-1] == "recovery"
+
+
+async def test_a_check_that_could_not_be_finished_is_checked_again_by_the_next_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M5 promises "I'll keep checking and update you here" for `check_incomplete` (the
+    booking was seen, `list_bookings` was down). Nothing re-checked it until N1: the tick
+    asks again, the booking is verified, and the user is told."""
+    from errand.tools.errors import ToolTransient
+    from errand.tools.gateway import Caller
+
+    real = ToolGateway.call
+    down = {"on": True}
+
+    async def call(self: ToolGateway, caller: Any, tool: Any, args: Any, **kw: Any) -> Any:
+        if down["on"] and caller is Caller.VERIFIER and tool == "list_bookings":
+            raise ToolTransient("list_bookings", 503, b"")
+        return await real(self, caller, tool, args, **kw)
+
+    monkeypatch.setattr(ToolGateway, "call", call)
+    world = ScenarioConfig(
+        id="incomplete", seed=43, world=WorldConfig(book=BookConfig(forced=["success"]))
+    )
+    async with harness(tmp_path, world) as h:
+        await approve_to_pending(h)
+        notice = (await h.conversation())["messages"][-1]["body"]
+        assert notice["pending"]["reason"] == "check_incomplete"
+        assert [a["kind"] for a in notice["actions"]] == ["check_now"]
+        down["on"] = False
+        ran = await h.reconcile()
+        view = await h.finish(ran[0])
+        rec = await h.records()
+    assert view.outcome == "BOOKED_VERIFIED"
+    assert [i["state"] for i in rec.intents] == ["succeeded"]
+    assert sum(1 for r in rec.op_log if r["op"] == "book") == 1
+
+
+async def test_the_periodic_task_leaves_a_recently_checked_intent_alone_until_it_is_due(
+    tmp_path: Path,
+) -> None:
+    """A still-pending intent would otherwise get a new pending message every interval.
+    The periodic rule waits `recheck_after_s` after the last answer; an explicit tick
+    never waits."""
+    async with harness(tmp_path, status_down_once()) as h:
+        await approve_to_pending(h)
+        careful = Reconciler(h.manager, ReconcilerSettings(interval_s=30, recheck_after_s=120))
+        assert (await careful.tick(due_only=True)).recovery_runs == []
+        await h.inspector.advance(121)  # the world and the agent clock share it
+        due = await careful.tick(due_only=True, wait=True)
+        assert len(due.recovery_runs) == 1
+        rec = await h.records()
+    assert [r["trigger"] for r in rec.runs] == [
+        "user_message",
+        "approval_decision_resume",
+        "recovery",
+    ]

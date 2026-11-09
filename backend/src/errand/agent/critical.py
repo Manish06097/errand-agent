@@ -101,7 +101,7 @@ def pending_notice(result: PendingCheck, tz: tzinfo) -> OutcomeNotice:
     that booking instead."""
     reason = "status_unavailable" if result.reason == "status_not_confirmed" else result.reason
     actions: list[NoticeAction] = []
-    if reason in ("hold_live", "status_unavailable"):
+    if reason in ("hold_live", "status_unavailable", "check_incomplete"):
         actions.append(NoticeAction(kind="check_now", label="Check now"))
     if reason == "material_mismatch" and result.booking_id:
         # The user's own quick reply (the client sends the label as their message); the

@@ -23,6 +23,9 @@ from errand.domain.outcomes import AlreadyHandled, BookCalled, StepResult
 from errand.store.repos.intents import AttemptRow, IntentRow
 
 LIVE_ATTEMPT = ("prepared", "in_flight", "unknown")
+# A check the agent could not finish (the booking was seen, the list was not) leaves the
+# attempt `applied` and the intent `needs_attention`; verify asks again.
+INCOMPLETE_CHECK = "check_incomplete"
 NOTHING_TO_CHECK = "nothing_to_check"
 
 
@@ -47,7 +50,12 @@ async def reopen(
         async with deps.db.session() as repos:
             attempts = await repos.intents.attempts(intent.intent_id)
         attempt = attempts[-1] if attempts else None
-    if intent is None or attempt is None or attempt.state not in LIVE_ATTEMPT:
+    incomplete = (
+        intent is not None
+        and intent.state == "needs_attention"
+        and INCOMPLETE_CHECK in (intent.result_json or "")
+    )
+    if intent is None or attempt is None or not (attempt.state in LIVE_ATTEMPT or incomplete):
         # Settled between the request and the run (a tick got there first), or an
         # intent with nothing left to ask the provider about.
         approval_id = intent.approval_id if intent is not None else ""

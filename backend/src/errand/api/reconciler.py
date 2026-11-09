@@ -53,6 +53,7 @@ from errand.domain.errand import Phase
 from errand.domain.inbound import Inbound, Recover, UiAction
 from errand.ids import message_id_for
 from errand.store.repos.approvals import ApprovalRow
+from errand.store.repos.intents import IntentRow
 from errand.store.repos.messages import Message
 from errand.store.repos.runs import Run
 from errand.trace.reader import read_trace
@@ -171,14 +172,24 @@ class Reconciler:
 
     # --------------------------------------------------------------------- tick
 
-    async def tick(self, *, conversation_id: str | None = None, wait: bool = False) -> Report:
-        """Re-check `needs_attention` intents in a running process (pass a only)."""
+    async def tick(
+        self, *, conversation_id: str | None = None, wait: bool = False, due_only: bool = False
+    ) -> Report:
+        """Re-check `needs_attention` intents in a running process (pass a only).
+
+        `due_only` is the periodic task's rule: an intent is asked about again once
+        `recheck_after_s` have passed since its last answer, or at once when its hold has
+        lapsed since (the moment the user was promised an answer). Without it every
+        waiting intent is checked now."""
         report = Report()
         async with self._lock:
             async with self.manager.db.session() as repos:
                 intents = [
                     i for i in await repos.intents.recoverable() if i.state == "needs_attention"
                 ]
+                if due_only:
+                    now_ms = to_ms(self.manager.clock.now())
+                    intents = [i for i in intents if await self._due(repos, i, now_ms)]
             seen: set[str] = set()
             for intent in intents:
                 cid = intent.conversation_id
@@ -200,6 +211,13 @@ class Reconciler:
             await self.manager.wait_idle()
         return report
 
+    async def _due(self, repos: Any, intent: IntentRow, now_ms: int) -> bool:
+        if now_ms - intent.updated_at >= round(self.settings.recheck_after_s * 1000):
+            return True
+        attempts = await repos.intents.attempts(intent.intent_id)
+        expiry = attempts[-1].hold_expires_at if attempts else None
+        return expiry is not None and intent.updated_at < expiry <= now_ms
+
     # ----------------------------------------------------------------- periodic
 
     def start_periodic(self) -> None:
@@ -217,7 +235,7 @@ class Reconciler:
         while True:
             await asyncio.sleep(self.settings.interval_s)
             try:
-                await self.tick()
+                await self.tick(due_only=True)
             except Exception:
                 log.exception("reconciler tick failed; trying again next interval")
 
