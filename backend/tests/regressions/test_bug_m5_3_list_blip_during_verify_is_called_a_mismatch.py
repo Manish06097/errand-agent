@@ -12,6 +12,7 @@ Reproduced end to end: S1-style success, with `list_bookings` failing for the VE
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ import pytest
 from errand.tools import gateway
 from errand.tools.errors import ToolTransient
 from errand.world.scenario import BookConfig, ScenarioConfig, WorldConfig
+from evals import invariants
 from evals.runner import harness
 
 OPENER = "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
@@ -58,3 +60,9 @@ async def test_a_list_failure_during_verify_is_an_incomplete_check_not_a_mismatc
     checks = [r for r in rec.all_records() if r["type"] == "status.check"]
     assert checks and all(not r.get("mismatch") for r in checks)
     assert [i["state"] for i in rec.intents] == ["needs_attention"]
+    # Pinned on the same record: every invariant holds, the attempt is applied (the book
+    # went through), and the intent says why it is unfinished and which booking it is about.
+    assert invariants.check(rec) == {name: [] for name in invariants.DEFAULT}
+    assert [a["state"] for a in rec.attempts] == ["applied"]
+    result = json.loads(rec.intents[0]["result_json"])
+    assert result["reason"] == "check_incomplete" and result["booking_id"]
