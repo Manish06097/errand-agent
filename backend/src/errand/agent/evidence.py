@@ -77,9 +77,16 @@ def has_no_limit(span: str) -> bool:
     return any(phrase in span for phrase in NO_LIMIT_PHRASES)
 
 
+# A rupee marker glued to the number, before ("rs.1500", "inr1500", "₹1500") or after
+# ("1500rs", "1,500rs"). It is blanked so the number reads on its own.
+_RUPEE_BEFORE = re.compile(r"(?:\b(?:rs|inr)\.?|₹)(?=\s*\d)")
+_RUPEE_AFTER = re.compile(r"(?<=\d)\s*(?:rs|inr)\b\.?")
+
+
 def parse_amounts(span: str) -> set[int]:
     """Every whole-rupee amount the span can be read as."""
     found: set[int] = set()
+    span = _RUPEE_AFTER.sub(" ", _RUPEE_BEFORE.sub(" ", span))
     for match in _AMOUNT.finditer(span):
         whole = Decimal(match.group(1).replace(",", ""))
         if match.group(2):
