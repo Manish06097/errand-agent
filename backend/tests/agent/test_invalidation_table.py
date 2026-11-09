@@ -17,7 +17,6 @@ from errand.agent.brief_ops import (
     apply_patch,
     invalidations,
 )
-from errand.agent.timewin import resolve
 from errand.clock import IST
 from errand.domain.brief import (
     AreaFact,
@@ -34,6 +33,7 @@ from errand.domain.brief import (
 )
 from errand.domain.errand import Errand, Phase
 from errand.domain.slots import HoldRef, Shortlist
+from errand.domain.timewin import resolve
 from errand.world.contracts import Area, Service, Slot
 
 F = BriefField

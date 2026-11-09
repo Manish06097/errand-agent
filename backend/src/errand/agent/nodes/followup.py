@@ -19,11 +19,11 @@ from typing import Any, Protocol
 
 from langgraph.runtime import Runtime
 
-from errand.agent import timewin
 from errand.agent.state import ThreadState
 from errand.agent.transitions import transition
 from errand.approvals import service as approvals
 from errand.clock import from_ms
+from errand.domain import timewin
 from errand.domain.brief import ErrandKind
 from errand.domain.errand import Errand, Phase, RebookInfo
 from errand.domain.followup import AltSlot, FollowupCtx, WidenOption

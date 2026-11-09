@@ -52,7 +52,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.runtime import Runtime
 from pydantic import ValidationError
 
-from errand.agent import ask_guard, brief_ops, invalidation, pinned, steering, timewin
+from errand.agent import ask_guard, brief_ops, invalidation, pinned, steering
 from errand.agent.changes.validate import check_change_proposal
 from errand.agent.deps import RunDeps
 from errand.agent.memory_fill import apply_memory
@@ -85,7 +85,7 @@ from errand.context.rebuild import (
     request_estimate,
 )
 from errand.context.rebuild import compacted as compacted_context
-from errand.domain import aliases
+from errand.domain import aliases, timewin
 from errand.domain.booking_refs import BOOKING_REF, assign
 from errand.domain.brief import AskRecord, BriefField, TimeWindowExpr
 from errand.domain.errand import Errand, Phase

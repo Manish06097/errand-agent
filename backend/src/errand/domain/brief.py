@@ -62,7 +62,7 @@ class TimeWindowExpr(_Model):
 
 
 class TimeWindow(_Model):
-    """What code resolves (`agent.timewin.resolve`). `end` is exclusive."""
+    """What code resolves (`domain.timewin.resolve`). `end` is exclusive."""
 
     start: datetime
     end: datetime

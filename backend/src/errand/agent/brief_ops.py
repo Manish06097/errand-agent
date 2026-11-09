@@ -16,8 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from typing import Literal
 
-from errand.agent import timewin
-from errand.domain import aliases, evidence
+from errand.domain import aliases, evidence, timewin
 from errand.domain.brief import (
     AreaFact,
     Brief,

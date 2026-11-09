@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from datetime import datetime, tzinfo
 
-from errand.agent import timewin
 from errand.agent.deps import RunDeps
 from errand.clock import to_ms
 from errand.config import MemorySettings
@@ -38,8 +37,8 @@ from errand.domain.brief import (
     Provenance,
     ProviderPref,
     ProviderPrefFact,
-    WindowFact,
 )
+from errand.memory.apply import apply_bounds
 
 
 async def chosen_rows(deps: RunDeps, errand_kind: str, service: str | None) -> dict[str, Chosen]:
@@ -100,29 +99,17 @@ async def apply_service_prefill(
     window = brief.window
     if window is not None and window.expr is not None and (service_set or window_set):
         earliest, latest = chosen.get("earliest_time"), chosen.get("latest_time")
-        # bounds code applied from memory earlier are ours to replace; the user's are not
-        base = window.expr.model_copy(update={k: None for k in window.bound_memory_ids})
-        changes: dict[str, object] = {}
-        owners: dict[str, str] = {}
-        for bound, row, have in (
-            ("not_before", earliest, base.not_before),
-            ("not_after", latest, base.not_after),
-        ):
-            if have is None and row is not None and (t := timewin_time(row.value)) is not None:
-                changes[bound], owners[bound] = t, row.memory_id
-        new_expr = base.model_copy(update=changes)
-        if new_expr != window.expr or owners != window.bound_memory_ids:
-            resolved = timewin.resolve(new_expr, now, tz)
-            if not isinstance(resolved, timewin.Unresolved):
-                update["window"] = WindowFact(
-                    value=resolved,
-                    expr=new_expr,
-                    prov=window.prov,
-                    set_at_turn=window.set_at_turn,
-                    bound_memory_ids=owners,
-                )
-                if changes:
-                    filled.append(BriefField.WINDOW)
+        fact, newly = apply_bounds(
+            window,
+            (earliest.memory_id, earliest.value) if earliest is not None else None,
+            (latest.memory_id, latest.value) if latest is not None else None,
+            now=now,
+            tz=tz,
+        )
+        if fact is not None:
+            update["window"] = fact
+            if newly:
+                filled.append(BriefField.WINDOW)
 
     if service_set:
         prefer, avoid = chosen.get("preferred_provider"), chosen.get("avoid_provider")
@@ -143,13 +130,3 @@ async def apply_service_prefill(
     if not update:
         return brief, []
     return brief.model_copy(update=update), filled
-
-
-def timewin_time(value: object) -> object:
-    from datetime import time
-
-    try:
-        hour, minute = str(value).split(":")
-        return time(int(hour), int(minute))
-    except (ValueError, TypeError):
-        return None

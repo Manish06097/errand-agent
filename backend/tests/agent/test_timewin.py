@@ -11,9 +11,9 @@ from datetime import UTC, date, datetime, time
 
 import pytest
 
-from errand.agent.timewin import SUPPORTED_PHRASES, Unresolved, date_range, resolve
 from errand.clock import IST
 from errand.domain.brief import TimeWindow, TimeWindowExpr
+from errand.domain.timewin import SUPPORTED_PHRASES, Unresolved, date_range, resolve
 
 MON = datetime(2026, 11, 9, 8, 0, tzinfo=IST)
 
@@ -160,7 +160,7 @@ def test_a_list_window_only_admits_the_listed_days() -> None:
     thu = Slot(start=at(12, 9), end=at(12, 10))
     sat = Slot(start=at(14, 9), end=at(14, 10))
     mon = Slot(start=at(16, 9), end=at(16, 10))
-    from errand.agent.timewin import slot_fits
+    from errand.domain.timewin import slot_fits
 
     assert slot_fits(thu, w, IST)
     assert not slot_fits(sat, w, IST)
