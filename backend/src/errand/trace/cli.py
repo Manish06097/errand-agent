@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from errand.config import PathSettings
-from errand.trace.masked import masker_for
+from errand.trace.masked import MaskUnavailable, masker_for
 from errand.trace.reader import TraceFormatError, read_trace_masked
 
 
@@ -160,6 +160,9 @@ def show(target: str, data_dir: Path) -> int:
     except TraceFormatError as exc:
         print(f"errand-trace: {exc}", file=sys.stderr)
         return 1
+    except MaskUnavailable as exc:
+        print(f"errand-trace: {exc}", file=sys.stderr)
+        return 3
     print(f"{path}")
     for line in render(trace.records):
         print(line)
