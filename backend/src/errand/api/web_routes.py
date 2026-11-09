@@ -12,7 +12,6 @@ New routes live here, not in `app.py`, which only includes the router.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, Request
@@ -66,28 +65,17 @@ async def meta(request: Request) -> MetaOut:
 async def list_conversations(request: Request) -> list[ConversationSummary]:
     manager = _manager(request)
     async with manager.db.session() as repos:
-        rows = await repos.conversations.list_for_user(request.app.state.user_id)
-        previews: dict[str, str] = {}
-        async with repos.conn.execute(
-            "SELECT conversation_id, body_json FROM messages WHERE role = 'user' "
-            "ORDER BY created_at, message_id"
-        ) as cur:
-            for row in await cur.fetchall():
-                if row["conversation_id"] not in previews:
-                    body = json.loads(row["body_json"])
-                    text = body.get("text") if isinstance(body, dict) else None
-                    if isinstance(text, str):
-                        previews[row["conversation_id"]] = text[:140]
+        rows = await repos.conversations.list_with_previews(request.app.state.user_id)
     return [
         ConversationSummary(
             conversation_id=c.conversation_id,
             title=c.title,
-            preview=previews.get(c.conversation_id),
+            preview=text[:140] if isinstance(text, str) else None,
             created_at=c.created_at,
             last_activity_at=c.last_activity_at,
             active_run_id=manager.active_run(c.conversation_id),
         )
-        for c in rows
+        for c, text in rows
     ]
 
 

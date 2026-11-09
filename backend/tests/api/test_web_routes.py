@@ -83,18 +83,40 @@ async def test_the_trace_routes_read_through_the_reader(
     assert all(json.loads(line)["masked_by_reader"] for line in as_jsonl.splitlines())
 
 
+FILE_READS = {"open", "read_bytes", "read_text"}
+# `.open()` on these is not a file: a database handle and the SSE broadcaster.
+NOT_FILES = {"AgentDB", "self.broadcaster"}
+
+
+def file_reads(source: str) -> list[tuple[int, str]]:
+    """Calls that open or read a file: `open(...)` and any `x.open()`, `.read_bytes()`,
+    `.read_text()`."""
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+        receiver = ast.unparse(func.value) if isinstance(func, ast.Attribute) else ""
+        if name in FILE_READS and receiver not in NOT_FILES:
+            found.append((node.lineno, name))
+    return found
+
+
+def test_the_static_scan_catches_every_way_to_open_a_file() -> None:
+    assert file_reads("open('x')") == [(1, "open")]
+    assert file_reads("path.open()") == [(1, "open")]
+    assert file_reads("(root / 'x').open('rb')") == [(1, "open")]
+    assert file_reads("p.read_bytes()") == [(1, "read_bytes")]
+    assert file_reads("p.read_text()") == [(1, "read_text")]
+    assert file_reads("p.is_file()") == []
+
+
 def test_no_api_module_opens_a_file_itself() -> None:
     """A static backstop for the test above: the API package never reads files directly."""
-    offenders: list[str] = []
-    for path in sorted(API.glob("*.py")):
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Call):
-                func = node.func
-                if isinstance(func, ast.Name):
-                    name = func.id
-                else:
-                    name = func.attr if isinstance(func, ast.Attribute) else ""
-                    name = name if name in {"read_bytes", "read_text"} else ""
-                if name in {"open", "read_bytes", "read_text"}:
-                    offenders.append(f"{path.name}:{node.lineno} {name}")
+    offenders = [
+        f"{path.name}:{line} {name}"
+        for path in sorted(API.glob("*.py"))
+        for line, name in file_reads(path.read_text(encoding="utf-8"))
+    ]
     assert offenders == []

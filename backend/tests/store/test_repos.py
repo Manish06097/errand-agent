@@ -140,3 +140,39 @@ async def test_run_lifecycle(db: aiosqlite.Connection) -> None:
     )
     assert await runs.list_running() == []
     assert [r.status for r in await runs.list_for_conversation("c_1")] == ["ended", "recovered"]
+
+
+async def test_list_with_previews_takes_each_preview_from_its_own_conversation(
+    db: aiosqlite.Connection,
+) -> None:
+    await UsersRepo(db).upsert(User("u_other", "Asia/Kolkata", "Other"))
+    convs, messages = ConversationsRepo(db), MessagesRepo(db)
+    await convs.create(conversation_id="c_2", user_id="u_demo", now_ms=2_000)
+    await convs.create(conversation_id="c_3", user_id="u_demo", now_ms=3_000)
+    await convs.create(conversation_id="c_other", user_id="u_other", now_ms=4_000)
+
+    def say(
+        message_id: str, conversation_id: str, text: str, at: int, role: str = "user"
+    ) -> Message:
+        return replace(
+            _msg(message_id, client_msg_id=message_id, created_at=at, role=role),
+            conversation_id=conversation_id,
+            body={"text": text},
+        )
+
+    await messages.insert(say("m_a2", "c_2", "second thing", 2_100))
+    await messages.insert(say("m_a1", "c_2", "ignored: not the first", 2_200))
+    await messages.insert(say("m_asst", "c_1", "assistant words", 1_100, role="assistant"))
+    await messages.insert(say("m_o", "c_other", "someone else's secret", 4_100))
+    await messages.insert(say("m_c1", "c_1", "first thing", 1_200))
+
+    rows = await convs.list_with_previews("u_demo")
+    assert [(c.conversation_id, preview) for c, preview in rows] == [
+        ("c_3", None),
+        ("c_2", "second thing"),
+        ("c_1", "first thing"),
+    ]
+    assert [c.conversation_id for c, _ in await convs.list_with_previews("u_demo", limit=2)] == [
+        "c_3",
+        "c_2",
+    ]
