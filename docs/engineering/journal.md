@@ -240,3 +240,17 @@ ok   r_01a1b256210e7eaab0a1c9f2f884da6a REPLIED            trace=5f4c2e9f459e209
 Langfuse also priced the model itself (its table has `claude-opus-5-5` at $4/$20 per 1M), and still shows our total: for the first run, its listed prices on the input and output tokens alone come to $0.0085, against our $0.0182, which includes the 1,952-token cache write. Screenshot of the shortlist run, with live durations on every generation and tool: `docs/engineering/m15_langfuse_trace.png`. It was taken before review round 2, so it still shows each generation starting just before its `context.built`; the A5 re-run at the gate (Docker was not answering during round 2) replaces it. The booking run waits for M4.
 
 **Next.** M4 wires `opening()` around the executor's consequential calls; M10 adds it around the reader call (the mapping already handles `reader.call`). Docker memory has to go up, or other stacks come down, before the demo.
+
+## Scope trim (2026-11-09)
+
+**Why.** I re-read the brief against the plan. The plan had grown past it: about 90 scenarios against "at least 20", fault-point matrices, lease fencing, a second tracing backend and long gate documents. That came from building it "properly" with no weight on cost, which was right for the parts the brief grades and too much for the rest. This is a take-home, so I trimmed what is left to what the brief asks for, at the same quality bar.
+
+**Decisions.**
+- M0 to M5, M7, M8, M10 and M15 are done or in flight and keep their entries. The eight milestones not started become four: N1 restart, cancel and reschedule; N2 memory and context; N3 bounded execution and proactive follow-up; N4 deliverables. `docs/design/milestones.md` maps the old ids to the new ones and lists every cut with its reason.
+- Restart keeps only what correctness needs: a startup reconciler that verifies open intents by key, `PENDING_VERIFICATION`, the critical-section rule and one real kill-and-restart (S37). Lease fencing, resume within grace and the wider fault matrix go.
+- Gate 2 stands as signed. Where it left room, the selection order is proven by unit tests on the pure function instead of two more scenarios.
+- Gate 3 stays, as one page inside N3, before the follow-up work. Gate 4 stays.
+- Scenarios: N1 to N3 add 23, each tied to a brief requirement; 18 planned ids and the `GarbageToolPolicy` scenario are cut. The catalogue ends near 71, most of it from work already done or in flight.
+- Langfuse stays as built, with no more work on it. The demo shows our own trace panel.
+
+**Next.** Let M4F, M5, M7 and M8 land, then N1.
