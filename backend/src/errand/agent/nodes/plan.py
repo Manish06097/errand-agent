@@ -131,6 +131,9 @@ async def plan(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     return {
         "errand": loop.errand,
         "plan_result": result,
+        # A replan starts from a code node's result (a Replan); what plan decides now is
+        # the run's result, not that one (BUG-M5-1).
+        "result": None,
         "counters": deps.counters.model_copy(deep=True),
     }
 
