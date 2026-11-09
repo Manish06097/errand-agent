@@ -36,13 +36,13 @@ OPENER = "Book a plumber in Indiranagar for my kitchen tap this week, mornings o
 
 
 def status_down_once() -> ScenarioConfig:
-    """`book` times out after committing and the first status check is unavailable: the
-    user is told it is pending, and the booking exists at the provider."""
+    """`book` times out after committing and the first pass of four status checks finds the
+    status endpoint down: the user is told it is pending, and the booking exists."""
     return ScenarioConfig(
         id="pending_then_confirmed",
         seed=40,
         world=WorldConfig(book=BookConfig(forced=["timeout_booked"])),
-        faults=FaultsConfig(get_booking_status=StatusOutage(unavailable_n=1)),
+        faults=FaultsConfig(get_booking_status=StatusOutage(unavailable_n=4)),
     )
 
 

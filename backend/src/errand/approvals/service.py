@@ -270,3 +270,30 @@ async def expire_unexecuted_grants(db: AgentDB) -> list[ApprovalRow]:
 async def invalidate(db: AgentDB, approval_id: str, reason: str) -> bool:
     async with db.transaction() as repos:
         return await repos.approvals.invalidate(approval_id, reason)
+
+
+async def rebind_hold(db: AgentDB, approval_id: str, *, old_hold_id: str, new_hold_id: str) -> bool:
+    """Bind a granted approval to the hold that replaced its lapsed one (9.4 step 2)."""
+    async with db.transaction() as repos:
+        return await repos.approvals.rebind_hold(
+            approval_id, old_hold_id=old_hold_id, new_hold_id=new_hold_id
+        )
+
+
+async def token_for_consumed(
+    db: AgentDB, *, approval_id: str, intent_id: str
+) -> ApprovalToken | None:
+    """A token for an approval that `consume` already committed (a same-key retry, 9.4
+    step 7, or a second attempt after `hold_expired`).
+
+    The proof is the same: the row is `consumed` by exactly this intent, and its
+    fingerprint is the one the card showed. It is read back from agent.sqlite, so a
+    retry in a later run, or after a restart (M6), does not depend on an in-memory token.
+    """
+    async with db.session() as repos:
+        row = await repos.approvals.get(approval_id)
+    if row is None or row.status != "consumed" or row.consumed_by_intent != intent_id:
+        return None
+    return ApprovalToken(
+        _MINT, approval_id=approval_id, intent_id=intent_id, fingerprint=row.fingerprint
+    )

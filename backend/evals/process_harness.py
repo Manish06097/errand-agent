@@ -174,6 +174,10 @@ class ProcessHarness(Harness):
                 "ERRAND_RECONCILER_INTERVAL_S": "0",
                 "ERRAND_LANGFUSE": "off",
                 "ERRAND_DEV": "1",
+                # the agent's side of the scenario's declared provider dedupe (9.4)
+                "ERRAND_BOOKING_PROVIDER_DEDUPES_KEYS": str(
+                    self.world_config.world.enforce_idempotency
+                ).lower(),
             }
         )
         if fault is not None:

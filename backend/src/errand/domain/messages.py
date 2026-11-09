@@ -99,6 +99,25 @@ class NoticeAction(_Body):
     approval_id: str | None = None
 
 
+class PendingFacts(_Body):
+    """The facts behind a PENDING_VERIFICATION notice (M5), for the card M7 builds on it.
+
+    The text is the whole message; these fields let a card show the same facts in its own
+    layout without parsing it. No "Check now" or "Never mind" button exists yet: M6 adds
+    the actions and their routes, and the notice carries facts only until then.
+    """
+
+    reason: Literal["hold_live", "status_unavailable", "material_mismatch", "fenced_off"]
+    intent_id: str
+    # hold_live (the wait rule): when the hold lapses by the world clock, ISO with +05:30,
+    # and the same time as the user reads it ("09:12", IST).
+    lapse_at: str | None = None
+    lapse_label: str | None = None
+    # material_mismatch: the provider's booking, and what it recorded that was not approved.
+    booking_id: str | None = None
+    recorded: str | None = None
+
+
 class OutcomeNotice(_Body):
     """A code-written outcome message: limits, outages, errors, a spent ask budget."""
 
@@ -107,6 +126,8 @@ class OutcomeNotice(_Body):
     text: str
     actions: list[NoticeAction] = Field(default_factory=list)
     still_needed: list[BriefField] = Field(default_factory=list)
+    # Set on PENDING_VERIFICATION notices (M5).
+    pending: PendingFacts | None = None
     status_line: str | None = None
 
 

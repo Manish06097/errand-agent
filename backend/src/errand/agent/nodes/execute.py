@@ -7,11 +7,14 @@ held through `verify`):
    on. A terminal intent returns its outcome; an unresolved one goes to `verify`. No
    new key is ever made for it.
 2. Preflight, no side effects: the row is `granted` and within its grace; the bound
-   hold is still live with room to book; the material recomputed from current facts
-   (the held quote, a fresh `list_bookings` for the nearby bookings) has the approved
-   fingerprint, and no exact duplicate exists. A change invalidates the approval and
-   sends the errand back to `prepare_proposal` for a new card (INV-12); a lapsed or
-   nearly lapsed hold goes the same way (M4's stand-in for M5's re-hold).
+   hold is the errand's; a fresh `list_bookings` shows no exact duplicate. A hold that
+   has lapsed, or has less than the book timeout plus `approvals.hold_margin_s` left, is
+   held again (once per approval, read from agent.sqlite) and the fingerprint is
+   recomputed from what the provider now says: equal means the approval moves to the new
+   hold (`approval.hold_rebound`, no second card, S20); different invalidates it as
+   `price_changed` or `slot_changed` and the new card is built on the new hold (S19, S50).
+   Any other change invalidates it too, and the errand goes back to `prepare_proposal`
+   for a new card (INV-12).
 3. The guard transaction (approvals.service.consume): the duplicate re-check against
    current rows, the consume (exactly one row), the intent and attempt 1 as `prepared`
    with the hold's expiry, the idempotency key from `derive_idem_key` and `fence_epoch`
@@ -20,30 +23,33 @@ held through `verify`):
    unsent), and `book` goes out under `asyncio.shield` with the key read back from the
    row. Any answer except a definitive refusal goes to `verify`: a clean `confirmed` is
    not trusted until `get_booking_status` agrees.
+5. A refusal is the world's answer for this key: `slot_taken` closes the attempt
+   (`not_applied`) and the intent (`failed`) and sends the errand back to COMPARING with
+   one SystemNote replan (S25). `hold_expired` as the answer to the first send re-holds
+   once, if the approval is within its TTL and no re-hold was used, and on an equal
+   fingerprint sends attempt 2 on the new hold under a new key, the same intent; in every
+   other case the intent fails and the user needs a fresh card.
 
 A re-entry that finds the attempt still `prepared` closes it as never sent (M4 stopgap,
 8.7; M6 owns sending it once with the same key). If the preflight cannot list the user's
 bookings, nothing is consumed: the row stays `granted` (within its grace) and the user is
 told to tap again, which restarts the run from the stored resume.
-
-Definitive answers end here, with nothing re-sent in M4: `slot_taken` and `hold_expired`
-make the attempt `not_applied`, the intent `failed` and the errand COMPARING, and the
-user hears that nothing was booked (`hold_expired` also offers a fresh quote).
 """
 
 from __future__ import annotations
 
 import json
-from datetime import timedelta
-from typing import Any, Literal
+from datetime import datetime, timedelta
+from typing import Any
 
 from langgraph.runtime import Runtime
 
+from errand.agent import cards
 from errand.agent.changes import execute as changes_execute
 from errand.agent.deps import RunDeps
+from errand.agent.nodes.booking import BookingPath
 from errand.agent.records import emit_swept
 from errand.agent.state import ThreadState
-from errand.agent.transitions import transition
 from errand.agent.validation import duplicate_of, nearby_bookings
 from errand.approvals import service
 from errand.approvals.fingerprint import fingerprint, parse_material
@@ -57,18 +63,20 @@ from errand.domain.outcomes import (
     BookCalled,
     Booked,
     PendingCheck,
+    Replan,
     Requote,
     StepResult,
 )
+from errand.domain.slots import HoldRef
+from errand.domain.windows import slot_label
 from errand.execution import intents as drafts
-from errand.execution.executor import ConsequentialClient
 from errand.faults import fault_point
 from errand.store.agent_db import Repos
 from errand.store.repos.approvals import ApprovalRow
-from errand.store.repos.intents import IntentRow
+from errand.store.repos.intents import AttemptRow, IntentRow
 from errand.tools.errors import ToolError
 from errand.tools.gateway import Caller
-from errand.world.contracts import BookError, BookOut, ListBookingsOut, hold_is_live
+from errand.world.contracts import BookingItem, ListBookingsOut, Slot, hold_is_live
 
 TERMINAL_INTENT = frozenset({"succeeded", "failed"})
 
@@ -87,11 +95,15 @@ async def execute(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
                 # Only an attempt handed to verify keeps the lock; verify releases it.
                 await deps.release_held()
         span.end_fields["phase_after"] = run.errand.phase.value
-    return {
+    update: dict[str, Any] = {
         "errand": run.errand,
         "result": result,
         "counters": deps.counters.model_copy(deep=True),
     }
+    if isinstance(result, Replan):
+        update["plan_result"] = None
+        update["system_notes"] = [*state.system_notes, *run.path.notes]
+    return update
 
 
 def route_after_execute(state: ThreadState) -> str:
@@ -99,22 +111,30 @@ def route_after_execute(state: ThreadState) -> str:
         return "verify"
     if isinstance(state.result, Requote):
         return "prepare_proposal"
+    if isinstance(state.result, Replan):
+        return "plan"
     return "respond"
 
 
 class _Execute:
     def __init__(self, deps: RunDeps, errand: Errand, approval_id: str) -> None:
         self.deps = deps
-        self.errand = errand
         self.approval_id = approval_id
         self.result: StepResult | None = None
+        self.path = BookingPath(deps, errand)
+
+    @property
+    def errand(self) -> Errand:
+        return self.path.errand
 
     def _move(self, to: Phase, reason: str) -> None:
-        self.errand = transition(self.errand, to, reason, self.deps.tracer)
+        self.path.move(to, reason)
 
     async def run(self) -> StepResult:
         self.result = await self._run()
         return self.result
+
+    # ------------------------------------------------------------------ preflight
 
     async def _run(self) -> StepResult:
         deps = self.deps
@@ -143,46 +163,48 @@ class _Execute:
         hold = self.errand.hold
         if hold is None or hold.hold_id != row.bound_hold_id:
             return await self._invalidate_and_requote(row, "material_mismatch", None)
-        margin_s = deps.timeouts.book + deps.approval_settings.hold_margin_s
-        if not hold_is_live(now + timedelta(seconds=margin_s), hold.expires_at):
-            # M4 never books on a lapsed or nearly lapsed hold: a fresh hold and a new
-            # card instead (M5 adds the re-hold that keeps an unchanged approval).
-            return Requote(approval_id=self.approval_id, reason="hold_lapsed")
-
-        try:
-            listed = await deps.tools.call(
-                Caller.EXECUTOR, "list_bookings", {"user_id": deps.user_id}, critical=True
-            )
-        except ToolError:
+        listed = await self._list_bookings()
+        if listed is None:
             return AlreadyHandled(approval_id=self.approval_id, reason="bookings_unavailable")
-        if not isinstance(listed, ListBookingsOut):
-            return AlreadyHandled(approval_id=self.approval_id, reason="bookings_unavailable")
-        if duplicate_of(listed.bookings, approved.provider_id, hold.slot.start) is not None:
+        if duplicate_of(listed, approved.provider_id, hold.slot.start) is not None:
             await service.invalidate(deps.db, self.approval_id, "duplicate_risk")
             self._emit_invalidated(row, "duplicate_risk", None)
             self._move(Phase.COMPARING, "approval_invalidated")
             return ActionFailed(approval_id=self.approval_id, reason="duplicate")
-        current = BookMaterial(
-            user_id=deps.user_id,
-            provider_id=hold.provider_id,
-            service=approved.service,
-            slot_start=ist_seconds(hold.slot.start),
-            slot_end=ist_seconds(hold.slot.end),
-            quoted_price_inr=hold.quoted_price_inr,
-            same_service_nearby=[
-                b.booking_id
-                for b in nearby_bookings(listed.bookings, approved.service, hold.slot.start)
-            ],
-        )
+
+        margin_s = deps.timeouts.book + deps.approval_settings.hold_margin_s
+        rebound: HoldRef | None = None
+        if not hold_is_live(now + timedelta(seconds=margin_s), hold.expires_at):
+            # 9.4 step 2: hold again, once per approval, and compare what the provider
+            # now says with what the user approved.
+            if await self.path.rehold_used(row):
+                return Requote(approval_id=self.approval_id, reason="hold_lapsed")
+            rebound = await self.path.rehold(approved, hold)
+            if rebound is None:
+                return Requote(approval_id=self.approval_id, reason="hold_lapsed")
+        effective = rebound or hold
+        current = self._material(approved, effective, listed)
         current_fp = fingerprint(current)
         if current_fp != row.fingerprint:
-            reason = (
-                "duplicate_risk"
-                if current.same_service_nearby != approved.same_service_nearby
-                else "material_mismatch"
+            return await self._changed(row, approved, current, current_fp, rebound)
+        if rebound is not None:
+            await service.rebind_hold(
+                deps.db,
+                self.approval_id,
+                old_hold_id=hold.hold_id,
+                new_hold_id=rebound.hold_id,
             )
-            return await self._invalidate_and_requote(row, reason, current_fp)
+            deps.tracer.emit(
+                "approval.hold_rebound",
+                approval_id=self.approval_id,
+                fingerprint=current_fp,
+                hold_id=rebound.hold_id,
+                old_hold_id=hold.hold_id,
+            )
+            self.path.errand = self.errand.model_copy(update={"hold": rebound})
+        hold = effective
 
+        now_ms = to_ms(now)
         intent_row = drafts.book_intent(
             approval_id=self.approval_id,
             conversation_id=deps.conversation_id,
@@ -190,25 +212,25 @@ class _Execute:
             user_id=deps.user_id,
             fingerprint=row.fingerprint,
             material_json=row.material_json,
-            now_ms=to_ms(now),
+            now_ms=now_ms,
         )
         attempt = drafts.first_book_attempt(
             intent_row,
             hold_id=hold.hold_id,
             hold_expires_at=to_ms(hold.expires_at),
             fence_epoch=held.epoch,
-            now_ms=to_ms(now),
+            now_ms=now_ms,
         )
 
         async def recheck(repos: Repos) -> str | None:
             # Inside the guard transaction: anything another conversation started since
             # the card was shown is visible here, after the user lock serialised us.
-            for intent in await repos.intents.unresolved_for_user(deps.user_id):
-                if intent.approval_id == self.approval_id:
+            for other in await repos.intents.unresolved_for_user(deps.user_id):
+                if other.approval_id == self.approval_id:
                     # This approval's own intent: whether it may be consumed again is the
                     # consume's question (status = 'granted'), not a duplicate's.
                     continue
-                material = parse_material(intent.material_json)
+                material = parse_material(other.material_json)
                 if (
                     isinstance(material, BookMaterial)
                     and material.provider_id == current.provider_id
@@ -226,7 +248,7 @@ class _Execute:
             approval_id=self.approval_id,
             fingerprint=row.fingerprint,
             intent_id=intent_row.intent_id,
-            now_ms=to_ms(now),
+            now_ms=now_ms,
             policy=deps.approval_policy,
             recheck=recheck,
             write=write,
@@ -265,125 +287,189 @@ class _Execute:
         )
         self._move(Phase.EXECUTING, "approval_granted")
         fault_point("after_intent_write")
+        return await self._send(token, row, approved, intent_row, attempt, held.epoch)
 
+    # ------------------------------------------------------------------ sending
+
+    async def _send(
+        self,
+        token: service.ApprovalToken,
+        row: ApprovalRow,
+        approved: BookMaterial,
+        intent: IntentRow,
+        prepared: AttemptRow,
+        epoch: int,
+    ) -> StepResult:
+        """Move a `prepared` attempt to `in_flight` (committed), send `book`, settle."""
+        deps = self.deps
         async with deps.db.transaction() as repos:
             moved = await repos.intents.move_attempt(
-                attempt.attempt_id,
+                prepared.attempt_id,
                 frm=("prepared",),
                 to="in_flight",
-                fence_epoch=held.epoch,
+                fence_epoch=epoch,
                 now_ms=to_ms(deps.clock.now()),
                 add_calls=1,
             )
-            sent = await repos.intents.get_attempt(attempt.attempt_id)
-        if not moved or sent is None:
+            sent_row = await repos.intents.get_attempt(prepared.attempt_id)
+        if not moved or sent_row is None:
             # Another holder moved this attempt first (a stale epoch). Nothing was sent by
             # us: the attempt stays as that holder left it, and recovery (M6) decides.
-            tracer.emit(
+            deps.tracer.emit(
                 "approval.consume_refused",
                 approval_id=self.approval_id,
                 reason="attempt_fenced_off",
                 status="consumed",
             )
             return PendingCheck(
-                approval_id=self.approval_id,
-                intent_id=intent_row.intent_id,
-                reason="fenced_off",
-            )
-        tracer.emit(
-            "intent.in_flight",
-            intent_id=intent_row.intent_id,
-            attempt=1,
-            idempotency_key=sent.idempotency_key,
-            hold_id=sent.hold_id,
-            state="in_flight",
-        )
-        client = ConsequentialClient(deps.tools)
-        assert sent.hold_id is not None
-        try:
-            answer: BookOut | BookError | None = await client.book(
-                token,
-                intent_id=intent_row.intent_id,
-                hold_id=sent.hold_id,
-                idempotency_key=sent.idempotency_key,
-            )
-            error = None
-        except ToolError as exc:
-            answer, error = None, type(exc).__name__
-        fault_point("after_world_book")
-        return await self._classify(intent_row, sent.attempt_id, held.epoch, answer, error)
-
-    async def _classify(
-        self,
-        intent: IntentRow,
-        attempt_id: str,
-        epoch: int,
-        answer: BookOut | BookError | None,
-        error: str | None,
-    ) -> StepResult:
-        deps = self.deps
-        now_ms = to_ms(deps.clock.now())
-        if isinstance(answer, BookError):
-            # The world answered for this key: definitively not applied.
-            async with deps.db.transaction() as repos:
-                await repos.intents.move_attempt(
-                    attempt_id,
-                    frm=("in_flight",),
-                    to="not_applied",
-                    fence_epoch=epoch,
-                    now_ms=now_ms,
-                    last_error=answer.error,
-                )
-                await repos.intents.resolve_intent(
-                    intent.intent_id,
-                    frm=("open",),
-                    to="failed",
-                    result_json=json.dumps({"error": answer.error}),
-                    now_ms=now_ms,
-                )
-            deps.tracer.emit(
-                "intent.resolved", intent_id=intent.intent_id, state="failed", error=answer.error
-            )
-            self._move(Phase.COMPARING, answer.error)
-            reason: Literal["slot_taken", "hold_expired", "provider_refused"] = (
-                "slot_taken"
-                if answer.error == "slot_taken"
-                else "hold_expired"
-                if answer.error == "hold_expired"
-                else "provider_refused"
-            )
-            return ActionFailed(
-                approval_id=self.approval_id,
-                reason=reason,
-                fresh_quote=reason == "hold_expired",
-            )
-        # Everything else, a clean confirmation included, is settled by verify.
-        last_error = error
-        async with deps.db.transaction() as repos:
-            await repos.intents.move_attempt(
-                attempt_id,
-                frm=("in_flight",),
-                to="unknown",
-                fence_epoch=epoch,
-                now_ms=now_ms,
-                last_error=last_error,
+                approval_id=self.approval_id, intent_id=intent.intent_id, reason="fenced_off"
             )
         deps.tracer.emit(
-            "intent.unknown",
+            "intent.in_flight",
             intent_id=intent.intent_id,
-            attempt=1,
-            state="unknown",
-            error=last_error,
+            attempt=sent_row.n,
+            idempotency_key=sent_row.idempotency_key,
+            hold_id=sent_row.hold_id,
+            state="in_flight",
         )
-        confirmed = isinstance(answer, BookOut)
-        return BookCalled(
+        sent = await self.path.send(token, intent.intent_id, sent_row)
+        settled = await self.path.settle(intent.intent_id, sent_row, sent, epoch=epoch)
+        if isinstance(settled, BookCalled):
+            return settled
+        if settled == "hold_expired" and sent_row.n == 1:
+            return await self._hold_expired(token, row, approved, intent, epoch)
+        return await self.path.refused(intent.intent_id, self.approval_id, settled)
+
+    async def _hold_expired(
+        self,
+        token: service.ApprovalToken,
+        row: ApprovalRow,
+        approved: BookMaterial,
+        intent: IntentRow,
+        epoch: int,
+    ) -> StepResult:
+        """9.4 step 5: the world said `hold_expired` to the first send. Hold again and, if
+        nothing the user approved has changed, send attempt 2 on the new hold under a new
+        key (attempt 1 is `not_applied`, the world answered). Only within the approval's
+        TTL and only if no re-hold was used before; otherwise the intent fails and the
+        user needs a fresh card."""
+        deps = self.deps
+        path = self.path
+        # `row` was read before the consume; a preflight re-hold moved the bound hold since.
+        async with deps.db.session() as repos:
+            row = await repos.approvals.get(self.approval_id) or row
+        within_ttl = to_ms(deps.clock.now()) - row.requested_at < deps.approval_policy.ttl_ms
+        hold = self.errand.hold
+        if not within_ttl or hold is None or await path.rehold_used(row):
+            return await path.refused(intent.intent_id, self.approval_id, "hold_expired")
+        fresh = await path.rehold(approved, hold)
+        listed = await self._list_bookings()
+        if fresh is None or listed is None:
+            return await path.refused(intent.intent_id, self.approval_id, "hold_expired")
+        current = self._material(approved, fresh, listed)
+        current_fp = fingerprint(current)
+        if current_fp != row.fingerprint:
+            # The approval is already consumed, so there is no card to invalidate: the
+            # intent fails and the user gets a new card on the hold we just placed.
+            await path.fail_intent(intent.intent_id, "hold_expired")
+            reason, detail = self._what_changed(approved, current)
+            return Requote(approval_id=self.approval_id, reason=reason, hold=fresh, detail=detail)
+        deps.tracer.emit(
+            "approval.hold_rebound",
             approval_id=self.approval_id,
-            intent_id=intent.intent_id,
-            attempt_id=attempt_id,
-            answer="confirmed" if confirmed else "unknown",
-            booking_id=answer.booking_id if isinstance(answer, BookOut) else None,
-            price_inr=answer.price_inr if isinstance(answer, BookOut) else None,
+            fingerprint=current_fp,
+            hold_id=fresh.hold_id,
+            old_hold_id=hold.hold_id,
         )
+        self.path.errand = self.errand.model_copy(update={"hold": fresh})
+        second = drafts.book_attempt(
+            intent,
+            n=2,
+            hold_id=fresh.hold_id,
+            hold_expires_at=to_ms(fresh.expires_at),
+            fence_epoch=epoch,
+            now_ms=to_ms(deps.clock.now()),
+        )
+        async with deps.db.transaction() as repos:
+            await repos.intents.insert_attempt(second)
+        deps.tracer.emit(
+            "intent.written",
+            intent_id=intent.intent_id,
+            attempt=2,
+            idempotency_key=second.idempotency_key,
+            hold_id=fresh.hold_id,
+            state="prepared",
+        )
+        return await self._send(token, row, approved, intent, second, epoch)
+
+    # ------------------------------------------------------------------ helpers
+
+    async def _list_bookings(self) -> list[BookingItem] | None:
+        deps = self.deps
+        try:
+            listed = await deps.tools.call(
+                Caller.EXECUTOR, "list_bookings", {"user_id": deps.user_id}, critical=True
+            )
+        except ToolError:
+            return None
+        return listed.bookings if isinstance(listed, ListBookingsOut) else None
+
+    def _material(
+        self, approved: BookMaterial, hold: HoldRef, bookings: list[BookingItem]
+    ) -> BookMaterial:
+        """What the provider would book now, from the hold and a fresh list."""
+        return BookMaterial(
+            user_id=self.deps.user_id,
+            provider_id=hold.provider_id,
+            service=approved.service,
+            slot_start=ist_seconds(hold.slot.start),
+            slot_end=ist_seconds(hold.slot.end),
+            quoted_price_inr=hold.quoted_price_inr,
+            same_service_nearby=[
+                b.booking_id for b in nearby_bookings(bookings, approved.service, hold.slot.start)
+            ],
+        )
+
+    def _what_changed(self, approved: BookMaterial, current: BookMaterial) -> tuple[Any, str]:
+        """The invalidation reason and the facts for the sentence that explains it."""
+        tz = self.deps.tz
+
+        def label(m: BookMaterial) -> str:
+            slot = Slot(
+                start=datetime.fromisoformat(m.slot_start), end=datetime.fromisoformat(m.slot_end)
+            )
+            return slot_label(slot, tz)
+
+        if (current.slot_start, current.slot_end) != (approved.slot_start, approved.slot_end):
+            return "slot_changed", f"{label(approved)} is now {label(current)}"
+        if current.quoted_price_inr != approved.quoted_price_inr:
+            return (
+                "price_changed",
+                f"{cards.rupees(approved.quoted_price_inr)} is now "
+                f"{cards.rupees(current.quoted_price_inr)}",
+            )
+        return "material_changed", ""
+
+    async def _changed(
+        self,
+        row: ApprovalRow,
+        approved: BookMaterial,
+        current: BookMaterial,
+        current_fp: str,
+        rebound: HoldRef | None,
+    ) -> StepResult:
+        """The fingerprint differs from the card's: invalidate and ask again (INV-12)."""
+        reason, detail = self._what_changed(approved, current)
+        if reason == "material_changed":
+            why = (
+                "duplicate_risk"
+                if current.same_service_nearby != approved.same_service_nearby
+                else "material_mismatch"
+            )
+            return await self._invalidate_and_requote(row, why, current_fp)
+        await service.invalidate(self.deps.db, row.approval_id, reason)
+        self._emit_invalidated(row, reason, current_fp)
+        return Requote(approval_id=row.approval_id, reason=reason, hold=rebound, detail=detail)
 
     async def _reentry(self, intent: IntentRow) -> StepResult:
         deps = self.deps
@@ -397,8 +483,9 @@ class _Execute:
         async with deps.db.session() as repos:
             attempts = await repos.intents.attempts(intent.intent_id)
         last = attempts[-1]
-        if last.state == "prepared":
-            return await self._abandon_unsent(intent, last)
+        # A `prepared` attempt (the process died between the guard transaction and the
+        # send) goes to verify like the others: status first, and if the provider has
+        # never seen the key, verify sends it once (9.4 step 6, S36).
         if self.errand.phase is Phase.AWAITING_APPROVAL:
             self._move(Phase.EXECUTING, "approval_granted")
         return BookCalled(
@@ -407,40 +494,6 @@ class _Execute:
             attempt_id=last.attempt_id,
             answer="unknown",
         )
-
-    async def _abandon_unsent(self, intent: IntentRow, attempt: Any) -> StepResult:
-        """M4 stopgap (8.7): a `prepared` attempt is provably unsent (it moves to
-        `in_flight` in its own committed step before `book` goes out). Architecture 9.4
-        sends it once with the same key; that crash recovery is M6's. Until then it is
-        closed, never left for the next state change to skip: the attempt is
-        `not_applied` ("never_sent"), the intent `failed`, and the user is told nothing
-        was booked and can ask again."""
-        deps = self.deps
-        now_ms = to_ms(deps.clock.now())
-        async with deps.db.transaction() as repos:
-            await repos.intents.move_attempt(
-                attempt.attempt_id,
-                frm=("prepared",),
-                to="not_applied",
-                fence_epoch=attempt.fence_epoch,
-                now_ms=now_ms,
-                last_error="never_sent",
-            )
-            await repos.intents.resolve_intent(
-                intent.intent_id,
-                frm=("open", "needs_attention"),
-                to="failed",
-                result_json=json.dumps({"error": "never_sent"}),
-                now_ms=now_ms,
-            )
-        deps.tracer.emit(
-            "intent.resolved", intent_id=intent.intent_id, state="failed", error="never_sent"
-        )
-        self._move(
-            Phase.FAILED if self.errand.phase is Phase.NEEDS_ATTENTION else Phase.COMPARING,
-            "never_sent",
-        )
-        return ActionFailed(approval_id=self.approval_id, reason="never_sent")
 
     async def _invalidate_and_requote(
         self, row: ApprovalRow, reason: str, new_fp: str | None

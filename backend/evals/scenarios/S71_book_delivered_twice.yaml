@@ -1,0 +1,28 @@
+id: S71_book_delivered_twice
+title: A retrying proxy delivers book twice; at a deduping provider the second delivery is a no-op with an identical response, one world booking, BOOKED_VERIFIED
+category: [booking_correctness, network_retry]
+seed: 71
+world:
+  book: {forced: [success]}
+faults:
+  duplicate_delivery: book
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+dedupe: [on]
+dedupe_reason: a duplicate delivery is a no-op only at a provider that dedupes keys (with it off it would double book, which M1's contract tests pin)
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_book_calls: {agent_calls: 1, world_rows: 2, keys: 1, holds: 1, outcomes: [success, replayed]}
+  - expect_booking: {count: 1, price_is_held_quote: true}
+expect:
+  invariants: [default]

@@ -36,7 +36,14 @@ from errand.agent.claim_guard import BOOKING_ID, guard
 from errand.agent.deps import RunDeps
 from errand.agent.records import live_approval, verified_records
 from errand.agent.state import ThreadState
-from errand.agent.templates import internal_error, render
+from errand.agent.templates import (
+    NOT_BOOKED_TEXT,
+    SLOT_TAKEN_TEXT,
+    internal_error,
+    provider_cancelled_text,
+    render,
+    requote_text,
+)
 from errand.clock import to_ms
 from errand.domain.errand import Errand, Phase
 from errand.domain.inbound import Recover, UserMessage
@@ -193,6 +200,13 @@ class _Respond:
         outcome, body = render(plan, self.errand, self.deps.run_id, self.deps.tz)
         if outcome is RunOutcome.ASKED_USER:
             self.asked = True
+        if any(n.kind == "slot_taken" for n in self.state.system_notes):
+            # The replan after a refused booking (S25): the user hears first, in code, that
+            # nothing was booked, and then what the planner found instead.
+            if isinstance(body, OutcomeNotice):
+                return outcome, [body.model_copy(update={"text": f"{SLOT_TAKEN_TEXT} {body.text}"})]
+            first = OutcomeNotice(outcome=outcome, text=SLOT_TAKEN_TEXT, actions=[])
+            return outcome, [first, body]
         return outcome, [body]
 
     async def _guarded(self, plan: PlanResult | None) -> PlanResult | None:
@@ -255,30 +269,9 @@ class _Respond:
             card = await self._card_of(result.approval_id)
             assert card is not None
             bodies: list[MessageBody] = []
-            if result.replaced_reason == "hold_lapsed":
-                bodies.append(
-                    notice(
-                        RunOutcome.AWAITING_APPROVAL,
-                        "The hold ran out before I could book, so nothing was booked. "
-                        "I held the slot again; please check the new card.",
-                    )
-                )
-            elif result.replaced_reason == "grant_not_executed":
-                bodies.append(
-                    notice(
-                        RunOutcome.AWAITING_APPROVAL,
-                        "I restarted before I could act on your approval, so nothing was "
-                        "booked. Here is a fresh quote.",
-                    )
-                )
-            elif result.replaced_reason == "material_changed":
-                bodies.append(
-                    notice(
-                        RunOutcome.AWAITING_APPROVAL,
-                        "Something changed since you approved, so nothing was booked. "
-                        "Please check the updated card.",
-                    )
-                )
+            line = requote_text(result.replaced_reason, result.replaced_detail)
+            if line is not None:
+                bodies.append(notice(RunOutcome.AWAITING_APPROVAL, line))
             return RunOutcome.AWAITING_APPROVAL, [*bodies, card]
         if isinstance(result, ConfirmHint):
             card = await self._card_of(result.approval_id)
@@ -302,6 +295,10 @@ class _Respond:
         if isinstance(result, Booked):
             card = await self._card_of(result.approval_id)
             assert card is not None
+            if result.cancelled_by_provider:
+                # No status answer said `confirmed`, so this is not a *_VERIFIED outcome (INV-04).
+                text = provider_cancelled_text(card.provider_name, card.slot_label)
+                return RunOutcome.NOTIFIED, [notice(RunOutcome.NOTIFIED, text)]
             inbound = self.state.inbound
             after_restart = isinstance(inbound, Recover) and inbound.after_restart
             return RunOutcome.BOOKED_VERIFIED, [
@@ -310,7 +307,7 @@ class _Respond:
         if isinstance(result, ActionFailed):
             return RunOutcome.ACTION_FAILED, [_failed(result)]
         if isinstance(result, PendingCheck):
-            pending = critical.pending_notice(result)
+            pending = critical.pending_notice(result, self.deps.tz)
             return RunOutcome.PENDING_VERIFICATION, [pending]
         if isinstance(result, OverBudget):
             self.asked = True
@@ -426,10 +423,12 @@ def _failed(result: ActionFailed) -> OutcomeNotice:
         text = "You already have this booking, so I didn't book it again. Nothing new was booked."
     elif result.reason == "provider_refused":
         text = "The provider refused that booking, so nothing was booked."
-    elif result.reason == "never_sent":
-        text = (
-            "The booking was interrupted before it was sent, so nothing was booked. "
-            "Please ask again."
+    elif result.reason == "not_booked":
+        text = NOT_BOOKED_TEXT
+        actions.append(
+            NoticeAction(
+                kind="refresh_hold", label="Get a fresh quote", approval_id=result.approval_id
+            )
         )
     else:
         text = "That approval can't be used any more, so nothing was booked."

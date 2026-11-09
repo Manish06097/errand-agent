@@ -13,10 +13,12 @@ from datetime import datetime
 
 from errand.clock import to_ms
 from errand.world.rng import draw
-from errand.world.scenario import ScenarioConfig
+from errand.world.scenario import ScenarioConfig, parse_duration
 from errand.world.store import BookingRow, EventRow, WorldStore
 
 PROVIDER_CANCELLED = "provider_cancelled"
+# fire_at of an event on `created:N` that has not been armed yet: never due.
+NEVER = 2**62
 
 
 def schedule(store: WorldStore, scenario: ScenarioConfig, seeded: list[BookingRow]) -> None:
@@ -27,6 +29,15 @@ def schedule(store: WorldStore, scenario: ScenarioConfig, seeded: list[BookingRo
         key=lambda b: (b.slot_start, b.booking_id),
     )
     for i, event in enumerate(scenario.world.events, start=1):
+        created = event.created_index()
+        if created is not None:
+            # Armed when the world creates that booking (`arm_created`); until then the
+            # row is never due.
+            delay_ms = round(parse_duration(event.fire_at).total_seconds() * 1000)
+            store.insert_event(
+                f"EV-{i}", event.type, {"created": created, "delay_ms": delay_ms}, NEVER
+            )
+            continue
         index = event.upcoming_index()
         if index >= len(upcoming):
             raise ValueError(
@@ -38,6 +49,18 @@ def schedule(store: WorldStore, scenario: ScenarioConfig, seeded: list[BookingRo
             {"booking_id": upcoming[index].booking_id},
             to_ms(event.resolve_fire_at(start)),
         )
+
+
+def arm_created(store: WorldStore, booking_id: str, now: int) -> None:
+    """The world just created a booking: arm the events waiting on it. Call inside
+    `store.tx()`, once per created booking."""
+    nth = int(store.bump_meta("created_n")) - 1
+    for event in store.all_events():
+        target = event.target
+        if event.fired_at is None and event.fire_at == NEVER and target.get("created") == nth:
+            store.arm_event(
+                event.event_id, {"booking_id": booking_id}, now + int(target["delay_ms"])
+            )
 
 
 def fire_due(store: WorldStore, now: int) -> list[EventRow]:

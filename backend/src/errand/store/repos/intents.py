@@ -181,6 +181,15 @@ class IntentsRepo:
         )
         return cur.rowcount == 1
 
+    async def bump_same_key_retries(self, intent_id: str, *, now_ms: int) -> None:
+        """The write-ahead half of a same-key retry (9.4 step 7). The caller moves the
+        attempt to `in_flight` in the same transaction."""
+        await self._conn.execute(
+            "UPDATE action_intents SET same_key_retries = same_key_retries + 1, updated_at = ? "
+            "WHERE intent_id = ?",
+            (now_ms, intent_id),
+        )
+
     async def resolve_intent(
         self,
         intent_id: str,

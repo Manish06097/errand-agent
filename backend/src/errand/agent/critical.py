@@ -25,9 +25,11 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Collection
+from datetime import tzinfo
 from typing import Final
 
-from errand.domain.messages import NoticeAction, OutcomeNotice
+from errand.agent.templates import clock_hhmm, pending_text
+from errand.domain.messages import NoticeAction, OutcomeNotice, PendingFacts
 from errand.domain.outcomes import PendingCheck, RunOutcome
 from errand.store.agent_db import AgentDB
 from errand.trace.tracer import Tracer
@@ -91,30 +93,28 @@ async def exit_critical_section(
     )
 
 
-def pending_text(result: PendingCheck) -> str:
-    """The PENDING_VERIFICATION wording for a result, shared by `respond` and the
-    RunManager's outer handler so both say the same thing."""
-    if result.reason == "fenced_off":
-        return (
-            "Another request took over before this one was sent, so nothing was sent "
-            "from this request. Please check your bookings, or ask me again."
-        )
-    if result.reason == "material_mismatch":
-        return (
-            "The provider recorded something different from what you approved "
-            f"({result.detail}), so I haven't treated it as confirmed. I'll sort it "
-            "out with you here."
-        )
-    return (
-        "The provider hasn't confirmed yet, and it can't end up booked twice. "
-        "I'll tell you here as soon as I know."
+def pending_notice(result: PendingCheck, tz: tzinfo) -> OutcomeNotice:
+    """The PENDING_VERIFICATION message for a result, shared by `respond` and the
+    RunManager's outer handler so both say the same thing. The facts and the wording are
+    M5's (`templates.pending_text`, `PendingFacts`); "Check now" is offered whenever the
+    provider's answer can still change (not for a mismatch the provider recorded, or a
+    request that was never sent)."""
+    reason = "status_unavailable" if result.reason == "status_not_confirmed" else result.reason
+    actions = (
+        [NoticeAction(kind="check_now", label="Check now")]
+        if reason in ("hold_live", "status_unavailable")
+        else []
     )
-
-
-def pending_notice(result: PendingCheck) -> OutcomeNotice:
-    actions = []
-    if result.reason == "status_not_confirmed":
-        actions.append(NoticeAction(kind="check_now", label="Check now"))
     return OutcomeNotice(
-        outcome=RunOutcome.PENDING_VERIFICATION, text=pending_text(result), actions=actions
+        outcome=RunOutcome.PENDING_VERIFICATION,
+        text=pending_text(result, tz),
+        actions=actions,
+        pending=PendingFacts(
+            reason=reason,
+            intent_id=result.intent_id,
+            lapse_at=result.lapse_at,
+            lapse_label=clock_hhmm(result.lapse_at, tz) if result.lapse_at else None,
+            booking_id=result.booking_id,
+            recorded=result.detail or None,
+        ),
     )

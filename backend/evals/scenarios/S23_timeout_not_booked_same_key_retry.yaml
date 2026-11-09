@@ -1,0 +1,32 @@
+id: S23_timeout_not_booked_same_key_retry
+title: Book times out without booking; status says not_found with the hold live; one same-key book on the same hold, a status check, then BOOKED_VERIFIED with no second card
+category: [booking_timeout]
+seed: 23
+world:
+  book: {forced: [timeout_not_booked]}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+dedupe: [on]
+dedupe_reason: the same-key retry exists only at a provider that dedupes keys; S69 is the dedupe-off twin
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_trace: {intent.retried: 1, approval.requested: 0}
+  - expect_card: {kind: outcome}
+  - expect_world: {hold_slot: 1, book: 2, get_booking_status: 2}
+  - expect_book_calls: {agent_calls: 2, world_rows: 2, keys: 1, holds: 1}
+  - expect_booking: {count: 1, price_is_held_quote: true}
+  - expect_rows:
+      - {table: action_intents, where: {state: succeeded, same_key_retries: 1}, count: 1}
+      - {table: intent_attempts, where: {state: applied, calls: 2}, count: 1}
+expect:
+  invariants: [default]

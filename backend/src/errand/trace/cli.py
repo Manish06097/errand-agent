@@ -1,15 +1,24 @@
 """errand-trace: inspect JSONL traces.
 
     errand-trace show <run_id | path.jsonl> [--data-dir DIR]
+    errand-trace export --thread <conversation_id> [--out PATH] [--data-dir DIR]
 
 `show` prints a timeline: seq, milliseconds since the first record, the record type
 indented by span depth, and a one-line summary. A truncated last line is reported on
-stderr and skipped. `export`, `excerpt` and `stats` arrive in later milestones.
+stderr and skipped.
+
+`export` writes every run of one conversation, in the order the runs started, as one
+JSONL (each record as the run wrote it, one per line), to `--out` or stdout. It reads each
+run through `trace/reader.py`, never the raw file, so whatever the reader later masks on
+read (Gate 2, M11) is masked in the export too. Non-ASCII is escaped, so the file reads
+the same everywhere and a tracked copy cannot carry an em dash. `excerpt` and `stats`
+arrive in later milestones.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
@@ -144,6 +153,57 @@ def render(records: Sequence[Mapping[str, Any]]) -> list[str]:
     return lines
 
 
+def thread_runs(thread: str, traces_dir: Path) -> list[Path]:
+    """The run traces of one conversation, in the order the runs started."""
+    folder = traces_dir / thread
+    if not folder.is_dir():
+        return []
+
+    def started(path: Path) -> tuple[str, str]:
+        records = read_trace(path).records
+        first = records[0] if records else {}
+        return (str(first.get("wall_ts") or first.get("ts") or ""), path.name)
+
+    return sorted(folder.glob("*.jsonl"), key=started)
+
+
+def export_thread(thread: str, data_dir: Path, out: Path | None) -> int:
+    try:
+        paths = thread_runs(thread, data_dir / "traces")
+    except TraceFormatError as exc:
+        print(f"errand-trace: {exc}", file=sys.stderr)
+        return 1
+    if not paths:
+        print(
+            f"errand-trace: no runs found for thread {thread!r} under {data_dir}", file=sys.stderr
+        )
+        return 2
+    lines: list[str] = []
+    try:
+        for path in paths:
+            trace = read_trace(path)
+            if trace.truncated_tail is not None:
+                print(
+                    f"errand-trace: warning: last line of {path} is truncated "
+                    f"({len(trace.truncated_tail)} bytes ignored)",
+                    file=sys.stderr,
+                )
+            lines += [
+                json.dumps(r, ensure_ascii=True, separators=(",", ":")) for r in trace.records
+            ]
+    except TraceFormatError as exc:
+        print(f"errand-trace: {exc}", file=sys.stderr)
+        return 1
+    text = "\n".join(lines) + "\n"
+    if out is None:
+        sys.stdout.write(text)
+    else:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        print(f"{out}: {len(lines)} records from {len(paths)} runs", file=sys.stderr)
+    return 0
+
+
 def show(target: str, data_dir: Path) -> int:
     path = resolve(target, data_dir / "traces")
     if path is None:
@@ -176,10 +236,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     show_p.add_argument(
         "--data-dir", type=Path, default=None, help="default: ERRAND_DATA_DIR or ./data"
     )
+    export_p = sub.add_parser("export", help="write every run of a conversation as one JSONL")
+    export_p.add_argument("--thread", required=True, help="the conversation id")
+    export_p.add_argument("--out", type=Path, default=None, help="default: standard output")
+    export_p.add_argument(
+        "--data-dir", type=Path, default=None, help="default: ERRAND_DATA_DIR or ./data"
+    )
     args = parser.parse_args(argv)
     data_dir = args.data_dir or PathSettings().data_dir
     if args.command == "show":
         return show(args.target, data_dir)
+    if args.command == "export":
+        return export_thread(args.thread, data_dir, args.out)
     parser.error(f"unknown command {args.command}")  # pragma: no cover - argparse exits first
     return 2
 

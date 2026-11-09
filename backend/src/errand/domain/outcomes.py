@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from errand.domain.brief import BriefField
+from errand.domain.slots import HoldRef
 
 
 class RunOutcome(StrEnum):
@@ -125,6 +126,8 @@ class CardReady(_Result):
     # Why a card replaced an earlier one in this run, if it did (a lapsed hold at
     # preflight, a material change at execute time); respond says so above the card.
     replaced_reason: str | None = None
+    # Code-written facts for that sentence (the old and new price, the moved slot).
+    replaced_detail: str | None = None
 
 
 class ProposalRefused(_Result):
@@ -177,14 +180,18 @@ class Requote(_Result):
 
     kind: Literal["requote"] = "requote"
     approval_id: str
-    reason: Literal["hold_lapsed", "material_changed"]
+    reason: Literal["hold_lapsed", "material_changed", "price_changed", "slot_changed"]
+    # M5: the hold execute's re-hold already placed (9.4 step 2). The new card is built
+    # on it rather than on a third hold, because the provider may have moved the slot.
+    hold: HoldRef | None = None
+    detail: str | None = None
 
 
 class Replan(_Result):
     """prepare_proposal sends the run back to plan once, with a SystemNote."""
 
     kind: Literal["replan"] = "replan"
-    note: Literal["hold_failed", "over_budget"]
+    note: Literal["hold_failed", "over_budget", "slot_taken"]
 
 
 class Booked(_Result):
@@ -192,6 +199,10 @@ class Booked(_Result):
     approval_id: str
     intent_id: str
     booking_id: str
+    # M5 (9.4 step 6): the provider booked it and then cancelled it before verify looked.
+    # The intent still succeeded, but the user hears both facts and the outcome is not a
+    # *_VERIFIED one (no status answer said `confirmed`).
+    cancelled_by_provider: bool = False
 
 
 class ActionFailed(_Result):
@@ -203,7 +214,7 @@ class ActionFailed(_Result):
         "provider_refused",
         "not_consumable",
         "duplicate",
-        "never_sent",
+        "not_booked",
     ]
     fresh_quote: bool = False
 
@@ -214,8 +225,18 @@ class PendingCheck(_Result):
     kind: Literal["pending_check"] = "pending_check"
     approval_id: str
     intent_id: str
-    reason: Literal["status_not_confirmed", "material_mismatch", "fenced_off"]
+    reason: Literal[
+        "status_not_confirmed",
+        "material_mismatch",
+        "fenced_off",
+        "status_unavailable",
+        "hold_live",
+    ]
     detail: str = ""
+    # hold_live (the wait rule): when the hold lapses by the world clock, ISO with +05:30.
+    lapse_at: str | None = None
+    # material_mismatch: the provider's booking that differs from what was approved.
+    booking_id: str | None = None
 
 
 class BookCalled(_Result):

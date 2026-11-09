@@ -1,0 +1,33 @@
+id: S22b_provider_cancels_before_verify
+title: Book commits and times out, and the provider cancels that booking 5 s after creating it; the status check finds cancelled_by_provider, and one message carries both facts
+category: [booking_timeout, provider_cancel]
+seed: 220
+world:
+  book: {forced: [timeout_booked]}
+  # a world event on the first booking the world creates, relative to its creation
+  events: [{type: provider_cancelled, booking: "created:0", fire_at: "+5s"}]
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - approve: {}
+  - expect_outcome: NOTIFIED
+  - expect_transcript: {last_includes: ["pulled out", "no visit"], excludes: ["Confirmed with the provider"]}
+  - expect_world: {book: 1, get_booking_status: 1}
+  - expect_book_calls: {agent_calls: 1, world_rows: 1}
+  - expect_booking: {count: 1}
+  - expect_rows:
+      - {table: action_intents, where: {state: succeeded}, count: 1}
+      - {table: intent_attempts, where: {state: applied}, count: 1}
+      - {table: known_bookings, where: {status: cancelled_by_provider}, count: 1}
+      - {table: followup_jobs, where: {event_kind: provider_cancel, state: detected}, count: 1}
+expect:
+  invariants: [default]

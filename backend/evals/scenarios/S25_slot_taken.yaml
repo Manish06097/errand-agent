@@ -1,0 +1,37 @@
+id: S25_slot_taken
+title: The provider answers slot_taken to the first book; nothing is booked, the planner offers other options after one SystemNote replan, and the final booking needs a new approval
+category: [slot_conflict]
+seed: 25
+world:
+  book: {forced: [slot_taken, success]}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - approve: {}
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_transcript: {includes: ["just taken"]}
+  - expect_world: {book: 1, get_booking_status: 0}
+  - expect_booking: {count: 0}
+  - expect_rows:
+      - {table: action_intents, where: {state: failed}, count: 1}
+      - {table: intent_attempts, where: {state: not_applied}, count: 1}
+  - until: approval_card
+  - expect_card: {kind: action, status: pending}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_world: {book: 2}
+  - expect_trace: {approval.consumed: 1}
+  - expect_booking: {count: 1, price_is_held_quote: true}
+  - expect_rows:
+      - {table: approvals, where: {status: consumed}, count: 2}
+expect:
+  invariants: [default]

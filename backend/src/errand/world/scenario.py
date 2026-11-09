@@ -29,6 +29,7 @@ from errand.world.rng import BookOutcome
 _DURATION = re.compile(r"^([+-]?)(\d+)(ms|s|m|h|d)$")
 _UNITS = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
 _UPCOMING = re.compile(r"^upcoming:(\d+)$")
+_CREATED = re.compile(r"^created:(\d+)$")
 
 
 def parse_duration(text: str) -> timedelta:
@@ -139,16 +140,37 @@ class QuoteDrift(_Block):
 
 
 class EventConfig(_Block):
+    """A scheduled provider cancellation.
+
+    - `upcoming:N`: the Nth upcoming seeded booking; `fire_at` is a duration after
+      `clock_start` or an ISO time.
+    - `created:N`: the Nth booking the world creates in this scenario (0-based, seeded
+      history excluded); `fire_at` is a duration after that booking was created, so a
+      scenario can have the provider pull out of a booking the agent made.
+    """
+
     type: Literal["provider_cancelled"]
-    booking: str = Field(description="upcoming:N, the Nth upcoming seeded booking")
-    fire_at: str = Field(description="a duration after clock_start (+30m) or an ISO time")
+    booking: str = Field(
+        description="upcoming:N, the Nth upcoming seeded booking, or created:N, the Nth "
+        "booking the world creates"
+    )
+    fire_at: str = Field(
+        description="a duration after clock_start (+30m) or an ISO time; after the "
+        "booking's creation for created:N"
+    )
 
     @field_validator("booking")
     @classmethod
     def _booking_ref(cls, value: str) -> str:
-        if _UPCOMING.match(value) is None:
-            raise ValueError(f"event booking {value!r} must look like upcoming:0")
+        if _UPCOMING.match(value) is None and _CREATED.match(value) is None:
+            raise ValueError(f"event booking {value!r} must look like upcoming:0 or created:0")
         return value
+
+    @model_validator(mode="after")
+    def _created_is_relative(self) -> EventConfig:
+        if self.created_index() is not None and _DURATION.match(self.fire_at.strip()) is None:
+            raise ValueError("an event on created:N fires a duration after the booking (+5s)")
+        return self
 
     @field_validator("fire_at")
     @classmethod
@@ -164,6 +186,10 @@ class EventConfig(_Block):
         match = _UPCOMING.match(self.booking)
         assert match is not None
         return int(match.group(1))
+
+    def created_index(self) -> int | None:
+        match = _CREATED.match(self.booking)
+        return int(match.group(1)) if match else None
 
     def resolve_fire_at(self, clock_start: datetime) -> datetime:
         if _DURATION.match(self.fire_at.strip()):

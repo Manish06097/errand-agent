@@ -1,18 +1,31 @@
-"""verify: the source of truth decides what `book` did (architecture 9.4 step 6, G7).
+"""verify: the source of truth decides what `book` did (architecture 9.4 steps 6 and 7, G7).
 
-`get_booking_status(idempotency_key)` is called before anything is reported, even
-after a clean `confirmed`. A confirmed status is then compared with the consumed
-approval's material: provider and slot always (the status's slot, and `list_bookings`
-for the provider), and the price whenever the `book` answer carried it (after a
-timeout it did not, and the record says `price_unverified`).
+`get_booking_status(key)` is called before anything is reported, even after a clean
+`confirmed`. A pass is at most 4 checks with simulated backoff 0.5, 1, 2 and 4 s before
+them. What a pass finds decides:
 
-- confirmed and matching: attempt `applied`, intent `succeeded`, `known_bookings`
-  upserted, COMPLETED, BOOKED_VERIFIED;
-- confirmed but different: attempt `applied`, intent `needs_attention`,
-  NEEDS_ATTENTION, and the user is told plainly (M5 adds the cancel card);
-- anything else after an unknown answer (not_found, status down): intent
-  `needs_attention`, PENDING_VERIFICATION. M4 never re-sends `book`: no same-key
-  retry and no second attempt (M5).
+- `confirmed`: compared with the consumed approval's material, provider and slot always
+  and the price whenever `book` answered with one (after a timeout it did not, and the
+  record says `price_unverified`). A match makes the attempt `applied`, the intent
+  `succeeded`, upserts `known_bookings`: COMPLETED, BOOKED_VERIFIED. A difference makes
+  the intent `needs_attention` and tells the user exactly what the provider recorded;
+- `cancelled_by_provider`: the booking was applied and then cancelled. The attempt is
+  `applied`, the intent `succeeded`, `known_bookings` is upserted, and in the same
+  transaction a `followup_jobs` row (booking, `provider_cancel`, `detected`) is written.
+  One code-templated message carries both facts. The notify policy, the rebook card and
+  moving the job to `notified` are M14's;
+- `not_found` after an ambiguous `book`, with the hold lapsed by the world clock: from
+  then on a late request can only get `hold_expired`, so it is definitive. The attempt is
+  `not_applied`, the intent `failed`, ACTION_FAILED with a fresh-quote action;
+- `not_found`, hold live: the same-key retry (step 7) while the budget allows it, the
+  provider declares it dedupes keys and the errand is not abandoned. One transaction sets
+  `same_key_retries + 1`, the attempt `in_flight` and `calls + 1`, and commits; only then
+  does `book` go out again, on the same hold with the same key. The answer is classified
+  like the first one and never trusted alone: the pass runs again;
+- `not_found`, hold live, no retry allowed: the wait rule. The attempt stays `unknown`,
+  the intent `needs_attention`, PENDING_VERIFICATION naming when the hold lapses;
+- the status unavailable after 4 checks: the same state, and no `book` is ever sent while
+  the status is unknown. No time is promised.
 
 The consequential lock taken in `execute` is released here, whatever happens.
 """
@@ -25,20 +38,32 @@ from typing import Any, Literal
 
 from langgraph.runtime import Runtime
 
+from errand.agent import cards
 from errand.agent.changes import verify as changes_verify
 from errand.agent.deps import RunDeps
+from errand.agent.nodes.booking import BookingPath
 from errand.agent.state import ThreadState
-from errand.agent.transitions import transition
+from errand.approvals import service
 from errand.approvals.fingerprint import parse_material
 from errand.clock import from_ms, to_ms
 from errand.domain.errand import Errand, Phase
 from errand.domain.material import BookMaterial
-from errand.domain.outcomes import BookCalled, Booked, PendingCheck, StepResult
-from errand.store.repos.intents import AttemptRow
+from errand.domain.outcomes import (
+    ActionFailed,
+    BookCalled,
+    Booked,
+    PendingCheck,
+    Replan,
+    StepResult,
+)
+from errand.store.repos.intents import AttemptRow, IntentRow
 from errand.store.repos.known_bookings import KnownBooking
 from errand.tools.errors import ToolError
 from errand.tools.gateway import Caller
 from errand.world.contracts import BookingStatusOut, ListBookingsOut, hold_is_live
+
+# Simulated seconds waited before each of the (at most) 4 checks of a pass.
+BACKOFF_S = (0.5, 1.0, 2.0, 4.0)
 
 
 async def verify(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
@@ -53,64 +78,179 @@ async def verify(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any
         finally:
             await deps.release_held()
         span.end_fields["phase_after"] = check.errand.phase.value
-    return {
+    update: dict[str, Any] = {
         "errand": check.errand,
         "result": result,
         "counters": deps.counters.model_copy(deep=True),
     }
+    if isinstance(result, Replan):
+        update["plan_result"] = None
+        update["system_notes"] = [*state.system_notes, *check.path.notes]
+    return update
+
+
+def route_after_verify(state: ThreadState) -> str:
+    return "plan" if isinstance(state.result, Replan) else "respond"
 
 
 class _Verify:
     def __init__(self, deps: RunDeps, errand: Errand, called: BookCalled) -> None:
         self.deps = deps
-        self.errand = errand
         self.called = called
+        self.path = BookingPath(deps, errand)
+        # Read from the record now, before this node moves the phase, so "Never mind"
+        # (M6 adds the action) only has to set it.
+        self.abandoned = errand.phase is Phase.ABANDONED
+
+    @property
+    def errand(self) -> Errand:
+        return self.path.errand
 
     def _move(self, to: Phase, reason: str) -> None:
-        self.errand = transition(self.errand, to, reason, self.deps.tracer)
+        self.path.move(to, reason)
 
     async def run(self) -> StepResult:
         deps = self.deps
         called = self.called
         async with deps.db.session() as repos:
-            attempt = await repos.intents.get_attempt(called.attempt_id)
             intent = await repos.intents.get(called.intent_id)
-        assert attempt is not None and intent is not None
+        assert intent is not None
         material = parse_material(intent.material_json)
         assert isinstance(material, BookMaterial)
-        key = attempt.idempotency_key
         self._move(
             Phase.VERIFYING, "book_confirmed" if called.answer == "confirmed" else "book_unknown"
         )
-        status = await self._status(key)
-        hold_live = (
-            hold_is_live(deps.clock.now(), from_ms(attempt.hold_expires_at))
-            if attempt.hold_expires_at is not None
-            else None
-        )
-        if status is None or status.status != "confirmed" or status.booking_id is None:
-            deps.tracer.emit(
-                "status.check",
-                idempotency_key=key,
-                result=status.model_dump(mode="json") if status else None,
-                hold_live=hold_live,
-                decision="escalate",
+        while True:
+            async with deps.db.session() as repos:
+                attempt = await repos.intents.get_attempt(self.called.attempt_id)
+                intent = await repos.intents.get(called.intent_id) or intent
+            assert attempt is not None
+            key = attempt.idempotency_key
+            status, checks = await self._status_pass(key)
+            await self._count_checks(attempt, checks)
+            hold_live = self._hold_live(attempt)
+            if status is None:
+                deps.tracer.emit(
+                    "status.check",
+                    idempotency_key=key,
+                    result=None,
+                    hold_live=hold_live,
+                    decision="escalate",
+                )
+                return await self._unresolved(attempt, "status_unavailable", "")
+            if status.status in ("confirmed", "cancelled_by_provider") and status.booking_id:
+                return await self._found(attempt, intent, material, status, hold_live)
+            if status.status != "not_found":
+                deps.tracer.emit(
+                    "status.check",
+                    idempotency_key=key,
+                    result=status.model_dump(mode="json"),
+                    hold_live=hold_live,
+                    decision="escalate",
+                )
+                return await self._unresolved(
+                    attempt, "material_mismatch", f"the provider shows it as {status.status}"
+                )
+            if hold_live is False:
+                return await self._lapsed(attempt, intent, status)
+            if attempt.state == "prepared":
+                # Provably never sent (the `in_flight` commit comes before the call), and the
+                # provider has no record of the key: this is the first send, not a retry.
+                outcome = await self._send_prepared(attempt, intent, status)
+                if isinstance(outcome, BookCalled):
+                    self.called = outcome
+                    continue
+                return outcome
+            if self._may_retry(intent):
+                outcome = await self._retry(attempt, intent, status)
+                if isinstance(outcome, BookCalled):
+                    self.called = outcome
+                    continue
+                return outcome
+            return await self._wait(attempt, status)
+
+    # ------------------------------------------------------------------ status
+
+    async def _status_pass(self, key: str) -> tuple[BookingStatusOut | None, int]:
+        """Up to 4 checks, waiting 0.5, 1, 2 and 4 s (simulated) before them."""
+        deps = self.deps
+        checks = 0
+        for delay in BACKOFF_S:
+            await deps.clock.sleep(delay)
+            checks += 1
+            try:
+                answer = await deps.tools.call(
+                    Caller.VERIFIER, "get_booking_status", {"idempotency_key": key}, critical=True
+                )
+            except ToolError:
+                continue
+            return (answer if isinstance(answer, BookingStatusOut) else None), checks
+        return None, checks
+
+    async def _count_checks(self, attempt: AttemptRow, checks: int) -> None:
+        deps = self.deps
+        async with deps.db.transaction() as repos:
+            await repos.intents.move_attempt(
+                attempt.attempt_id,
+                frm=(attempt.state,),
+                to=attempt.state,
+                fence_epoch=attempt.fence_epoch,
+                now_ms=to_ms(deps.clock.now()),
+                add_status_checks=checks,
             )
-            return await self._unresolved(attempt, "status_not_confirmed", "")
+
+    def _hold_live(self, attempt: AttemptRow) -> bool | None:
+        if attempt.hold_expires_at is None:
+            return None
+        return hold_is_live(self.deps.clock.now(), from_ms(attempt.hold_expires_at))
+
+    def _may_retry(self, intent: IntentRow) -> bool:
+        s = self.deps.booking_settings
+        return (
+            s.provider_dedupes_keys
+            and intent.same_key_retries < s.max_same_key_retries
+            and not self.abandoned
+        )
+
+    # ------------------------------------------------------------------ found
+
+    async def _found(
+        self,
+        attempt: AttemptRow,
+        intent: IntentRow,
+        material: BookMaterial,
+        status: BookingStatusOut,
+        hold_live: bool | None,
+    ) -> StepResult:
+        deps = self.deps
+        key = attempt.idempotency_key
+        cancelled = status.status == "cancelled_by_provider"
         mismatch = await self._compare(material, status)
-        price_unverified = called.price_inr is None
+        price_unverified = self.called.price_inr is None
+        decision: Literal["report_success", "report_provider_cancelled", "escalate"] = (
+            "escalate"
+            if mismatch
+            else "report_provider_cancelled"
+            if cancelled
+            else "report_success"
+        )
         deps.tracer.emit(
             "status.check",
             idempotency_key=key,
             result=status.model_dump(mode="json"),
             hold_live=hold_live,
-            decision="escalate" if mismatch else "report_success",
+            decision=decision,
             price_unverified=price_unverified or None,
             mismatch=mismatch or None,
         )
+        assert status.booking_id is not None
         if mismatch:
             return await self._unresolved(
-                attempt, "material_mismatch", "; ".join(mismatch), applied=True
+                attempt,
+                "material_mismatch",
+                "; ".join(mismatch),
+                applied=True,
+                booking_id=status.booking_id,
             )
         booking_id = status.booking_id
         now_ms = to_ms(deps.clock.now())
@@ -121,13 +261,17 @@ class _Verify:
                 to="applied",
                 fence_epoch=attempt.fence_epoch,
                 now_ms=now_ms,
-                add_status_checks=1,
             )
             await repos.intents.resolve_intent(
                 intent.intent_id,
                 frm=("open", "needs_attention"),
                 to="succeeded",
-                result_json=json.dumps({"booking_id": booking_id}),
+                result_json=json.dumps(
+                    {
+                        "booking_id": booking_id,
+                        **({"provider_cancelled": True} if cancelled else {}),
+                    }
+                ),
                 now_ms=now_ms,
             )
             await repos.known_bookings.upsert(
@@ -138,13 +282,23 @@ class _Verify:
                     service=material.service.value,
                     slot_start=to_ms(datetime.fromisoformat(material.slot_start)),
                     slot_end=to_ms(datetime.fromisoformat(material.slot_end)),
-                    status="confirmed",
+                    status="cancelled_by_provider" if cancelled else "confirmed",
                     last_seen_at=now_ms,
                     origin_conversation_id=deps.conversation_id,
                     origin_brief_json=self.errand.brief.model_dump_json(),
                     source_intent_id=intent.intent_id,
                 )
             )
+            if cancelled:
+                # Same transaction as the booking record: the unique (booking_id,
+                # event_kind) index is what keeps the watcher (M14) from handling it twice.
+                await repos.followups.detect(
+                    job_id=f"fj_{booking_id}_provider_cancel",
+                    booking_id=booking_id,
+                    event_kind="provider_cancel",
+                    conversation_id=deps.conversation_id,
+                    now_ms=now_ms,
+                )
         deps.tracer.emit(
             "intent.resolved",
             intent_id=intent.intent_id,
@@ -154,19 +308,15 @@ class _Verify:
             booking_id=booking_id,
             book_calls=attempt.calls,
         )
-        self._move(Phase.COMPLETED, "status_confirmed")
-        return Booked(
-            approval_id=called.approval_id, intent_id=intent.intent_id, booking_id=booking_id
+        self._move(
+            Phase.COMPLETED, "status_cancelled_by_provider" if cancelled else "status_confirmed"
         )
-
-    async def _status(self, key: str) -> BookingStatusOut | None:
-        try:
-            answer = await self.deps.tools.call(
-                Caller.VERIFIER, "get_booking_status", {"idempotency_key": key}, critical=True
-            )
-        except ToolError:
-            return None
-        return answer if isinstance(answer, BookingStatusOut) else None
+        return Booked(
+            approval_id=self.called.approval_id,
+            intent_id=intent.intent_id,
+            booking_id=booking_id,
+            cancelled_by_provider=cancelled,
+        )
 
     async def _compare(self, material: BookMaterial, status: BookingStatusOut) -> list[str]:
         """What the provider recorded that differs from what the user approved."""
@@ -179,7 +329,10 @@ class _Verify:
         if status.slot is None or status.slot.start != start or status.slot.end != end:
             problems.append("a different slot")
         if called.price_inr is not None and called.price_inr != material.quoted_price_inr:
-            problems.append(f"₹{called.price_inr} instead of ₹{material.quoted_price_inr}")
+            problems.append(
+                f"a price of {cards.rupees(called.price_inr)} instead of the "
+                f"{cards.rupees(material.quoted_price_inr)} you approved"
+            )
         try:
             listed = await self.deps.tools.call(
                 Caller.VERIFIER, "list_bookings", {"user_id": self.deps.user_id}, critical=True
@@ -194,28 +347,166 @@ class _Verify:
                 problems.append("a different provider")
         return problems
 
-    async def _unresolved(
-        self,
-        attempt: AttemptRow,
-        reason: Literal["status_not_confirmed", "material_mismatch"],
-        detail: str,
-        *,
-        applied: bool = False,
+    # ------------------------------------------------------------------ not found
+
+    async def _lapsed(
+        self, attempt: AttemptRow, intent: IntentRow, status: BookingStatusOut
     ) -> StepResult:
+        """`not_found` after the hold lapsed by the world clock is definitive (9.2): a
+        late request can only get `hold_expired` now. A fresh hold, a new card."""
         deps = self.deps
-        now_ms = to_ms(deps.clock.now())
+        self._trace_not_found(attempt, status, False, "report_not_applied")
         async with deps.db.transaction() as repos:
             await repos.intents.move_attempt(
                 attempt.attempt_id,
                 frm=("unknown", "in_flight"),
-                to="applied" if applied else "unknown",
+                to="not_applied",
                 fence_epoch=attempt.fence_epoch,
-                now_ms=now_ms,
-                add_status_checks=1,
+                now_ms=to_ms(deps.clock.now()),
+                last_error="not_found_after_lapse",
             )
+        await self.path.fail_intent(intent.intent_id, "not_booked")
+        return ActionFailed(
+            approval_id=self.called.approval_id, reason="not_booked", fresh_quote=True
+        )
+
+    async def _retry(
+        self, attempt: AttemptRow, intent: IntentRow, status: BookingStatusOut
+    ) -> BookCalled | StepResult:
+        """Step 7: one transaction, then `book` again on the same hold with the same key."""
+        deps = self.deps
+        self._trace_not_found(attempt, status, True, "same_key_retry")
+        async with deps.db.transaction() as repos:
+            moved = await repos.intents.move_attempt(
+                attempt.attempt_id,
+                frm=("unknown", "in_flight"),
+                to="in_flight",
+                fence_epoch=attempt.fence_epoch,
+                now_ms=to_ms(deps.clock.now()),
+                add_calls=1,
+            )
+            if moved:
+                await repos.intents.bump_same_key_retries(
+                    intent.intent_id, now_ms=to_ms(deps.clock.now())
+                )
+            sent_row = await repos.intents.get_attempt(attempt.attempt_id)
+        if not moved or sent_row is None:
+            return await self._unresolved(attempt, "fenced_off", "")
+        deps.tracer.emit(
+            "intent.retried",
+            intent_id=intent.intent_id,
+            attempt=attempt.n,
+            idempotency_key=attempt.idempotency_key,
+            hold_id=attempt.hold_id,
+            state="in_flight",
+            same_key_retries=intent.same_key_retries + 1,
+            book_calls=sent_row.calls,
+        )
+        token = await service.token_for_consumed(
+            deps.db, approval_id=self.called.approval_id, intent_id=intent.intent_id
+        )
+        if token is None:
+            return await self._unresolved(sent_row, "status_unavailable", "no consumed approval")
+        sent = await self.path.send(token, intent.intent_id, sent_row)
+        settled = await self.path.settle(
+            intent.intent_id, sent_row, sent, epoch=attempt.fence_epoch
+        )
+        if isinstance(settled, BookCalled):
+            return settled
+        return await self.path.refused(intent.intent_id, self.called.approval_id, settled)
+
+    async def _send_prepared(
+        self, attempt: AttemptRow, intent: IntentRow, status: BookingStatusOut
+    ) -> BookCalled | StepResult:
+        """9.4 step 6: a `prepared` attempt whose key the provider has never seen is sent
+        once, with its own key, on its own hold (S36). Not a same-key retry: the budget
+        is untouched. The `in_flight` move is committed before the call, as for any send."""
+        deps = self.deps
+        self._trace_not_found(attempt, status, True, "send_prepared")
+        async with deps.db.transaction() as repos:
+            moved = await repos.intents.move_attempt(
+                attempt.attempt_id,
+                frm=("prepared",),
+                to="in_flight",
+                fence_epoch=attempt.fence_epoch,
+                now_ms=to_ms(deps.clock.now()),
+                add_calls=1,
+            )
+            sent_row = await repos.intents.get_attempt(attempt.attempt_id)
+        if not moved or sent_row is None:
+            return await self._unresolved(attempt, "fenced_off", "")
+        deps.tracer.emit(
+            "intent.in_flight",
+            intent_id=intent.intent_id,
+            attempt=attempt.n,
+            idempotency_key=attempt.idempotency_key,
+            hold_id=attempt.hold_id,
+            state="in_flight",
+        )
+        token = await service.token_for_consumed(
+            deps.db, approval_id=self.called.approval_id, intent_id=intent.intent_id
+        )
+        if token is None:
+            return await self._unresolved(sent_row, "status_unavailable", "no consumed approval")
+        sent = await self.path.send(token, intent.intent_id, sent_row)
+        settled = await self.path.settle(
+            intent.intent_id, sent_row, sent, epoch=attempt.fence_epoch
+        )
+        if isinstance(settled, BookCalled):
+            return settled
+        return await self.path.refused(intent.intent_id, self.called.approval_id, settled)
+
+    async def _wait(self, attempt: AttemptRow, status: BookingStatusOut) -> StepResult:
+        """The wait rule: the request may still land, so nothing is reported as failed and
+        nothing more is sent. The reconciler (M6) turns it definitive when the hold lapses."""
+        self._trace_not_found(attempt, status, True, "wait_for_lapse")
+        return await self._unresolved(
+            attempt, "hold_live", "", lapse_at=self.path.lapse_at(attempt)
+        )
+
+    def _trace_not_found(
+        self,
+        attempt: AttemptRow,
+        status: BookingStatusOut,
+        hold_live: bool,
+        decision: Literal[
+            "same_key_retry", "report_not_applied", "wait_for_lapse", "send_prepared"
+        ],
+    ) -> None:
+        self.deps.tracer.emit(
+            "status.check",
+            idempotency_key=attempt.idempotency_key,
+            result=status.model_dump(mode="json"),
+            hold_live=hold_live,
+            decision=decision,
+        )
+
+    # ------------------------------------------------------------------ unresolved
+
+    async def _unresolved(
+        self,
+        attempt: AttemptRow,
+        reason: Literal["status_unavailable", "material_mismatch", "hold_live", "fenced_off"],
+        detail: str,
+        *,
+        applied: bool = False,
+        lapse_at: str | None = None,
+        booking_id: str | None = None,
+    ) -> StepResult:
+        deps = self.deps
+        now_ms = to_ms(deps.clock.now())
+        async with deps.db.transaction() as repos:
+            if applied:
+                await repos.intents.move_attempt(
+                    attempt.attempt_id,
+                    frm=("unknown", "in_flight"),
+                    to="applied",
+                    fence_epoch=attempt.fence_epoch,
+                    now_ms=now_ms,
+                )
             await repos.intents.resolve_intent(
                 attempt.intent_id,
-                frm=("open",),
+                frm=("open", "needs_attention"),
                 to="needs_attention",
                 result_json=json.dumps({"reason": reason, "detail": detail}),
                 now_ms=now_ms,
@@ -234,4 +525,6 @@ class _Verify:
             intent_id=attempt.intent_id,
             reason=reason,
             detail=detail,
+            lapse_at=lapse_at,
+            booking_id=booking_id,
         )

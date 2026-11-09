@@ -70,6 +70,9 @@ def test_defaults_are_the_contract_world() -> None:
         "id: x\nworld: { latency_ms: { bok: 9 } }",
         "id: x\nworld: { reschedule_conflict_slots: ['P2 at 10'] }",
         "id: x\nworld: { events: [{ type: provider_cancelled, booking: B-1, fire_at: +30m }] }",
+        # created:N fires a duration after the booking exists, never at a fixed time
+        "id: x\nworld: { events: [{ type: provider_cancelled, booking: 'created:0',"
+        " fire_at: '2026-11-09T09:00:00+05:30' }] }",
         "id: x\nfaults: { rehold_slot_shift: { P3: soon } }",
         "id: x\nfaults: { cancel: sometimes }",
         "id: x\nclock_start: '2026-11-09T08:00:00+00:00'",
@@ -96,3 +99,14 @@ def test_durations() -> None:
     assert parse_duration("500ms") == timedelta(milliseconds=500)
     with pytest.raises(ValueError):
         parse_duration("30 minutes")
+
+
+def test_an_event_can_wait_for_a_booking_the_world_creates() -> None:
+    s = ScenarioConfig.from_yaml(
+        "id: x\nworld: { events: [{ type: provider_cancelled, booking: 'created:1',"
+        " fire_at: +5s }] }"
+    )
+    (event,) = s.world.events
+    assert event.created_index() == 1 and event.resolve_fire_at(s.clock_start) == (
+        s.clock_start + timedelta(seconds=5)
+    )
