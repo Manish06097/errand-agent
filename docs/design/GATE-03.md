@@ -1,6 +1,6 @@
 # Gate 3: proactive follow-up policy
 
-Status: draft for sign-off, 2026-11-09. Main is at cb9475d; nothing of N3 is built. Part B starts from what migration 0001 and M1 already have: `followup_jobs`, `notifications`, `known_bookings`, `conversations.kind = 'followup'`, the `one_replacement` index, and the world's `provider_cancelled` events with `fire_now` for the dev drawer.
+Status: signed off on 2026-11-09, all four questions taken as recommended. Nothing of N3 is built yet. Part B starts from what migration 0001 and M1 already have: `followup_jobs`, `notifications`, `known_bookings`, `conversations.kind = 'followup'`, the `one_replacement` index, and the world's `provider_cancelled` events with `fire_now` for the dev drawer.
 Detail lives in `architecture.md` section 14 and ADR 0014 (brackets are section numbers). A bracket means the design already decided it, **new** marks a call it was silent on, **amends** a change to a written section.
 
 ## Decisions
@@ -57,6 +57,13 @@ Detail lives in `architecture.md` section 14 and ADR 0014 (brackets are section 
 3. **When the original errand said "no budget", cap the replacement at the price you approved?** *My recommendation: yes (decision 10).* An offer you did not ask for should not cost more than what you agreed to, and "Up to ₹N" is one click; the cost is that a better provider just above that price waits for your click.
 4. **Bring back the cancel-card row the scope trim cut?** *My recommendation: yes, one branch in the policy function and one leg in S39.* Without it, someone about to cancel gets offered a rebook of the booking they wanted gone; leaving it out saves a few lines and one scenario leg.
 
+## Decisions taken
+
+1. Every upcoming booking the provider lists is watched, not only ones the agent booked (decision 1), with the second brief path of decision 8.
+2. No quiet hours when no `contact_window` is saved: a follow-up is delivered at once.
+3. When the original errand had no budget, the replacement is capped at the price I approved (decision 10), with "Up to ₹N" one click away.
+4. The cancel-card row comes back: no rebook offer for a booking I am in the middle of cancelling, as one branch in the policy function and one leg in S39.
+
 On sign-off I update `architecture.md` 4.1, 8.1, 8.3, 8.5, 14, 18.5 and 18.6, ADR 0014, and N3 in `milestones.md`.
 
-Signed off: (pending)
+Signed off: 2026-11-09
