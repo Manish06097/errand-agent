@@ -568,7 +568,7 @@ class MemoryService:
             forms: dict[str, tuple[str, ...]] = {}
             span_hashes: dict[str, list[str]] = {}
             for r in chain:
-                forms[r.memory_id] = surface_forms(r.key, r.value) if r.value is not None else ()
+                forms[r.memory_id] = _forget_forms(r)
                 await self._forget_row(repos, r, now, actor="user")
             cleared = await self._redact_messages(repos, user_id, chain, forms, span_hashes, now)
             archived = await self._cascade_archives(repos, user_id, set(ids), forms)
@@ -770,6 +770,20 @@ async def _owner_of(repos: Repos, conversation_id: str) -> str | None:
     ) as cur:
         row = await cur.fetchone()
     return None if row is None else str(row[0])
+
+
+def _forget_forms(row: MemoryRow) -> tuple[str, ...]:
+    """What a forget looks for: the value's spellings and the whole quote it was said in.
+
+    The quote matters because a user or the model may repeat the sentence, and the
+    words around the value (anything else in it) are part of what the user asked to
+    have removed.
+    """
+    forms = list(surface_forms(row.key, row.value)) if row.value is not None else []
+    quote = (row.evidence or {}).get("quote")
+    if isinstance(quote, str) and quote.strip():
+        forms.append(quote.strip())
+    return tuple(dict.fromkeys(forms))
 
 
 def _bare_evidence(evidence: Json | None) -> str | None:

@@ -22,6 +22,7 @@ from errand.store.db import open_agent_db, transaction_immediate
 from errand.store.repos.approvals import ApprovalsRepo
 from errand.store.repos.client_requests import ClientRequestsRepo
 from errand.store.repos.conversations import ConversationsRepo
+from errand.store.repos.errands import ErrandsRepo
 from errand.store.repos.holds import HoldsRepo
 from errand.store.repos.intents import IntentsRepo
 from errand.store.repos.known_bookings import KnownBookingsRepo
@@ -50,6 +51,7 @@ class Repos:
     reader_cache: ReaderCacheRepo
     reader_refusals: ReaderRefusalsRepo
     memories: MemoriesRepo
+    errands: ErrandsRepo
 
 
 class AgentDB:
@@ -71,6 +73,7 @@ class AgentDB:
             reader_cache=ReaderCacheRepo(conn),
             reader_refusals=ReaderRefusalsRepo(conn),
             memories=MemoriesRepo(conn),
+            errands=ErrandsRepo(conn),
         )
 
     @classmethod
