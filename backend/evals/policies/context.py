@@ -67,18 +67,6 @@ def memory_policy(request: ScriptedRequest) -> AIMessage:
                 return answer(request, "I have no saved home area to forget.")
             return tool_calls(request, "Offer to forget it.", ("propose_forget", {"id": handle}))
         return answer(request, "Tap the button if you want it forgotten.")
-    if step == 0 and view.known.get("area"):
-        named = product_aliases.covered_value("area", low)
-        if named is not None and named != view.known["area"].lower().split(" ")[0]:
-            # The user names another area than the one in the brief: change it, quoting them.
-            quote = next(n for n in product_aliases.aliases_of("area", named) if n in low)
-            change: dict[str, Any] = {
-                "set": {"area": named},
-                "clear": [],
-                "evidence": [{"field": "area", "quote": quote}],
-                "not_covered": None,
-            }
-            return tool_calls(request, "Change the area.", ("update_brief", change))
     if step == 0 and "(save my budget)" in low:
         args = {
             "key": "budget_ceiling",
@@ -97,6 +85,18 @@ def memory_policy(request: ScriptedRequest) -> AIMessage:
                 value = "12:00"
             args = {"key": key, "scope": scope, "value": value, "quote": found.group(0)}
             return tool_calls(request, "Save the preference.", ("remember", args))
+    if step == 0 and view.known.get("area"):
+        named = product_aliases.covered_value("area", low)
+        if named is not None and named != view.known["area"].lower().split(" ")[0]:
+            # The user names another area than the one in the brief: change it, quoting them.
+            quote = next(n for n in product_aliases.aliases_of("area", named) if n in low)
+            change: dict[str, Any] = {
+                "set": {"area": named},
+                "clear": [],
+                "evidence": [{"field": "area", "quote": quote}],
+                "not_covered": None,
+            }
+            return tool_calls(request, "Change the area.", ("update_brief", change))
     if step == 1 and view.loop[-1][0] == "remember" and view.loop[-1][2] is False:
         saved = _REMEMBER_AREA.search(view.current)
         if (
