@@ -165,7 +165,7 @@ _HOUR_NAMES = (
 _HOUR_WORDS = {w: i for i, w in enumerate(_HOUR_NAMES, 1)}
 _MERIDIEM = r"(?:\s*(?P<{n}>[ap])\.?\s?m\b\.?)?"
 _DIGIT_TIME = re.compile(
-    r"(?<![\d.,:₹])(?P<h>\d{1,2})(?::(?P<m>\d{2}))?" + _MERIDIEM.format(n="x") + r"(?![\d]|,\d)"
+    r"(?<![\d.,:₹])(?P<h>\d{1,2})(?:[:.](?P<m>\d{2}))?" + _MERIDIEM.format(n="x") + r"(?![\d]|,\d)"
 )
 _WORD_TIME = re.compile(
     r"\b(?P<w>" + "|".join(_HOUR_WORDS) + r")\b(?:\s+o'?clock)?" + _MERIDIEM.format(n="x")

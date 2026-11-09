@@ -21,7 +21,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from errand.domain.brief import BriefField
+from errand.domain.brief import BriefField, ProvenanceSource
 from errand.domain.material import Material
 from errand.domain.outcomes import RunOutcome
 from errand.domain.slots import Badge
@@ -47,7 +47,7 @@ class BriefChip(_Body):
 
     field: BriefField
     value: str
-    source: Literal["user_msg", "ui_action", "memory", "booking_history", "followup", "default"]
+    source: ProvenanceSource
     evidence: str | None = None
     window_label: str | None = None
 

@@ -7,8 +7,6 @@ Aliases are lower case; matching is on normalised text.
 
 from __future__ import annotations
 
-from errand.world.contracts import Area, Service
-
 SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "plumber": ("plumber", "plumbing"),
     "electrician": ("electrician", "electrical"),
@@ -21,8 +19,8 @@ AREA_ALIASES: dict[str, tuple[str, ...]] = {
     "jayanagar": ("jayanagar", "jaya nagar"),
 }
 
-assert set(SERVICE_ALIASES) == {s.value for s in Service}
-assert set(AREA_ALIASES) == {a.value for a in Area}
+# That every Service and Area value has aliases is checked by
+# tests/domain/test_aliases.py, not by an import-time assert (python -O drops those).
 
 
 def aliases_of(field: str, value: str) -> tuple[str, ...]:

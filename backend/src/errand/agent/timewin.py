@@ -87,9 +87,11 @@ def _label(
         days = " or ".join(fmt_day(d) for d in dates)
     if daily_from is None and daily_to is None:
         return days
-    lo = (daily_from or time(0)).strftime("%H:%M")
-    hi = (daily_to or time(23, 59)).strftime("%H:%M")
-    return f"{days}, {lo}-{hi}"
+    if daily_from is not None and daily_to is not None:
+        return f"{days}, {daily_from:%H:%M}-{daily_to:%H:%M}"
+    if daily_from is not None:
+        return f"{days}, from {daily_from:%H:%M}"
+    return f"{days}, until {daily_to:%H:%M}"
 
 
 class _Phrase:

@@ -17,12 +17,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from errand.agent.steering import REPROMPT_TEXT
 from errand.approvals import service
+from errand.domain.inbound import ApprovalGranted
 from errand.llm.scripted import ScriptedRequest
 from errand.world.scenario import BookConfig, ScenarioConfig, WorldConfig
 from evals import invariants
 from evals.policies import reference
 from evals.policies.common import answer_with_thinking, read, tool_calls
-from evals.runner import Harness, harness
+from evals.runner import Harness, RunView, harness
 from tests.api.support import Gate, gated_factory
 
 FIND = "Find a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
@@ -208,13 +209,33 @@ async def test_a_correction_that_moves_the_day_invalidates_the_card_and_drops_th
     assert invariants.check(rec) == {name: [] for name in invariants.DEFAULT}
 
 
+async def resume_run(h: Harness, approval_id: str) -> RunView:
+    """Start the run the grant queued, the way the decide route does after a grant."""
+    mgr = h.manager
+    async with mgr.db.session() as repos:
+        conversation = await repos.conversations.get(h.conversation_id)
+    assert conversation is not None
+    lease = await mgr._take_lease(h.conversation_id)
+    admission = await mgr._admit(
+        mgr.ids.run_id(),
+        h.conversation_id,
+        conversation.user_id,
+        ApprovalGranted(approval_id=approval_id, via="button"),
+        lease,
+        trigger="approval_decision",
+    )
+    return await h.finish(admission.run_id)
+
+
 async def test_a_grant_that_commits_before_the_correction_cannot_book_the_old_card(
     tmp_path: Path,
 ) -> None:
-    """The click and the correction back to back. The grant commits while the correction's
-    run is in flight (the run was admitted first); the correction's conditional UPDATE
-    then finds the row granted and not yet consumed, and wins. The old card can no longer
-    be booked, nothing is booked, and no granted row is left behind (INV-16)."""
+    """The click and the correction back to back, the click through the real decide route.
+    The grant commits while the correction's run is in flight (the run was admitted
+    first); the correction's conditional UPDATE then finds the row granted and not yet
+    consumed, and wins. The click's own resume run is drained too: it finds the card
+    invalidated and books nothing. The old card can no longer be booked, and no granted
+    row is left behind (INV-16)."""
     gate = Gate()
     gate.open()
     async with harness(tmp_path, world(), model_factory=gated_factory(gate)) as h:
@@ -223,6 +244,9 @@ async def test_a_grant_that_commits_before_the_correction_cannot_book_the_old_ca
         gate.waiting.clear()
         posted = await h.post("Actually, Thursday or Friday works better", h.next_client_msg_id())
         await gate.waiting.wait()
+        # The decide route refuses while a run is in flight (409 run_in_progress), so the
+        # only way a grant lands now is the narrow race this test pins: the grant commits
+        # (with its pending_resumes row) between the route's checks and the correction.
         granted = await service.grant(
             h.manager.db,
             approval_id=card["approval_id"],
@@ -240,10 +264,17 @@ async def test_a_grant_that_commits_before_the_correction_cannot_book_the_old_ca
         assert granted.outcome is service.GrantOutcome.GRANTED
         gate.open()
         view = await h.finish(posted.json()["run_id"])
+        # the click's own run was queued behind the correction; drain it and look at what
+        # the clicking user sees: the card is gone, nothing is booked
+        resumed = await resume_run(h, card["approval_id"])
         again = await h.decide(card["approval_id"], "approve", card["body"]["fingerprint"])
         rec = await h.records()
         book_ops = [r for r in await h.op_log() if r["op"] == "book"]
     assert h.agent_db_approval_statuses() == ["invalidated"]
+    assert resumed.outcome == "REPLIED"
+    assert [m["body"]["text"] for m in resumed.messages] == [
+        "That card can't be used any more, so nothing was booked."
+    ]
     assert (again.status_code, again.json()["error"]) == (409, "no_longer_valid")
     assert book_ops == []
     assert view.outcome == "PRESENTED_OPTIONS"

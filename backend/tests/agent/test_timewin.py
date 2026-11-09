@@ -146,7 +146,7 @@ def test_a_non_contiguous_list_names_its_days() -> None:
     assert w.weekdays == frozenset({1, 4})
     # Monday is today at 08:00 and the window is ahead; Thursday is the 12th
     assert days(w) == (date(2026, 11, 9), date(2026, 11, 12))
-    assert w.label == "Mon 9 Nov or Thu 12 Nov, 10:00-23:59"
+    assert w.label == "Mon 9 Nov or Thu 12 Nov, from 10:00"
     thu = at(12, 9)
     w2 = win("thursday or monday", thu)
     assert days(w2) == (date(2026, 11, 12), date(2026, 11, 16))
@@ -243,3 +243,13 @@ def test_a_window_never_starts_before_now_and_ends_at_midnight() -> None:
     assert w.start == at(12, 0)
     assert w.end == at(13, 0)
     assert days(win("today", at(9, 22))) == (date(2026, 11, 9), date(2026, 11, 9))
+
+
+def test_a_lone_bound_reads_from_or_until_and_two_bounds_read_as_a_range() -> None:
+    assert win("tomorrow", not_before=time(10)).label == "Tue 10 Nov, from 10:00"
+    assert win("tomorrow", not_after=time(18)).label == "Tue 10 Nov, until 18:00"
+    assert win("tomorrow", not_before=time(10), not_after=time(18)).label == (
+        "Tue 10 Nov, 10:00-18:00"
+    )
+    assert win("tomorrow", part_of_day="evening").label == "Tue 10 Nov, 17:00-21:00"
+    assert win("tomorrow").label == "Tue 10 Nov"
