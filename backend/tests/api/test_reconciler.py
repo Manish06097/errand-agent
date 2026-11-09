@@ -300,3 +300,27 @@ async def test_the_reconciler_finishes_before_the_app_serves(
             assert app.state.reconciler is not None
     finally:
         host.close()
+
+
+async def test_the_periodic_task_settles_a_pending_intent_without_being_asked(
+    tmp_path: Path,
+) -> None:
+    async with harness(tmp_path, status_down_once()) as h:
+        await approve_to_pending(h)
+        # the lifespan did not start the task (the harness sets no interval): start one fast
+        periodic = Reconciler(h.manager, ReconcilerSettings(interval_s=0.05))
+        periodic.start_periodic()
+        try:
+            for _ in range(100):
+                await asyncio.sleep(0.05)
+                async with h.manager.db.session() as repos:
+                    open_ = await repos.intents.unresolved_for_conversation(h.conversation_id)
+                if not open_:
+                    break
+            await h.manager.wait_idle()
+        finally:
+            await periodic.stop()
+        rec = await h.records()
+    assert [i["state"] for i in rec.intents] == ["succeeded"]
+    assert sum(1 for r in rec.op_log if r["op"] == "book") == 1
+    assert [r["trigger"] for r in rec.runs][-1] == "recovery"

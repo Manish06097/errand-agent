@@ -113,19 +113,21 @@ class Reconciler:
                 )
                 if run_id:
                     report.recovery_runs.append(run_id)
+            if handled and grants:
+                # A conversation can hold both an unsettled intent and a grant nobody acted
+                # on; the intent's run goes first, then the grant's fresh card.
+                await self.manager.wait_idle()
             for grant in grants:
-                if grant.conversation_id in handled:
-                    continue
-                handled.add(grant.conversation_id)
                 run_id = await self._recover(
                     grant.conversation_id,
                     _fresh_card(grant),
                     dead_by_conversation.pop(grant.conversation_id, []),
                     report,
-                    takeover=True,
+                    takeover=grant.conversation_id not in handled,
                 )
                 if run_id:
                     report.recovery_runs.append(run_id)
+                await self.manager.wait_idle()
             for runs in dead_by_conversation.values():
                 for run in runs:
                     await self.close_dead_run(
