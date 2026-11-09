@@ -33,8 +33,13 @@ class ErrandKind(StrEnum):
     REBOOK = "rebook"
 
 
+ProvenanceSource = Literal[
+    "user_msg", "ui_action", "memory", "booking_history", "followup", "default"
+]
+
+
 class Provenance(_Model):
-    source: Literal["user_msg", "ui_action", "memory", "booking_history", "followup", "default"]
+    source: ProvenanceSource
     message_id: str | None = None
     memory_id: str | None = None
     booking_id: str | None = None

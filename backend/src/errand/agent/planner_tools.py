@@ -22,9 +22,10 @@ in the fixed order. The list's measured size is pinned by
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from errand.domain.brief import BriefField, PartOfDay
 from errand.world.contracts import Area, Service
@@ -49,8 +50,7 @@ _ASKABLE_FIELDS = [f.value for f in BriefField]
 SEARCH_PROVIDERS: dict[str, Any] = {
     "name": "search_providers",
     "description": (
-        "Search the brief's service, area and dates; no arguments. Fails, naming the gaps, "
-        "if a required field is missing."
+        "Search the brief; no arguments. Fails, naming the gaps, if a required field is missing."
     ),
     "input_schema": _object({}),
 }
@@ -68,8 +68,9 @@ UPDATE_BRIEF: dict[str, Any] = {
     "name": "update_brief",
     "description": (
         "Record what the user said. Each value set or cleared needs an exact quote from "
-        "the current message (4+ chars) as evidence. Never write dates: give the user's "
-        "time phrase and part of day."
+        "the current message (4+ chars) that contains it. Never write dates: give the "
+        "day phrase and part of day; times are HH:MM, 24-hour. A place or service we do "
+        "not cover goes in not_covered."
     ),
     "input_schema": _object(
         {
@@ -88,6 +89,8 @@ UPDATE_BRIEF: dict[str, Any] = {
                                         "enum": ["morning", "afternoon", "evening", "any"],
                                     }
                                 ),
+                                "not_before": _nullable({"type": "string"}),
+                                "not_after": _nullable({"type": "string"}),
                             }
                         )
                     ),
@@ -110,14 +113,22 @@ UPDATE_BRIEF: dict[str, Any] = {
                     }
                 ),
             },
+            "not_covered": _nullable(
+                _object(
+                    {
+                        "field": {"type": "string", "enum": ["area", "service"]},
+                        "words": {"type": "string"},
+                    }
+                )
+            ),
         }
     ),
 }
 ASK_USER: dict[str, Any] = {
     "name": "ask_user",
     "description": (
-        "Ask for every missing field in one question, never a known one. A field may be "
-        "asked again once, with quick-reply options (at most 6, each 40 chars or fewer)."
+        "Ask for every missing field in one question, never a known one. Re-ask a field "
+        "once, with quick-reply options (at most 6, 40 chars each)."
     ),
     "input_schema": _object(
         {
@@ -166,12 +177,24 @@ class GetProviderArgs(_Args):
     provider_id: str = Field(min_length=1, max_length=40)
 
 
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
 class WindowArg(_Args):
-    """M3's closed set: a phrase and a part of day. `not_before` and `not_after` join the
-    schema with the full resolver in M8 (the domain `TimeWindowExpr` already has them)."""
+    """A day phrase, a part of day and an optional daily time bound. The schema cannot say
+    `format: time` (nothing shows strict mode accepts it), so code checks "HH:MM" here."""
 
     phrase: str = Field(min_length=1, max_length=80)
     part_of_day: PartOfDay | None = None
+    not_before: str | None = None
+    not_after: str | None = None
+
+    @field_validator("not_before", "not_after")
+    @classmethod
+    def _hhmm(cls, value: str | None) -> str | None:
+        if value is not None and not _HHMM.match(value.strip()):
+            raise ValueError(f"{value!r} is not a time; use HH:MM, 24-hour (for example 10:00)")
+        return value.strip() if value is not None else None
 
 
 class BriefSet(_Args):
@@ -190,10 +213,16 @@ class EvidenceArg(_Args):
     quote: str
 
 
+class NotCoveredArg(_Args):
+    field: Literal["area", "service"]
+    words: str = Field(min_length=1, max_length=80)
+
+
 class UpdateBriefArgs(_Args):
     set: BriefSet = Field(default_factory=BriefSet)
     clear: list[PatchableName] = Field(default_factory=list)
     evidence: list[EvidenceArg] = Field(default_factory=list)
+    not_covered: NotCoveredArg | None = None
 
 
 # Bounds on the one piece of model text a ClarifyCard carries. They live here, not in

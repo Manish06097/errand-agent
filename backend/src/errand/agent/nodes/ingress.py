@@ -67,6 +67,7 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
             "outcome": None,
             "park": None,
             "system_notes": [],
+            "card_changes": [],
         }
         live = await live_approval(deps)
         inbound = state.inbound
