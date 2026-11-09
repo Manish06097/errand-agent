@@ -116,6 +116,35 @@ async def test_check_now_on_a_conversation_that_never_booked_is_a_409(tmp_path: 
     assert response.json() == {"error": "nothing_to_check", "intent": None}
 
 
+async def test_check_now_after_a_recorded_mismatch_is_a_409_not_a_run(tmp_path: Path) -> None:
+    """S65: the world booked 150 rupees above the quote. The intent is needs_attention, but
+    what the provider recorded is settled: nothing waits on it, so Check now has nothing to
+    check (the same `_WAITING` test the reconciler uses), and no run is started."""
+    world = ScenarioConfig(
+        id="mismatch",
+        seed=65,
+        world=WorldConfig(book=BookConfig(forced=["success"])),
+        faults=FaultsConfig(book_price_mismatch=150),
+    )
+    async with harness(tmp_path, world) as h:
+        await approve_to_pending(h)
+        async with h.manager.db.session() as repos:
+            states = [
+                i.state for i in await repos.intents.unresolved_for_conversation(h.conversation_id)
+            ]
+            assert not await repos.intents.awaiting_provider(h.conversation_id)
+        url = f"/api/conversations/{h.conversation_id}/actions"
+        response = await h.client.post(
+            url, json={"client_action_id": "chk-m", "kind": "check_now", "payload": {}}
+        )
+        rec = await h.records()
+    assert states == ["needs_attention"]
+    assert response.status_code == 409
+    assert response.json()["error"] == "nothing_to_check"
+    assert response.json()["intent"]["state"] == "needs_attention"
+    assert [r["trigger"] for r in rec.runs].count("ui_action") == 0
+
+
 async def test_the_tool_call_cap_tripping_inside_verify_still_ends_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -380,3 +409,87 @@ async def test_the_periodic_task_leaves_a_recently_checked_intent_alone_until_it
         "approval_decision_resume",
         "recovery",
     ]
+
+
+async def test_startup_recovers_every_stranded_intent_of_a_conversation_one_run_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A conversation with a second unresolved intent (the dead run left an `open` one
+    beside the one it was settling) gets a recovery run for each, in order, never two at
+    once on the thread; one that stays unresolved after its run does not come round again."""
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from errand.approvals import service
+    from errand.domain.inbound import Recover
+
+    def intent(intent_id: str, conversation_id: str) -> Any:
+        return SimpleNamespace(
+            intent_id=intent_id, conversation_id=conversation_id, user_id="u", state="open"
+        )
+
+    first, second, other = intent("i1", "c1"), intent("i2", "c1"), intent("i3", "c2")
+    unresolved = [first, second, other]  # nothing ever resolves: the loop must still end
+    events: list[str] = []
+
+    async def running() -> list[Any]:
+        return []
+
+    async def recoverable() -> list[Any]:
+        return list(unresolved)
+
+    @asynccontextmanager
+    async def session() -> Any:
+        yield SimpleNamespace(
+            runs=SimpleNamespace(list_running=running),
+            intents=SimpleNamespace(recoverable=recoverable),
+        )
+
+    async def no_grants(_: Any) -> list[Any]:
+        return []
+
+    async def wait_idle() -> None:
+        events.append("idle")
+
+    async def recover(
+        self: Reconciler, conversation_id: str, inbound: Any, dead: Any, report: Any, **kw: Any
+    ) -> str:
+        assert isinstance(inbound, Recover) and inbound.after_restart
+        events.append(f"{conversation_id}:{inbound.intent_id}")
+        return f"r_{inbound.intent_id}"
+
+    monkeypatch.setattr(service, "expire_unexecuted_grants", no_grants)
+    monkeypatch.setattr(Reconciler, "_recover", recover)
+    manager = SimpleNamespace(db=SimpleNamespace(session=session), wait_idle=wait_idle)
+    report = await Reconciler(manager).startup()  # type: ignore[arg-type]
+    assert events == ["c1:i1", "c2:i3", "idle", "c1:i2", "idle", "idle"]  # last: startup's own
+    assert report.recovery_runs == ["r_i1", "r_i3", "r_i2"]
+
+
+async def test_the_periodic_task_stops_asking_after_its_window_but_check_now_does_not() -> None:
+    """A contradiction that never resolves, or a status endpoint that never comes back,
+    would otherwise get a new pending message every `recheck_after_s` for ever."""
+    from types import SimpleNamespace
+
+    async def no_attempts(_: str) -> list[Any]:
+        return []
+
+    repos = SimpleNamespace(intents=SimpleNamespace(attempts=no_attempts))
+    settings = ReconcilerSettings(recheck_after_s=120, periodic_window_s=1200)
+    reconciler = Reconciler(SimpleNamespace(), settings)  # type: ignore[arg-type]
+
+    def stuck(age_s: int, quiet_s: int) -> Any:
+        now = 10_000_000
+        return now, SimpleNamespace(
+            intent_id="i", created_at=now - age_s * 1000, updated_at=now - quiet_s * 1000
+        )
+
+    async def due(age_s: int, quiet_s: int) -> bool:
+        now, intent = stuck(age_s, quiet_s)
+        return await reconciler._due(repos, intent, now)
+
+    assert not await due(age_s=300, quiet_s=60)  # asked a minute ago
+    assert await due(age_s=300, quiet_s=121)  # quiet for a whole interval
+    assert await due(age_s=1200, quiet_s=121)  # the last periodic answer
+    assert not await due(age_s=1201, quiet_s=121)  # past the window: periodic stops
+    assert not await due(age_s=86_400, quiet_s=86_400)

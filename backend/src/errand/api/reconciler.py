@@ -28,6 +28,10 @@ the thread lease like any run, skips a busy thread, and tries again on the next 
 periodic task (`reconciler.interval_s`, 0 turns it off), the "Check now" action for one
 conversation, and the dev drawer and the evals (`reconciler_tick`). A further pass, such as
 N3's follow-up jobs, plugs in at `PASSES`.
+
+The periodic task stops asking about an intent `periodic_window_s` after it was written
+(9.9): a contradiction or a status endpoint that never comes back must not post a new
+message every interval for ever. Check now and a restart still ask, whatever the age.
 """
 
 from __future__ import annotations
@@ -100,25 +104,40 @@ class Reconciler:
             dead_by_conversation: dict[str, list[Run]] = {}
             for run in dead:
                 dead_by_conversation.setdefault(run.conversation_id, []).append(run)
+            # One recovery run per conversation per round, so two runs never share a
+            # thread; a conversation with a second unresolved intent gets the next round.
+            # Each intent is recovered once (`done`), so one that stays unresolved after
+            # its run (a status that cannot be had) does not come round again.
+            done: set[str] = set()
             handled: set[str] = set()
-            for intent in intents:
-                if intent.conversation_id in handled:
-                    continue
-                handled.add(intent.conversation_id)
-                run_id = await self._recover(
-                    intent.conversation_id,
-                    Recover(intent_id=intent.intent_id, after_restart=True),
-                    dead_by_conversation.pop(intent.conversation_id, []),
-                    report,
-                    takeover=True,
-                    user_id=intent.user_id,
-                )
-                if run_id:
-                    report.recovery_runs.append(run_id)
-            if handled and grants:
-                # A conversation can hold both an unsettled intent and a grant nobody acted
-                # on; the intent's run goes first, then the grant's fresh card.
+            while intents:
+                this_round: set[str] = set()
+                for intent in intents:
+                    if intent.intent_id in done or intent.conversation_id in this_round:
+                        continue
+                    this_round.add(intent.conversation_id)
+                    done.add(intent.intent_id)
+                    run_id = await self._recover(
+                        intent.conversation_id,
+                        Recover(intent_id=intent.intent_id, after_restart=True),
+                        dead_by_conversation.pop(intent.conversation_id, []),
+                        report,
+                        takeover=True,
+                        user_id=intent.user_id,
+                    )
+                    if run_id:
+                        report.recovery_runs.append(run_id)
+                if not this_round:
+                    break
+                handled |= this_round
+                # The round's runs end before the next one starts, and before a grant's
+                # fresh card (a conversation can hold both an unsettled intent and a grant
+                # nobody acted on: the intent's run goes first).
                 await self.manager.wait_idle()
+                async with db.session() as repos:
+                    intents = [
+                        i for i in await repos.intents.recoverable() if i.intent_id not in done
+                    ]
             for grant in grants:
                 run_id = await self._recover(
                     grant.conversation_id,
@@ -212,11 +231,13 @@ class Reconciler:
         return report
 
     async def _due(self, repos: Any, intent: IntentRow, now_ms: int) -> bool:
-        if now_ms - intent.updated_at >= round(self.settings.recheck_after_s * 1000):
-            return True
         attempts = await repos.intents.attempts(intent.intent_id)
         expiry = attempts[-1].hold_expires_at if attempts else None
-        return expiry is not None and intent.updated_at < expiry <= now_ms
+        if expiry is not None and intent.updated_at < expiry <= now_ms:
+            return True  # the hold lapsed since the last answer: the promised moment
+        if now_ms - intent.created_at > round(self.settings.periodic_window_s * 1000):
+            return False  # asked for a whole window with no change: Check now remains
+        return now_ms - intent.updated_at >= round(self.settings.recheck_after_s * 1000)
 
     # ----------------------------------------------------------------- periodic
 

@@ -496,8 +496,9 @@ class RunManager:
         """`check_now` needs an intent that is waiting on the provider; otherwise 409 with
         the state of the conversation's latest intent (None if it never had one)."""
         async with self.db.session() as repos:
-            unresolved = await repos.intents.unresolved_for_conversation(conversation_id)
-            if any(i.state == "needs_attention" for i in unresolved):
+            # The reconciler's own test (`_WAITING`): a mismatch the provider recorded
+            # (S65) is needs_attention but settled, and a run for it would only say so.
+            if await repos.intents.awaiting_provider(conversation_id):
                 return None
             async with repos.conn.execute(
                 "SELECT intent_id, state FROM action_intents WHERE conversation_id = ? "
