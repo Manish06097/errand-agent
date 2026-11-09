@@ -47,7 +47,16 @@ class KnownBookingsRepo:
             f"INSERT INTO known_bookings ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(booking_id) DO UPDATE SET status = excluded.status, "
             "slot_start = excluded.slot_start, slot_end = excluded.slot_end, "
-            "last_seen_at = excluded.last_seen_at",
+            "last_seen_at = excluded.last_seen_at, "
+            # The watcher may have mirrored the booking first, with no origin (BUG-N3-3):
+            # what the agent knows about where it came from fills the gap, and a value
+            # already there is never overwritten.
+            "origin_conversation_id = COALESCE(known_bookings.origin_conversation_id, "
+            "excluded.origin_conversation_id), "
+            "origin_brief_json = COALESCE(known_bookings.origin_brief_json, "
+            "excluded.origin_brief_json), "
+            "source_intent_id = COALESCE(known_bookings.source_intent_id, "
+            "excluded.source_intent_id)",
             (
                 b.booking_id,
                 b.user_id,

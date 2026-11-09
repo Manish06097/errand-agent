@@ -37,7 +37,7 @@ async def test_a_tick_between_book_and_verify_keeps_the_origin(tmp_path: Path) -
                 await h.app.state.watcher.tick()  # the booking exists; verify has not written
             return await real(**kwargs)
 
-        client.get_booking_status = get_booking_status  # type: ignore[method-assign]
+        client.get_booking_status = get_booking_status
         await h.say(OPENER)
         convo = await h.conversation()
         card = [m for m in convo["messages"] if m["body"].get("type") == "action"][-1]
