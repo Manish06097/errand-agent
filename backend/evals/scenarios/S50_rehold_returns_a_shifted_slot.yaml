@@ -22,7 +22,7 @@ steps:
   - approve: {}
   - expect_outcome: AWAITING_APPROVAL
   - expect_trace: {approval.invalidated: 1, approval.hold_rebound: 0, approval.consumed: 0, approval.requested: 1}
-  - expect_transcript: {includes: ["moved the slot", "nothing was booked"]}
+  - expect_transcript: {includes: ["changed the slot", "nothing was booked"]}
   - expect_card: {kind: action, status: pending}
   - expect_world: {hold_slot: 2, book: 0}
   - expect_booking: {count: 0}

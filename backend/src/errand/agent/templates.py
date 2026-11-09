@@ -206,9 +206,9 @@ def render(
 # ---------------------------------------------------------------- booking failure paths (M5)
 #
 # Every sentence below is code over records. None of them uses a word the claim guard or
-# INV-04 reads as a success claim without a record behind it ("booked twice" and
-# "cancelled" both trip them, so these say "two bookings" and "pulled out"); a test runs
-# each one through both.
+# INV-04 reads as a success claim without a record behind it: "booked twice", "cancelled"
+# and "moved" all trip them, so these say "two bookings", "pulled out" and "changed the
+# slot". A test runs each one through both.
 
 
 def clock_hhmm(iso: str, tz: tzinfo) -> str:
@@ -253,7 +253,7 @@ def requote_text(reason: str | None, detail: str | None) -> str | None:
         )
     if reason == "slot_changed":
         return (
-            f"The hold ran out and the provider moved the slot ({detail}), so nothing was "
+            f"The hold ran out and the provider changed the slot ({detail}), so nothing was "
             "booked. Please check the new card."
         )
     if reason == "material_changed":

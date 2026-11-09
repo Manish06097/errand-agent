@@ -349,6 +349,9 @@ class _Execute:
         user needs a fresh card."""
         deps = self.deps
         path = self.path
+        # `row` was read before the consume; a preflight re-hold moved the bound hold since.
+        async with deps.db.session() as repos:
+            row = await repos.approvals.get(self.approval_id) or row
         within_ttl = to_ms(deps.clock.now()) - row.requested_at < deps.approval_policy.ttl_ms
         hold = self.errand.hold
         if not within_ttl or hold is None or await path.rehold_used(row):
