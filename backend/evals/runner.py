@@ -96,6 +96,9 @@ PLANNERS: dict[str, Policy] = {
     "hostile:false_claim": hostile.false_claim_policy,
     "hostile:paraphrase_claim": hostile.paraphrase_claim_policy,
     "hostile:cross_service_cite": hostile.cross_service_cite_policy,
+    "hostile:matching_quote": hostile.matching_quote_policy,
+    "hostile:no_evidence": hostile.no_evidence_policy,
+    "hostile:reask": hostile.reask_policy,
 }
 SIDE_EFFECT_OPS = ("hold_slot", "book", "cancel", "reschedule")
 

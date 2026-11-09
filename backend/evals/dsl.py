@@ -410,6 +410,9 @@ PlannerName = Literal[
     "hostile:false_claim",
     "hostile:paraphrase_claim",
     "hostile:cross_service_cite",
+    "hostile:matching_quote",
+    "hostile:no_evidence",
+    "hostile:reask",
 ]
 ReaderName = Literal["keyword", "blind", "hostile", "skipper", "timeout", "refusal", "max_tokens"]
 
