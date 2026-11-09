@@ -37,6 +37,7 @@ dev = [
   "pre-commit==4.7.0",
   "types-pyyaml==6.0.12.20250915",
   "hypothesis==6.170.8",
+  "pytest-xdist==3.8.0",
 ]
 
 [build-system]
@@ -109,6 +110,7 @@ addopts = "-ra --strict-markers"
 empty_parameter_set_mark = "fail_at_collect"
 markers = [
   "live: calls the real Claude API; skipped unless ERRAND_LIVE=1",
+  "slow: starts a subprocess or a real server, or shells out to make or git; runs in the second pytest step of make check, on its own xdist workers",
 ]
 
 [tool.importlinter]

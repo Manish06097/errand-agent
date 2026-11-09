@@ -10,6 +10,8 @@ import pytest
 
 from tests.hygiene.repo import CLEAN_DESIGN_NOTE, REPO_ROOT
 
+pytestmark = pytest.mark.slow  # subprocesses or real servers: second step of make check
+
 SCRIPT = REPO_ROOT / "scripts" / "check_design_note.py"
 _STRUCTURE = re.compile(r"(?m:^#{1,2} [^\n]*$)|(?s:<!--.*?-->)")
 
