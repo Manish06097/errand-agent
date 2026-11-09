@@ -10,7 +10,7 @@ This file retains the complete main-session sequence and the detailed material t
 
 **Ownership:** Manish set the requirements, selected the stack, asked for the agent hierarchy, retained the design gates, challenged parallelism and milestone count, changed the execution cadence, narrowed scope to the take-home brief, made the explicit Gate 2 and Gate 3 calls, and directed final app/log checks. The coding assistant coordinated the session and ran tools. Lead, Implementer, and Reviewer agents performed delegated architecture, coding, testing, and adversarial review. The repository-local Git author identity was set to Manish at his request; that metadata does not mean he manually typed every commit or authored every delegated change. Low-level choices made by the assistant or agents are not retroactively attributed to Manish.
 
-**Security edits:** the Anthropic API key is replaced with `[REDACTED-KEY]` (and should be rotated), and local Langfuse keys are replaced with `[REDACTED-LANGFUSE-KEY]` because the repository secret scan rejects them.
+**Security edits:** the Anthropic API key is replaced with `[REDACTED-KEY]` (and should be rotated), and local Langfuse keys are replaced with `[REDACTED-LANGFUSE-KEY]` because the repository secret scan rejects them. A personal email address that appeared once in a git setup step is replaced with `[REDACTED-EMAIL]`.
 
 ---
 
@@ -643,7 +643,7 @@ Git has no identity set. I'll set a repo-local one using your email. If you give
 
 ```
 {
- "command": "git config user.email recrowork@gmail.com && git config user.name recro && git config --local --list | grep user && sed -n '1,25p' docs/design/milestones.md",
+ "command": "git config user.email [REDACTED-EMAIL] && git config user.name recro && git config --local --list | grep user && sed -n '1,25p' docs/design/milestones.md",
  "description": "Set repo-local git identity and read milestone plan header"
 }
 ```
@@ -651,7 +651,7 @@ Git has no identity set. I'll set a repo-local one using your email. If you give
 <details><summary>Tool result</summary>
 
 ```
-user.email=recrowork@gmail.com
+user.email=[REDACTED-EMAIL]
 user.name=recro
 # Build plan
 
@@ -721,7 +721,7 @@ The Lead's first job is writing these into the architecture doc, the decision re
 
 Each milestone goes through Lead brief, Implementer build, Lead review with the tests run, fix loop, then one commit. If a milestone fails review 4 times, the run stops and comes back to me rather than pushing on.
 
-**One thing I need from you:** commits are going in as `recro <recrowork@gmail.com>`. Tell me the name you want on them and I'll rewrite the authorship before anything is pushed.
+**One thing I need from you:** commits are going in as `recro <[REDACTED-EMAIL]>`. Tell me the name you want on them and I'll rewrite the authorship before anything is pushed.
 
 I'll report back when M0 to M3 finish.
 

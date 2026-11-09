@@ -1,6 +1,6 @@
 # Three bugs
 
-The full log is [BUGS.md](BUGS.md), 30 bugs found by tests, reviews and manual runs. Each one was reproduced end to end first, the failing repro was committed on its own, the fix came as a separate commit, and the same repro was re-run afterwards. A test (`backend/tests/hygiene/test_bug_commit_order.py`) checks with git that every repro commit below is an ancestor of its fix commit.
+The full log is [BUGS.md](BUGS.md), 31 bugs found by tests, reviews and manual runs. Each one was reproduced end to end first, the failing repro was committed on its own, the fix came as a separate commit, and the same repro was re-run afterwards. A test (`backend/tests/hygiene/test_bug_commit_order.py`) checks with git that every repro commit below is an ancestor of its fix commit.
 
 I picked these three because each one is a different way the system could have lied to the user or to me, and each was caught by a check I had written, not by luck:
 
