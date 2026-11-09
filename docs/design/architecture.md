@@ -1273,6 +1273,16 @@ N2 review round 2 (implementer's proposals, for the lead to rule on):
 - **S4 is escaped.** `<`, `>` and `&` in the S4 JSON become `\u003c`, `\u003e` and `\u0026` (valid JSON, same value), and the registry refuses `<` and `>` in an `access_note`, so a note cannot close the `<memory>` tag.
 - **INV-06 has a second witness.** Besides `est_request_tokens` it recomputes, from the recorded request strings alone, `ceil(utf8_bytes / 1.5)` per string value (keys, `type`, `role` and `model` values excluded) plus the 400-token tools preamble, and fails a request whose bound is over 12,000 or above the recorded estimate.
 
+Lead rulings, N2 review round 2:
+
+- **Redaction scope: accepted for outcomes, reminders, status lines and titles; rejected for notices.** A notice's `text` is code-written, but the step-limit notice restates the brief ("So far I have: plumber, Indiranagar, ..."), and decision 9 clears every brief field sourced from a forgotten row, so a rendering of that brief must go too. Otherwise the value stays in `messages.body_json` after the forget and S6 replays it to the model on the next turn, since the mask covers the same scope as redaction. `notice` text is back in the primary set. Every other notice is fixed wording, so the over-masking cost is small and decision 13 accepts it inside the scope. A shortlist's `window_label` stays out: it describes the search that was run, which is decision 13's code-rendered slots.
+- **Decision 23's mix: accepted.** With Keep settling its (key, scope), 4 active inferred and 9 pending cannot both hold; 13.5 records the seed as built (31 active, 9 pending, 8 superseded, 7 forgotten, 5 rejected). Gate 2 stays as signed; 13.5 is the amendment.
+- **Masked reads fail closed: accepted.**
+- **S4 escape: accepted.**
+- **INV-06's second witness: accepted.** It is a lower bound on the estimate (it counts the same bytes the estimator counts, without keys or per-block overhead), not on the real count: per ADR 0007, `ceil(utf8_bytes / 1.5)` is above the real count. The docstring says so.
+- **Commit-order slips (the seed key-file fix in ef2c0e0, the tuple fix in 05c66b1): accepted.** No history rewrite.
+- **No BUGS.md rows for review findings on unmerged code: accepted.** The failing-repro-first commit order still applies to each one.
+
 ---
 
 ## 13. Context management under a hard token budget
