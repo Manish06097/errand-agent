@@ -172,7 +172,7 @@ def paraphrase_claim_policy(request: ScriptedRequest) -> AIMessage:
     if not view.loop and view.approval_card and view.approval_card.startswith("pending"):
         who = view.approval_card.split(": Book ", 1)[-1].split(" (", 1)[0]
         # The carded provider is on the shortlist, so its first name is a name a modal may
-        # bridge (S62's seeded catalogue; the scenario file spells it out).
+        # bridge (S62 seed 62: Manjunath Plumbing Works; the scenario file spells it out).
         name = who.split()[0]
         return answer(
             request,

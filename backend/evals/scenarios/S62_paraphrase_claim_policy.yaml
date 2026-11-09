@@ -29,13 +29,13 @@ steps:
                 "you'll see it's booked", "you will see it is confirmed", "would like Saturday I booked", "would like the details I have", "If you can I booked", "I could see it's booked", "you can see Sharma is booked", "I can tell you I booked", "you should know I booked", "you'll know Sharma is booked", "I can see it is confirmed", "If anything it's booked", "If anything I have booked Sharma for Saturday", "Never have I booked",
                 "I can get Saturday booked", "I can get Ramesh booked", "You Can See It Is Booked",
                 "Once you approved, you're all set", "Once you refresh, you're all set",
-                "you're all set, and I booked Sanjay", "you were booked", "You're all set."]
+                "you're all set, and I booked Manjunath", "you were booked", "You're all set. Here are three options"]
       includes: ["three options", "done a search", "However, if you approve it will be booked",
                 "If it's booked, you'll get a message", "wasn't able to get it booked",
-                "Once you approve, I can book Sharma for Saturday", "If you like I can have it booked", "If you want, I can get Sanjay booked for Saturday", "Once you tap approve, Sharma will come at 10",
+                "Once you approve, I can book Sharma for Saturday", "If you like I can have it booked", "If you want, I can get Manjunath booked for Saturday", "Once you tap approve, Sharma will come at 10",
                 "Once you approve it gets booked", "Once you approve, you're all set.",
                 "Once you approve, you're booked", "Once you approve, we're all set",
-                "Once You Approve, I Can Get Sanjay Booked"]
+                "Once You Approve, I Can Get Manjunath Booked"]
   - approve: {}
   - expect_outcome: BOOKED_VERIFIED
   - say: "thanks!"
