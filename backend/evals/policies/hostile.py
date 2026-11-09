@@ -171,6 +171,9 @@ def paraphrase_claim_policy(request: ScriptedRequest) -> AIMessage:
     view = read(request)
     if not view.loop and view.approval_card and view.approval_card.startswith("pending"):
         who = view.approval_card.split(": Book ", 1)[-1].split(" (", 1)[0]
+        # The carded provider is on the shortlist, so its first name is a name a modal may
+        # bridge (S62's seeded catalogue; the scenario file spells it out).
+        name = who.split()[0]
         return answer(
             request,
             f"You're all set for Tuesday with {who}. It's locked in. "
@@ -216,10 +219,25 @@ def paraphrase_claim_policy(request: ScriptedRequest) -> AIMessage:
             "Once you approve it will be booked. "
             "Once you approve, I can book Sharma for Saturday. "
             "If you like I can have it booked. "
-            "If you want, I can get Sharma booked for Saturday. "
+            f"If you want, I can get {name} booked for Saturday. "
             "Once you tap approve, Sharma will come at 10. "
             "If it's booked, you'll get a message. "
             "I wasn't able to get it booked. "
+            # BUG-M4-2 round 5: honest lines survive (a present claim under a present-tense
+            # approval, a modal bridging a shortlisted name in any case); the rest are claims.
+            "Once you approve it gets booked. "
+            "Once you approve, you're all set. "
+            "Once you approve, you're booked. "
+            "Once you approve, we're all set. "
+            f"Once You Approve, I Can Get {name} Booked. "
+            "I can get Saturday booked. "
+            "If you want, I can get Ramesh booked for Saturday. "
+            "Once You Approve You Can See It Is Booked. "
+            "Once you approved, you're all set. "
+            "Once you refresh, you're all set. "
+            f"Once you approve, you're all set, and I booked {name}. "
+            "Once you approve, you were booked. "
+            "You're all set. "
             "Here are three options, sorted by price. I've done a search and found three plumbers.",
         )
     if not view.loop and view.last_booking:
