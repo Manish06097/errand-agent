@@ -86,6 +86,13 @@ def _so_far(errand: Errand | None) -> str:
     return ", ".join(parts)
 
 
+def backstop_notice(errand: Errand | None) -> OutcomeNotice:
+    """The 90 s backstop's WALL_CLOCK_EXCEEDED, filled from the last checkpointed errand."""
+    return templates_limits.wall_clock_exceeded(
+        _so_far(errand), templates_limits.still_to_do(errand, _FIELD_WORDS)
+    )
+
+
 def internal_error(run_id: str) -> OutcomeNotice:
     return OutcomeNotice(
         outcome=RunOutcome.INTERNAL_ERROR,

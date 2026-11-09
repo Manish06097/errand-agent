@@ -42,10 +42,9 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.types import Command
 
 from errand.agent.deps import ConsequentialLocks, RunDeps
-from errand.agent.graph import Graph, RoutedAs, invoke, route_input
+from errand.agent.graph import Graph, RoutedAs, invoke, route_input, run_config
 from errand.agent.planner_tools import PLANNER_TOOLS
-from errand.agent.templates import internal_error
-from errand.agent.templates_limits import wall_clock_exceeded
+from errand.agent.templates import backstop_notice, internal_error
 from errand.api.locks import LeaseKeeper, ThreadLocks, UserLocks, thread_key
 from errand.api.sse import Broadcaster, RunStream
 from errand.approvals import service
@@ -53,6 +52,7 @@ from errand.approvals.typed_grant import Decision, VisibleCard, decide
 from errand.clock import Clock, to_ms
 from errand.config import ApprovalSettings, LimitSettings, ModelSettings, ReaderSettings
 from errand.domain.counters import RunCounters
+from errand.domain.errand import Errand
 from errand.domain.inbound import (
     ApprovalDeclined,
     ApprovalGranted,
@@ -643,8 +643,8 @@ class RunManager:
                 and not await self._open_intent(run)
             ):
                 outcome = RunOutcome.WALL_CLOCK_EXCEEDED
-                body = wall_clock_exceeded("", "")
-            await self._fail(run, tracer, exc, body)
+                body = backstop_notice(await self._checkpointed_errand(run))
+            await self._fail(run, tracer, exc, body, expected=body is not None)
         finally:
             await self._finish(run, tracer, outcome, parked, limit)
         if cancelled:
@@ -703,6 +703,19 @@ class RunManager:
             consequential=self.consequential,
         )
 
+    async def _checkpointed_errand(self, run: _Run) -> Errand | None:
+        """The thread's last committed errand, for the backstop notice. The checkpointer
+        commits at step boundaries (`durability="sync"`), so a node cut mid-way leaves the
+        previous step's state, never a half-written one. Any failure reading it falls back
+        to the bare notice."""
+        try:
+            snapshot = await self.graph.aget_state(run_config(run.conversation_id))
+            errand = snapshot.values.get("errand")
+            return errand if isinstance(errand, Errand) else None
+        except Exception:
+            log.warning("run %s: could not read the checkpointed errand", run.run_id)
+            return None
+
     async def _open_intent(self, run: _Run) -> bool:
         try:
             async with self.db.session() as repos:
@@ -717,9 +730,14 @@ class RunManager:
         tracer: Tracer,
         exc: BaseException,
         body: OutcomeNotice | None = None,
+        expected: bool = False,
     ) -> None:
-        """The outer handler: an error record and the INTERNAL_ERROR message, whatever broke."""
-        log.error("run %s failed", run.run_id, exc_info=exc)
+        """The outer handler: an error record and the INTERNAL_ERROR message, whatever broke.
+        `expected` is a time limit, not a bug: logged as a warning with no traceback."""
+        if expected:
+            log.warning("run %s hit the %s s backstop", run.run_id, self.limits.run_backstop_s)
+        else:
+            log.error("run %s failed", run.run_id, exc_info=exc)
         with contextlib.suppress(Exception):
             tracer.emit(
                 "error",
