@@ -169,3 +169,34 @@ async def test_after_a_forget_the_database_holds_no_plaintext_and_the_trace_read
     assert "[removed]" in str(masked.records)
     assert [r["seq"] for r in masked.records] == [r["seq"] for r in raw.records]
     assert [r["type"] for r in masked.records] == [r["type"] for r in raw.records]
+
+
+BOOK_FROM_MEMORY = "Book a plumber for my kitchen tap this week, mornings only, under ₹1,500."
+
+
+async def test_a_forget_with_a_pending_card_leaves_no_plaintext_in_approvals_or_the_read(
+    tmp_path: Path,
+) -> None:
+    """The card's brief chips restate the area from memory. The read serves `card_json`, not
+    the redacted message body, so the approval row must be scrubbed by the forget itself."""
+    async with harness(tmp_path, world(), memory_seed="memory_demo") as h:
+        await h.say(BOOK_FROM_MEMORY)
+        async with h.app.state.manager.db.session() as repos:
+            pending = [a for a in await repos.approvals.list_for_conversation(h.conversation_id)]
+        assert [a.status for a in pending] == ["pending"]
+        assert "indiranagar" in pending[0].card_json.lower()  # the repro is real
+
+        memory_id = next(
+            r["memory_id"]
+            for r in (await h.client.get("/api/memory")).json()["preferences"]
+            if r["key"] == "home_area"
+        )
+        done = await h.client.delete(f"/api/memory/{memory_id}", params={"client_action_id": "d1"})
+        assert done.status_code == 200
+
+        async with h.app.state.manager.db.session() as repos:
+            rows = await repos.approvals.list_for_conversation(h.conversation_id)
+        for row in rows:
+            assert "ndiranagar" not in (row.card_json + row.material_json).lower()
+        read = (await h.client.get(f"/api/conversations/{h.conversation_id}")).json()
+        assert "ndiranagar" not in str(read).lower()
