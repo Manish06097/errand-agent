@@ -124,7 +124,7 @@ Scope: `TimeWindowExpr` and `timewin.resolve`, `INVALIDATES` table and `invalida
 - The gate 2 budget split (architecture 13.1), applied here because `not_before`/`not_after` take `update_brief` from 984 to about 1,080 and push the tool list past its old cap: S2 3,800 with the 400-token preamble inside it, S4 600, S6 1,000, S8 2,300 as a floor, slack 200. A config test fails if the caps do not sum to 12,000, and a test renders the bound tool list and fails over S2's cap. `INVALIDATES` lists, per brief field, whether a change invalidates a pending card; M11's forget and correct reuse it.
 
 Acceptance:
-- S04, S05, S51, S60 pass; S03 also passes with `ReaskPolicy` (the guard catches it).
+- S04, S05, S51, S60, S60b, S60c pass; S03 also passes with `ReaskPolicy` (the guard catches it).
 - The cap tests pass with the widened `update_brief`, and the eval notes show every scenario's maximum estimate under 12,000.
 - `timewin` unit tests cover "this week", "next week", weekday names, "mornings", "not before 10 a.m.", week boundaries and the IST offset.
 
