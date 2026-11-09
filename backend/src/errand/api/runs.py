@@ -582,6 +582,7 @@ class RunManager:
         turn_no: int | None = None,
         client: dict[str, Any] | None = None,
     ) -> Admission:
+        await self.world.sync_clock()  # one reading for the user message and the run's cards
         now = self.clock.now()
         real_model = self.model_settings.model_mode in ("live", "record")
         deadline_s = self.limits.live_run_deadline_s if real_model else self.limits.run_deadline_s
