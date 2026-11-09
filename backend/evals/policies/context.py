@@ -13,6 +13,7 @@ real DELETE route; no product code carries a trigger.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -22,6 +23,7 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
 
+from errand.domain import aliases as product_aliases
 from errand.llm.scripted import Policy, ScriptedChatModel, ScriptedRequest
 from evals.policies import reference
 from evals.policies.common import answer, read, tool_calls
@@ -58,6 +60,33 @@ def memory_policy(request: ScriptedRequest) -> AIMessage:
         if step == 0:
             return tool_calls(request, "Show what is saved.", ("list_memories", {}))
         return answer(request, "That card shows everything I have saved about you.")
+    if "forget my home area" in low:
+        if step == 0:
+            handle = _handle_of(request, "home_area")
+            if handle is None:
+                return answer(request, "I have no saved home area to forget.")
+            return tool_calls(request, "Offer to forget it.", ("propose_forget", {"id": handle}))
+        return answer(request, "Tap the button if you want it forgotten.")
+    if step == 0 and view.known.get("area"):
+        named = product_aliases.covered_value("area", low)
+        if named is not None and named != view.known["area"].lower().split(" ")[0]:
+            # The user names another area than the one in the brief: change it, quoting them.
+            quote = next(n for n in product_aliases.aliases_of("area", named) if n in low)
+            change: dict[str, Any] = {
+                "set": {"area": named},
+                "clear": [],
+                "evidence": [{"field": "area", "quote": quote}],
+                "not_covered": None,
+            }
+            return tool_calls(request, "Change the area.", ("update_brief", change))
+    if step == 0 and "(save my budget)" in low:
+        args = {
+            "key": "budget_ceiling",
+            "scope": "service:plumber",
+            "value": "1500",
+            "quote": "under ₹1,500",
+        }
+        return tool_calls(request, "Save the budget.", ("remember", args))
     if step == 0:
         for pattern, key, scope in _REMEMBER:
             found = pattern.search(view.current)
@@ -74,13 +103,13 @@ def memory_policy(request: ScriptedRequest) -> AIMessage:
             saved is not None
             and view.known.get("area", "").lower().split(" ")[0] != saved.group("v").lower()
         ):
-            args = {
+            patch: dict[str, Any] = {
                 "set": {"area": saved.group("v").lower()},
                 "clear": [],
                 "evidence": [{"field": "area", "quote": saved.group("v")}],
                 "not_covered": None,
             }
-            return tool_calls(request, "Use it for this errand too.", ("update_brief", args))
+            return tool_calls(request, "Use it for this errand too.", ("update_brief", patch))
     memory_calls = {"remember", "list_memories"}
     if step >= 1 and view.loop and view.loop[-1][0] in memory_calls and _only_a_preference(view):
         return answer(request, "Saved. I'll use that from now on.")
@@ -125,6 +154,22 @@ def _drop_carried(message: HumanMessage, names: set[str]) -> HumanMessage:
         if text != "":
             out.append(block)
     return HumanMessage(content=out)
+
+
+def _handle_of(request: ScriptedRequest, key: str) -> str | None:
+    """The id of the saved row for `key`, read from the <memory> block like a model would."""
+    for message in request.messages:
+        if not isinstance(message, HumanMessage):
+            continue
+        for block in message.content if isinstance(message.content, list) else [message.content]:
+            text = block.get("text") if isinstance(block, dict) else block
+            found = re.search(r"<memory>\n(.*?)\n</memory>", str(text), re.S)
+            if found is None:
+                continue
+            for item in json.loads(found.group(1)):
+                if key in item:
+                    return str(item["id"])
+    return None
 
 
 def _only_a_preference(view: Any) -> bool:

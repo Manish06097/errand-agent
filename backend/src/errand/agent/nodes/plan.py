@@ -57,7 +57,7 @@ from errand.agent.changes.validate import check_change_proposal
 from errand.agent.deps import RunDeps
 from errand.agent.memory_fill import apply_memory
 from errand.agent.memory_prefill import apply_service_prefill
-from errand.agent.memory_tools import MEMORY_TOOL_NAMES, MemoryTools
+from errand.agent.memory_tools import MEMORY_TOOL_NAMES, MemoryTools, offer_updates
 from errand.agent.planner_tools import (
     ASK_OPTION_MAX_CHARS,
     ASK_QUESTION_MAX_CHARS,
@@ -738,6 +738,8 @@ class PlannerLoop:
         )
         before = self.errand
         errand = self.errand.model_copy(update={"brief": outcome.brief})
+        if self.deps.memory is not None:
+            await offer_updates(self, before.brief, outcome.brief, quotes)
         applied = await invalidation.apply(self.deps, errand, before.brief, outcome)
         errand = applied.errand
         self.card_changes += applied.changes

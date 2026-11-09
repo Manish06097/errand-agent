@@ -28,6 +28,7 @@ from errand.domain.messages import (
     MemoryListCard,
     MemoryOfferChip,
     MemorySavedChip,
+    MemoryUpdateChip,
     MessageBody,
 )
 from errand.memory.service import MemoryRefused
@@ -139,7 +140,7 @@ class MemoryTools:
         self.loop = loop
         self.deps = loop.deps
 
-    async def _chip(self, body: MessageBody) -> None:
+    async def chip(self, body: MessageBody) -> None:
         self.deps.chip_seq += 1
         await post_chip(self.deps, body, turn_no=self.loop.inbound.turn_no, seq=self.deps.chip_seq)
 
@@ -184,7 +185,7 @@ class MemoryTools:
             status=row["status"],
             value_hash=deps.memory.hash_value(row["value"]),
         )
-        await self._chip(MemorySavedChip(memory_id=row["memory_id"]))
+        await self.chip(MemorySavedChip(memory_id=row["memory_id"]))
         return views.render({"ok": True, "saved": parsed.key}), False
 
     async def _refused(self, parsed: RememberArgs, exc: MemoryRefused) -> tuple[str, bool]:
@@ -237,7 +238,7 @@ class MemoryTools:
         located = locate_quote(loop.inbound.text, parsed.quote)
         if located is None:
             return False
-        await self._chip(
+        await self.chip(
             MemoryOfferChip(
                 key=parsed.key,
                 scope=parsed.scope,
@@ -260,7 +261,7 @@ class MemoryTools:
             memory_ids=[r.memory_id for r in rows if r.status == "active"],
             suggestion_ids=[r.memory_id for r in rows if r.status == "pending_confirmation"],
         )
-        await self._chip(card)
+        await self.chip(card)
         return SHOWN, False
 
     async def propose_forget(self, args: Mapping[str, Any]) -> tuple[str, bool]:
@@ -277,5 +278,44 @@ class MemoryTools:
                 "unknown_memory",
                 detail="use an id shown in <memory>; nothing else can be forgotten here",
             ), True
-        await self._chip(MemoryForgetChip(memory_id=row.memory_id))
+        await self.chip(MemoryForgetChip(memory_id=row.memory_id))
         return OFFERED, False
+
+
+# brief field -> (memory key, scope of that key for a brief's service)
+_UPDATABLE = {"area": ("home_area", False), "budget_max_inr": ("budget_ceiling", True)}
+
+
+async def offer_updates(
+    loop: PlannerLoop, old: Any, new: Any, quotes: Mapping[str, list[str]]
+) -> None:
+    """A chat correction of a memory-filled field changes this errand only; a chip offers
+    "Update your saved ...? [Update] [Just this time]" (S33). The chip holds the span of
+    the user's message, never the value, so a later forget leaves no copy in it."""
+    from errand.memory.evidence import locate_quote
+
+    for name, (key, service_scoped) in _UPDATABLE.items():
+        before, after = getattr(old, name, None), getattr(new, name, None)
+        if before is None or after is None or before is after:
+            continue
+        if before.prov.source != "memory" or before.prov.memory_id is None:
+            continue
+        if after.prov.source != "user_msg" or before.value == after.value:
+            continue
+        spans = quotes.get(name) or []
+        located = locate_quote(loop.inbound.text, spans[0]) if spans else None
+        if located is None:
+            continue
+        scope = "global"
+        if service_scoped and new.service is not None:
+            scope = f"service:{new.service.value.value}"
+        await loop.memory_tools.chip(
+            MemoryUpdateChip(
+                memory_id=before.prov.memory_id,
+                key=key,
+                scope=scope,
+                source_message_id=loop.inbound.message_id,
+                start=located.start,
+                end=located.end,
+            )
+        )
