@@ -17,6 +17,8 @@ steps:
   - expect_planner: {called: [update_brief, remember, search_providers]}
   - expect_trace: {guard.evidence_rejected: 2}
   - expect_brief: {version: 1, values: {budget_max_inr: 1500}}
+  - expect_memory: {key: latest_time, scope: global, status: active, count: 0}
+  - expect_chip: {type: memory_offer, absent: true}
   - expect_no_side_effects: {}
 expect:
   invariants: [default]

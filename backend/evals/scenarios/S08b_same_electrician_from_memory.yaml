@@ -1,0 +1,29 @@
+id: S08b_same_electrician_from_memory
+title: 'S08 with the bound and the budget from memory: "the same electrician as last time" with no time and no budget; E4 is admitted as pinned, not_before 10:00 comes from the electrician earliest_time (the global 08:00 is shadowed), the budget is not asked, the only question is the day, no slot before 10:00 is proposed, and the card shows the held quote beside the last visit'
+category: [history, memory, booking_correctness]
+seed: 8
+model: scripted:memory
+memory_seed: memory_demo
+world:
+  book: {forced: [success]}
+  quote_drift: {mode: on_hold, providers: {E4: 50}}
+user:
+  persona: cooperative
+  goal: {window: "tomorrow"}
+steps:
+  - say: "Book the same electrician as last time."
+    gives: [provider_pref]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [window]
+  - expect_world: {search_providers: 0, hold_slot: 0}
+  - answer: {}
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending, price_is_held_quote: true, slot_not_before_hour: 10, price_delta_inr: 50, lines_include: ["Last visit", "search price"]}
+  - expect_context: {excluded: {m-02: "shadowed:scope"}, from_call: 1}
+  - expect_world: {search_providers: 0, hold_slot: 1}
+  - expect_planner: {called: ["get_provider:E4", "propose_booking:E4"]}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_booking: {count: 1, price_is_held_quote: true}
+expect:
+  invariants: [default]
