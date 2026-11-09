@@ -52,6 +52,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
+from errand.api.memory_routes import mount as mount_memory_routes
 from errand.api.runs import (
     Answer,
     ClientMsgIdReused,
@@ -70,6 +71,7 @@ from errand.config import (
     ApprovalSettings,
     LangfuseKeys,
     LimitSettings,
+    MemorySettings,
     ModelSettings,
     PathSettings,
     TraceSettings,
@@ -77,6 +79,8 @@ from errand.config import (
 from errand.domain.messages import MessageBody
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
+from errand.memory.hmac_key import load_or_create
+from errand.memory.service import MemoryService
 from errand.store.agent_db import AgentDB
 from errand.store.repos.users import User
 from errand.tools.runtime import WorldAccess, open_in_process, over_http
@@ -336,12 +340,18 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             )
             app.state.manager = manager
             app.state.user_id = user_id
+            app.state.memory = MemoryService(
+                db,
+                lambda: to_ms(manager.clock.now()),
+                load_or_create(data_dir / MemorySettings().hmac_key_file),
+            )
             try:
                 yield
             finally:
                 await manager.shutdown()
 
     app = FastAPI(title=SERVICE, lifespan=lifespan)
+    mount_memory_routes(app)
 
     @app.middleware("http")
     async def agent_clock_header(

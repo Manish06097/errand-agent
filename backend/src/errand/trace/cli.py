@@ -2,9 +2,11 @@
 
     errand-trace show <run_id | path.jsonl> [--data-dir DIR]
 
-`show` prints a timeline: seq, milliseconds since the first record, the record type
-indented by span depth, and a one-line summary. A truncated last line is reported on
-stderr and skipped. `export`, `excerpt` and `stats` arrive in later milestones.
+`show` reads through the masked reader, so a value the user has forgotten shows as
+"[removed]" even if the raw file still holds it. It prints a timeline: seq, milliseconds
+since the first record, the record type indented by span depth, and a one-line summary.
+A truncated last line is reported on stderr and skipped.
+`export`, `excerpt` and `stats` arrive in later milestones.
 """
 
 from __future__ import annotations
@@ -17,7 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from errand.config import PathSettings
-from errand.trace.reader import TraceFormatError, read_trace
+from errand.trace.masked import masker_for
+from errand.trace.reader import TraceFormatError, read_trace_masked
 
 
 def resolve(target: str, traces_dir: Path) -> Path | None:
@@ -152,7 +155,8 @@ def show(target: str, data_dir: Path) -> int:
         )
         return 2
     try:
-        trace = read_trace(path)
+        # A forgotten value never leaves the process unmasked (gate 2 decision 14).
+        trace = read_trace_masked(path, masker_for(data_dir))
     except TraceFormatError as exc:
         print(f"errand-trace: {exc}", file=sys.stderr)
         return 1

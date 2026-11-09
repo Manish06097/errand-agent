@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from errand.trace.masked import Masker
+
 
 class TraceFormatError(ValueError):
     pass
@@ -41,3 +43,14 @@ def read_trace(path: Path) -> TraceFile:
             raise TraceFormatError(f"{path}:{lineno}: a record must be a JSON object")
         records.append(record)
     return TraceFile(path, records, tail or None)
+
+
+def read_trace_masked(path: Path, masker: Masker) -> TraceFile:
+    """`read_trace` with every forgotten value and redacted span masked (gate 2 decision 14).
+
+    Every user-facing read goes through here: `errand-trace show`, the trace panel,
+    /runs/[id] and SSE replay. The evals call `read_trace` on purpose, so INV-05 and INV-20
+    see a leak instead of a masked copy of it. The file itself is never rewritten.
+    """
+    raw = read_trace(path)
+    return TraceFile(raw.path, [masker.record(r) for r in raw.records], raw.truncated_tail)
