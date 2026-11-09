@@ -43,8 +43,24 @@ test("a double click books once, and a second decision POST that skips the UI bo
   const approvalId = card.approval_id as string;
   const fingerprint = card.body.fingerprint as string;
 
-  // A real double click: two clicks on the button, whatever the UI does with the second.
-  await page.getByTestId("approve-button").dblclick();
+  // A real double click: two clicks on the button, whatever the UI does with the second,
+  // while a third decision (same fingerprint, fresh client_action_id) is fired from the
+  // test at the same moment, before the run has finished. That is the race the server
+  // guard exists for: the answer is already_approved (200), accepted (202, the racer won
+  // and started the run) or run_in_progress (409), and never a second booking.
+  const [, racer] = await Promise.all([
+    page.getByTestId("approve-button").dblclick(),
+    request.post(`/api/approvals/${approvalId}/decision`, {
+      data: { decision: "approve", fingerprint, client_action_id: `ca_race_${Date.now()}` },
+    }),
+  ]);
+  expect([200, 202, 409]).toContain(racer.status());
+  if (racer.status() === 200) {
+    expect(((await racer.json()) as { status: string }).status).toBe("already_approved");
+  }
+  if (racer.status() === 409) {
+    expect(((await racer.json()) as { error: string }).error).toBe("run_in_progress");
+  }
   await expect(page.getByTestId("verified-badge")).toBeVisible();
   await waitIdle(request, id);
 

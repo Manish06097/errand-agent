@@ -20,7 +20,9 @@ const BADGE_TEXT: Record<string, string> = {
 function Candidate({ candidate, live }: { candidate: CandidateOption; live: boolean }) {
   const chat = useChatContext();
   const [pending, setPending] = useState<string | null>(null);
-  const flagged = candidate.injection_flags > 0 || candidate.notice;
+  // The warning row exists only when the server sent its text. The server always sends
+  // one with injection_flags > 0 (agent/templates.py: notice=hidden_reviews_notice(flags)),
+  // and the client writes none of its own.
   return (
     <li
       data-testid="candidate"
@@ -41,7 +43,7 @@ function Candidate({ candidate, live }: { candidate: CandidateOption; live: bool
             </Badge>
           ))}
       </div>
-      {flagged && (
+      {candidate.notice && (
         <p
           data-testid="injection-notice"
           className="mt-1 flex items-start gap-1 text-xs text-amber-800 dark:text-amber-300"

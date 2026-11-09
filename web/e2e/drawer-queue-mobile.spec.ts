@@ -1,5 +1,15 @@
 import { expect, test } from "@playwright/test";
-import { OPENER, bookCalls, createdBookings, loadWorld, newErrand, say, waitIdle } from "./helpers";
+import {
+  OPENER,
+  bookCalls,
+  conversation,
+  createdBookings,
+  latestPendingCard,
+  loadWorld,
+  newErrand,
+  say,
+  waitIdle,
+} from "./helpers";
 
 test("the dev drawer moves the clock and the hold countdown switches to Refresh hold", async ({
   page,
@@ -21,7 +31,7 @@ test("the dev drawer moves the clock and the hold countdown switches to Refresh 
   await expect(page.getByTestId("approve-button")).toBeEnabled();
 });
 
-test("next book times out after success: the world books, the user is told it is pending", async ({
+test("next book times out after success: the world books, the status check finds it, the card is verified with one book call", async ({
   page,
   request,
 }) => {
@@ -35,14 +45,38 @@ test("next book times out after success: the world books, the user is told it is
   await expect(page.getByTestId("dev-message")).toContainText("done");
   await page.keyboard.press("Escape");
 
+  const id = new URL(page.url()).pathname.split("/").pop() as string;
+  const card = await latestPendingCard(request, id);
   await page.getByTestId("approve-button").click();
   // While the booking call is hanging, the composer stays enabled and a message sent now
   // is shown as queued, with its own stamp, to be posted after the run finishes.
   await expect(page.getByTestId("working")).toBeVisible();
+  const hangingRun = (await conversation(request, id)).active_run_id;
+  expect(hangingRun).toBeTruthy();
+  const posted = page.waitForRequest(
+    (r) => r.method() === "POST" && r.url().endsWith(`/api/conversations/${id}/messages`),
+  );
   await say(page, "thanks");
   await expect(page.getByTestId("queued-message")).toContainText("thanks");
 
   await expect(page.getByTestId("queued-message")).toHaveCount(0, { timeout: 45_000 });
+  // The queued message kept what it had at Send: the agent-clock stamp is earlier than the
+  // end of the run it waited for (a stamp taken at post time would be later), and the card
+  // it saw is that approval or nothing (it had already been decided).
+  const sent = (await posted).postDataJSON() as {
+    client_composed_at: string;
+    visible_card: { approval_id: string; fingerprint: string } | null;
+  };
+  const trace = (await (await request.get(`/api/runs/${hangingRun}/trace`)).json()) as {
+    records: { type: string; ts: string }[];
+  };
+  const runEnd = trace.records.find((r) => r.type === "run.end");
+  expect(runEnd).toBeTruthy();
+  expect(Date.parse(sent.client_composed_at)).toBeLessThan(Date.parse(runEnd?.ts as string));
+  if (sent.visible_card !== null) {
+    expect(sent.visible_card.approval_id).toBe(card.approval_id);
+    expect(sent.visible_card.fingerprint).toBe(card.body.fingerprint);
+  }
   await expect(page.getByTestId("verified-badge")).toBeVisible();
   expect(await bookCalls(request)).toBe(1);
   expect(await createdBookings(request)).toHaveLength(1);
