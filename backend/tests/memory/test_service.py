@@ -280,6 +280,34 @@ async def test_undoing_a_correction_brings_the_older_value_back(env: Env) -> Non
     assert (await env.row("m-02")).status == "rejected"
 
 
+async def test_undoing_a_correction_clears_the_superseded_redaction_it_left_behind(
+    env: Env,
+) -> None:
+    """Review round 1: the restored row was still shown to the model as
+    [updated preference] because the redaction the undone save put on its span stayed."""
+    from errand.memory import redaction
+
+    await env.remember("home_area", "global", "indiranagar", "I live in Indiranagar")
+    await env.remember("home_area", "global", "koramangala", "I moved to Koramangala")
+    async with env.db.session() as repos:
+        rows = await repos.memories.redactions_for_message("msg_0001")
+        text = (await repos.messages.get("msg_0001")).body["text"]  # type: ignore[union-attr]
+    assert [(r.memory_id, r.kind) for r in rows] == [("m-01", "superseded")]
+    assert "[updated preference]" in redaction.apply_model_view(
+        text, [(r.start, r.end, r.kind) for r in rows]
+    )
+
+    await env.service.undo(user_id=USER, memory_id="m-02", client_action_id="u1")
+    async with env.db.session() as repos:
+        assert await repos.memories.redactions_for_message("msg_0001") == []
+    # a correction that is not undone keeps its redaction, and a later undo of the first
+    # save (which has nothing to restore) does not touch another row's
+    await env.remember("home_area", "global", "jayanagar", "I moved to Jayanagar")
+    async with env.db.session() as repos:
+        kept = await repos.memories.redactions_for_message("msg_0001")
+    assert [(r.memory_id, r.kind) for r in kept] == [("m-01", "superseded")]
+
+
 async def test_remember_from_a_click_is_explicit_with_ui_evidence_and_idempotent(
     env: Env,
 ) -> None:
