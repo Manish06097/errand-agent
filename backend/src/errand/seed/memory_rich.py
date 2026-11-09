@@ -1,10 +1,11 @@
 """memory_rich_v1: the 60-row canary seed (architecture 13.5, gate 2 decisions 23 and 24).
 
-20 active explicit, 4 active inferred and confirmed, 8 active but irrelevant (pest control
+20 active explicit, 3 active inferred and confirmed, 8 active but irrelevant (pest control
 and painting scopes, plus `contact_window`, which feeds follow-ups only), 8 superseded
-(one three-version `home_area` chain), 7 forgotten, 9 inferred pending, 4 rejected (2
-dismissed, 1 undone, 1 `superseded_by_explicit`). Also 240 messages over 6 sessions in
-the demo thread, 6 archived errands, 30 upcoming bookings and the E4 and A2 bookings.
+(one three-version `home_area` chain), 7 forgotten, 9 inferred pending, 5 rejected (2
+dismissed, 1 undone, 1 `superseded_by_explicit`, 1 `superseded_by_keep`). Also 240 messages
+over 6 sessions in the demo thread, 6 archived errands, 30 upcoming bookings and the E4
+and A2 bookings.
 
 Conflicts on purpose: the `home_area` chain; a global and an electrician `earliest_time`;
 an explicit plumber `avoid_provider` P7 with two past P7 bookings, so the rule must not
@@ -180,9 +181,14 @@ IRRELEVANT: tuple[tuple[str, str, Any, str], ...] = (
     ),
 )
 
-PLUMBERS_PENDING = ("P2", "P9", "P11")
-ELECTRICIANS_PENDING = ("E2", "E5", "E10")
-AC_PENDING = ("A2", "A3", "A4")
+# A Keep settles its (key, scope) and a suggestion is never made beside an active row
+# (12.4), so a (key, scope) is either answered or pending, never both. The rule only
+# makes four of them: latest_time (global) and preferred_provider in three services.
+# Three are answered (kept) and the fourth, the electrician's, holds the 9 pending rows.
+PLUMBER_KEPT, PLUMBER_DISMISSED, PLUMBER_SETTLED_BY_KEEP = "P1", "P10", "P11"
+ELECTRICIAN_DISMISSED = "E9"
+ELECTRICIANS_PENDING = ("E2", "E5", "E6", "E7", "E8", "E10", "E11", "E12", "E13")
+AC_KEPT, AC_AVOIDED = "A1", "A5"
 
 
 class Rich:
@@ -280,17 +286,17 @@ class Rich:
         # booking history for the rules (past bookings, two per provider)
         plumbers = [
             b
-            for p in ("P1", *PLUMBERS_PENDING, "P10", "P7")
+            for p in (PLUMBER_KEPT, PLUMBER_SETTLED_BY_KEEP, PLUMBER_DISMISSED, "P7")
             for b in await self.pair(p, "plumber", 2 + len(self.ids))
         ]
         electricians = [
             b
-            for p in ("E1", *ELECTRICIANS_PENDING, "E9")
+            for p in (*ELECTRICIANS_PENDING, ELECTRICIAN_DISMISSED)
             for b in await self.pair(p, "electrician", 3 + len(self.ids))
         ]
         acs = [
             b
-            for p in ("A1", *AC_PENDING, "A5")
+            for p in (AC_KEPT, AC_AVOIDED, "A2")  # A2: the booking "move it to Saturday" is about
             for b in await self.pair(p, "ac_servicing", 4 + len(self.ids))
         ]
         e4 = await self.book("E4", "electrician", 40, 10)
@@ -309,9 +315,13 @@ class Rich:
 
         # suggestions, in the order that leaves each slot's mix as the manifest says
         for service, providers, history in (
-            ("plumber", ("P1", *PLUMBERS_PENDING, "P10"), plumbers),
-            ("electrician", ("E1", *ELECTRICIANS_PENDING, "E9"), electricians),
-            ("ac_servicing", ("A1", *AC_PENDING, "A5"), acs),
+            (
+                "plumber",
+                (PLUMBER_KEPT, PLUMBER_SETTLED_BY_KEEP, PLUMBER_DISMISSED),
+                plumbers,
+            ),
+            ("electrician", (*ELECTRICIANS_PENDING, ELECTRICIAN_DISMISSED), electricians),
+            ("ac_servicing", (AC_KEPT, AC_AVOIDED), acs),
         ):
             await self.rule_rows(service, providers, history)
         latest = inference.latest_time_before_noon(mornings, IST)
@@ -323,24 +333,24 @@ class Rich:
         assert suggested is not None and suggested["memory"] is not None
         self.ids["latest:12"] = str(suggested["memory"]["memory_id"])
 
-        # what the user does with them
-        for label in ("plumber:P1", "electrician:E1", "ac_servicing:A1", "latest:12"):
-            await s.service.keep(
-                user_id=USER_ID, memory_id=self.ids[label], client_action_id=s.action("keep")
-            )
-        for label in ("plumber:P10", "electrician:E9"):
+        # what the user does with them: dismiss first, then the explicit avoid on A5 rejects
+        # the pending A5 suggestion (superseded_by_explicit), and last the Keeps, each on a
+        # (key, scope) whose other pending rows it settles (P11 -> superseded_by_keep)
+        for label in (f"plumber:{PLUMBER_DISMISSED}", f"electrician:{ELECTRICIAN_DISMISSED}"):
             await s.service.dismiss(
                 user_id=USER_ID, memory_id=self.ids[label], client_action_id=s.action("dismiss")
             )
-
-        # the explicit avoid on A5 rejects the pending A5 suggestion (superseded_by_explicit)
         await self.state(
             "avoid_a5",
             "avoid_provider",
             "service:ac_servicing",
-            ["A5"],
+            [AC_AVOIDED],
             "I never want A5 for AC servicing",
         )
+        for label in (f"plumber:{PLUMBER_KEPT}", f"ac_servicing:{AC_KEPT}", "latest:12"):
+            await s.service.keep(
+                user_id=USER_ID, memory_id=self.ids[label], client_action_id=s.action("keep")
+            )
 
         for index, (key, scope, value, quote) in enumerate(SINGLES):
             if (key, scope) == ("avoid_provider", "service:plumber"):

@@ -154,7 +154,7 @@ def test_pending_and_dismissed_rows_are_typed_with_booking_evidence_only(
 ) -> None:
     path, manifest, _ = rich
     inferred_ids = [r["id"] for r in manifest["rows"] if r["kind"] == "inferred"]
-    assert len(inferred_ids) == 15
+    assert len(inferred_ids) == 16
     for memory_id in inferred_ids:
         (evidence,) = _query(
             path, "SELECT evidence_json FROM memories WHERE memory_id = ?", memory_id
