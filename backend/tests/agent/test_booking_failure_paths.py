@@ -343,3 +343,34 @@ def test_status_unavailable_promises_no_time() -> None:
         PendingCheck(approval_id="a", intent_id="i", reason="status_unavailable"), IST
     )
     assert "know for sure by" not in text and "update you here" in text
+
+
+async def test_every_book_goes_out_after_its_write_ahead_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 4 and step 7: the attempt is `in_flight` with its call counted, and for the
+    retry `same_key_retries` is bumped, in a transaction committed before `book` is sent.
+    Read from a second connection at the moment of the call, so only committed rows show."""
+    import sqlite3
+
+    seen: list[tuple[int, int, str, int]] = []
+    real = executor.ConsequentialClient.book
+
+    async def book(self_: Any, token: Any, **kw: Any) -> Any:
+        conn = sqlite3.connect(f"file:{tmp_path / 'agent.sqlite'}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT a.calls, i.same_key_retries, a.state, a.status_checks "
+                "FROM intent_attempts a JOIN action_intents i USING (intent_id)"
+            ).fetchone()
+        finally:
+            conn.close()
+        seen.append(tuple(row))
+        return await real(self_, token, **kw)
+
+    monkeypatch.setattr(executor.ConsequentialClient, "book", book)
+    async with harness(tmp_path, world("timeout_not_booked")) as h:
+        view = await approve(h)
+    assert view.outcome == "BOOKED_VERIFIED"
+    # first send: calls 1, no retry yet; the retry: calls 2, one retry, the first pass counted
+    assert seen == [(1, 0, "in_flight", 0), (2, 1, "in_flight", 1)]
