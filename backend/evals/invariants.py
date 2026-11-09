@@ -65,6 +65,7 @@ class Records:
     world_bookings: list[dict[str, Any]] = field(default_factory=list)
     world_holds: dict[str, dict[str, Any]] = field(default_factory=dict)
     world_services: dict[str, str] = field(default_factory=dict)
+    world_names: dict[str, str] = field(default_factory=dict)  # provider_id -> name
     world_user: str = "u_demo"
 
     def run_records(self) -> Iterable[tuple[dict[str, Any], list[dict[str, Any]]]]:
@@ -107,6 +108,7 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
         world_bookings=bookings,
         world_holds=holds,
         world_services=services,
+        world_names=_provider_names(root / "world.sqlite"),
         world_user=user,
     )
 
@@ -128,6 +130,16 @@ def _world_rows(
     finally:
         conn.close()
     return bookings, holds, services, str(user)
+
+
+def _provider_names(world_db: Path) -> dict[str, str]:
+    conn = sqlite3.connect(f"file:{world_db}?mode=ro", uri=True)
+    try:
+        return {
+            str(r[0]): str(r[1]) for r in conn.execute("SELECT provider_id, name FROM providers")
+        }
+    finally:
+        conn.close()
 
 
 def _catalog_reviews(world_db: Path) -> list[str]:
