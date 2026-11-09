@@ -57,7 +57,6 @@ from errand.tools.errors import ToolError
 from errand.tools.gateway import Caller
 from errand.world.contracts import HoldSlotOut, ListBookingsOut, hold_is_live
 
-REPLANS_PER_RUN = 1
 _REFUSED_TEXT = {
     "no_shortlist": "That option list is out of date, so I didn't hold anything. "
     "Ask me to search again.",
@@ -201,8 +200,17 @@ class _Preparer:
         was = self.errand.phase
         self._move(Phase.QUOTING, "proposal")
         handle = verdict.handle
-        hold = await self._hold(handle)
-        label = slot_label(handle.slot, deps.tz)
+        # The slot as the provider holds it. After execute's re-hold it is the window the
+        # provider returned, which may differ from the shortlist's (S50).
+        held_slot = handle.slot
+        requote = self.state.result if isinstance(self.state.result, Requote) else None
+        if requote is not None and requote.hold is not None:
+            async with deps.db.session() as repos:
+                hold = await repos.holds.get_by_hold_id(requote.hold.hold_id)
+            held_slot = requote.hold.slot
+        else:
+            hold = await self._hold(handle)
+        label = slot_label(held_slot, deps.tz)
         if hold is None:
             await self._not_approvable(was, "hold_failed")
             return self._replan_or(
@@ -238,13 +246,13 @@ class _Preparer:
                     budget_inr=budget.value,
                 ),
             )
-        nearby = nearby_bookings(listed.bookings, verdict.service, handle.slot.start)
+        nearby = nearby_bookings(listed.bookings, verdict.service, held_slot.start)
         material = BookMaterial(
             user_id=deps.user_id,
             provider_id=provider_id,
             service=verdict.service,
-            slot_start=ist_seconds(handle.slot.start),
-            slot_end=ist_seconds(handle.slot.end),
+            slot_start=ist_seconds(held_slot.start),
+            slot_end=ist_seconds(held_slot.end),
             quoted_price_inr=hold.quoted_price_inr,
             same_service_nearby=[b.booking_id for b in nearby],
         )
@@ -258,8 +266,9 @@ class _Preparer:
             fingerprint=fp,
             material=material,
             candidate=verdict.candidate,
-            slot=handle.slot,
+            slot=held_slot,
             search_price_inr=handle.search_price_inr,
+            hold_id=hold.hold_id,
             hold_expires_at=from_ms(hold.expires_at),
             expires_at=expires,
             nearby=nearby,
@@ -311,15 +320,16 @@ class _Preparer:
                     hold_record_id=hold.hold_record_id,
                     hold_id=hold.hold_id,
                     provider_id=provider_id,
-                    slot=handle.slot,
+                    slot=held_slot,
                     search_price_inr=handle.search_price_inr,
                     quoted_price_inr=hold.quoted_price_inr,
                     expires_at=from_ms(hold.expires_at),
                 ),
             }
         )
-        replaced = self.state.result.reason if isinstance(self.state.result, Requote) else None
-        return CardReady(approval_id=approval_id, replaced_reason=replaced)
+        replaced = requote.reason if requote is not None else None
+        detail = requote.detail if requote is not None else None
+        return CardReady(approval_id=approval_id, replaced_reason=replaced, replaced_detail=detail)
 
     async def _not_approvable(self, was: Phase, reason: str) -> None:
         """No new card: back to where the errand was, without leaving a card behind.
@@ -342,7 +352,10 @@ class _Preparer:
     def _replan_or(self, note: SystemNote, otherwise: StepResult) -> StepResult:
         """Back to plan once per run, and only when a user message started it."""
         deps = self.deps
-        if isinstance(self.state.inbound, UserMessage) and deps.counters.replans < REPLANS_PER_RUN:
+        if (
+            isinstance(self.state.inbound, UserMessage)
+            and deps.counters.replans < deps.limits.replans_per_run
+        ):
             deps.counters.replans += 1
             self.notes.append(note)
             return Replan(note=note.kind)  # type: ignore[arg-type]

@@ -179,7 +179,9 @@ class _CassetteWriter:
                 "request": scrub(canonical),
                 "response": scrub(message_to_dict(message)),
             },
-            ensure_ascii=False,
+            # ASCII only: the decoded data is identical, and a model that writes U+2014
+            # cannot put the character into a committed file (BUG-M7-2).
+            ensure_ascii=True,
             separators=(",", ":"),
         )
         with self._lock, self.path.open("a", encoding="utf-8") as f:

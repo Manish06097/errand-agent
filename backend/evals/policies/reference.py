@@ -19,7 +19,10 @@ Booking moves (M4), still only from what the request shows:
   that reached it as a message) gets "tap the button", because it cannot approve;
 - an app note that the held quote is over budget makes it propose the next candidate
   within budget, or say none fits;
-- "book it" after a verified booking is answered from the last-booking line.
+- "book it" after a verified booking is answered from the last-booking line;
+- an app note that the slot was just taken (M5, after a refused booking) makes it search
+  again and present the options, never propose on its own: the next booking needs the
+  user's choice and a new approval.
 """
 
 from __future__ import annotations
@@ -250,6 +253,8 @@ def _budget(view: TurnView) -> int | None:
 def booking_move(request: ScriptedRequest, view: TurnView) -> AIMessage | None:
     """What to do first in a turn because of the booking state, if anything."""
     text = view.current
+    if any("was just taken" in n for n in view.notes):
+        return tool_calls(request, "The slot was taken; look again.", ("search_providers", {}))
     over = next((n for n in view.notes if "above the budget" in n), None)
     if over is not None and view.shortlist_current:
         rejected = over.split("held quote for ", 1)[-1].split(" ", 1)[0]
@@ -345,7 +350,7 @@ def policy(request: ScriptedRequest) -> AIMessage:
         )
     if name == "get_provider":
         search = next(r for n, r, err in view.loop if n == "search_providers" and not err)
-        if _BOOK_INTENT.search(view.current):
+        if _BOOK_INTENT.search(view.current) and not any("was just taken" in n for n in view.notes):
             top = search["candidates"][0]
             return propose(
                 request, top["provider_id"], top["slots"][0]["ref"], "The user asked to book."

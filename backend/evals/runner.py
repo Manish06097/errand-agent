@@ -37,7 +37,7 @@ import httpx
 from errand.api.app import AppConfig, create_app, scripted_factory
 from errand.api.runs import ModelFactory
 from errand.clock import AGENT_CLOCK_HEADER, IST, ClockMode, from_ms, parse_clock_header
-from errand.config import ApprovalSettings, LimitSettings, ModelSettings
+from errand.config import ApprovalSettings, BookingSettings, LimitSettings, ModelSettings
 from errand.domain.brief import BriefField
 from errand.domain.messages import ClarifyCard
 from errand.ids import SequentialIds
@@ -54,6 +54,8 @@ from evals.dsl import (
     ApproveConcurrently,
     ClickSlot,
     Decline,
+    Dedupe,
+    ExpectBookCalls,
     ExpectBooking,
     ExpectBrief,
     ExpectCard,
@@ -67,11 +69,13 @@ from evals.dsl import (
     ExpectQuestionFor,
     ExpectRank,
     ExpectReader,
+    ExpectRows,
     ExpectSearchMatchesBrief,
     ExpectToolErrors,
     ExpectTrace,
     ExpectTranscript,
     ExpectWorld,
+    IfDedupe,
     Post,
     RefreshHold,
     Say,
@@ -85,6 +89,7 @@ from evals.dsl import (
 from evals.policies import hostile, reference
 from evals.policies import limits as limits_policies
 from evals.policies import reader as reader_doubles
+from evals.replay import ReplayRun
 from evals.simuser import SimUser, SimUserFailure
 
 APPROVAL_CARDS = ("action", "reminder")
@@ -177,8 +182,17 @@ class Harness:
         limits: LimitSettings | None = None,
         consequential: Any = None,
         clock_mode: ClockMode = "sim",
+        model_settings: ModelSettings | None = None,
+        booking: BookingSettings | None = None,
     ) -> None:
+        self.model_settings = model_settings or ModelSettings(model_mode="scripted")
         self.clock_mode = clock_mode
+        # The provider's dedupe is declared once, in the scenario's world block; the agent's
+        # `booking.provider_dedupes_keys` follows it. The retry budget comes from the
+        # environment (ERRAND_BOOKING_MAX_SAME_KEY_RETRIES), like any setting.
+        self.booking = booking or BookingSettings().model_copy(
+            update={"provider_dedupes_keys": world.world.enforce_idempotency}
+        )
         self.root = root
         self.limits = limits or LimitSettings()
         self.world_config = world
@@ -206,10 +220,11 @@ class Harness:
                 model_factory=self.model_factory,
                 reader_factory=self.reader_factory,
                 ids=SequentialIds(),
-                model_settings=ModelSettings(model_mode="scripted"),
+                model_settings=self.model_settings,
                 limits=self.limits,
                 tz=IST,
                 approval_settings=ApprovalSettings(),
+                booking_settings=self.booking,
                 consequential=self._consequential,
             )
         )
@@ -330,12 +345,29 @@ class Harness:
 
     async def records(self) -> invariants.Records:
         await self.manager.wait_idle()
-        return invariants.load_records(self.root, await self.op_log())
+        rec = invariants.load_records(self.root, await self.op_log())
+        rec.booking = {
+            "max_same_key_retries": self.booking.max_same_key_retries,
+            "provider_dedupes_keys": self.booking.provider_dedupes_keys,
+        }
+        return rec
 
     def agent_db_approval_statuses(self) -> list[str]:
         conn = sqlite3.connect(f"file:{self.root / 'agent.sqlite'}?mode=ro", uri=True)
         try:
             return [r[0] for r in conn.execute("SELECT status FROM approvals")]
+        finally:
+            conn.close()
+
+    def agent_db_rows(self, table: str, where: dict[str, str | int]) -> int:
+        """Rows of one of the booking-path tables matching every column in `where`."""
+        clause = " AND ".join(f"{col} = ?" for col in where) or "1"
+        conn = sqlite3.connect(f"file:{self.root / 'agent.sqlite'}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {clause}", tuple(where.values())
+            )
+            return int(row.fetchone()[0])
         finally:
             conn.close()
 
@@ -359,6 +391,8 @@ async def harness(
     limits: LimitSettings | None = None,
     consequential: Any = None,
     clock_mode: ClockMode = "sim",
+    model_settings: ModelSettings | None = None,
+    booking: BookingSettings | None = None,
 ) -> AsyncIterator[Harness]:
     async with Harness(
         root,
@@ -370,6 +404,8 @@ async def harness(
         limits,
         consequential,
         clock_mode,
+        model_settings,
+        booking,
     ) as h:
         yield h
 
@@ -414,7 +450,18 @@ def expected_search_args(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def describe(step: Step) -> str | None:
+def describe(step: Step, mode: Dedupe = "on") -> str | None:
+    if isinstance(step, IfDedupe):
+        parts = [d for s in step.if_dedupe.get(mode, []) if (d := describe(s, mode))]
+        return "; ".join(parts) or None
+    if isinstance(step, ExpectBookCalls):
+        spec = step.expect_book_calls.model_dump(exclude_none=True)
+        return "book " + ", ".join(f"{k}={v}" for k, v in spec.items())
+    if isinstance(step, ExpectRows):
+        return "; ".join(
+            f"{r.table} {','.join(f'{k}={v}' for k, v in r.where.items())}: {r.count}"
+            for r in step.expect_rows
+        )
     if isinstance(step, ExpectOutcome):
         return step.expect_outcome.value
     if isinstance(step, ExpectQuestionFor):
@@ -435,8 +482,8 @@ def describe(step: Step) -> str | None:
         names = f" naming [{', '.join(f.value for f in step.names)}]" if step.names else ""
         return f"notice with {step.expect_notice}{names}"
     if isinstance(step, Post):
-        mode = "concurrently" if step.post.concurrent else "in sequence"
-        return f"same client_msg_id x{step.post.times} {mode}: 1 run, 1 message, 1 run.start"
+        how = "concurrently" if step.post.concurrent else "in sequence"
+        return f"same client_msg_id x{step.post.times} {how}: 1 run, 1 message, 1 run.start"
     if isinstance(step, Approve):
         a = step.approve
         what = "approve" + (" (stale fingerprint)" if a.fingerprint == "stale" else "")
@@ -556,8 +603,11 @@ class ClientState:
 
 
 class Runner:
-    def __init__(self, scenario: Scenario, h: Harness, policy: Policy | None = None) -> None:
+    def __init__(
+        self, scenario: Scenario, h: Harness, policy: Policy | None = None, mode: Dedupe = "on"
+    ) -> None:
         self.scenario = scenario
+        self.mode = mode
         self.h = h
         self.policy = policy or PLANNERS[scenario.model]
         self.user = SimUser(scenario.user.persona, dict(scenario.user.goal))
@@ -889,6 +939,10 @@ class Runner:
             self.user.receive(card)
 
     async def step(self, step: Step) -> None:
+        if isinstance(step, IfDedupe):
+            for inner in step.if_dedupe.get(self.mode, []):
+                await self.step(inner)
+            return
         if isinstance(step, Say | Answer | Post):
             self.inputs.append(step)
         if isinstance(step, Say):
@@ -1012,6 +1066,15 @@ class Runner:
             await self._expect_limit(step)
         elif isinstance(step, ExpectNotInRequests):
             await self._expect_not_in_requests(step)
+        elif isinstance(step, ExpectBookCalls):
+            await self._expect_book_calls(step)
+        elif isinstance(step, ExpectRows):
+            for want_rows in step.expect_rows:
+                n = self.h.agent_db_rows(want_rows.table, want_rows.where)
+                self.expect(
+                    n == want_rows.count,
+                    f"{want_rows.table} {want_rows.where}: {n} rows, want {want_rows.count}",
+                )
         else:  # pragma: no cover - the DSL admits nothing else
             raise AssertionError(f"no runner for {step!r}")
 
@@ -1041,7 +1104,7 @@ class Runner:
         async with harness(
             root, twin_scenario.world_config(), self.policy, reader=self.h.reader
         ) as th:
-            runner = Runner(twin_scenario, th, self.policy)
+            runner = Runner(twin_scenario, th, self.policy, self.mode)
             await runner.run()
             shortlist = await runner._shortlist()
             twin_ops = await th.op_log()
@@ -1200,6 +1263,24 @@ class Runner:
             got = fact.get("value")
             self.expect(str(got) == str(want), f"brief {name.value}={got!r}, expected {want!r}")
 
+    async def _expect_book_calls(self, step: ExpectBookCalls) -> None:
+        spec = step.expect_book_calls
+        rec = await self.h.records()
+        rows = [r for r in rec.op_log if r["op"] == "book"]
+        agent = [
+            r for r in rec.all_records() if r["type"] == "tool.call" and r.get("tool") == "book"
+        ]
+        args = [json.loads(r["args_json"]) for r in rows]
+        got = {
+            "agent_calls": len(agent),
+            "world_rows": len(rows),
+            "keys": len({a.get("idempotency_key") for a in args}),
+            "holds": len({a.get("hold_id") for a in args}),
+            "outcomes": [r["outcome"] for r in rows],
+        }
+        for name, want in spec.model_dump(exclude_none=True).items():
+            self.expect(got[name] == want, f"book {name}: {got[name]}, want {want}")
+
     async def _post(self, step: Post) -> None:
         spec = step.post
         if spec.concurrent:
@@ -1251,7 +1332,15 @@ def _actual(
     return f"runs {' -> '.join(parts)}; world {world}; {inv}"
 
 
-def _notes(scenario: Scenario, records: invariants.Records) -> str:
+def trace_name(
+    scenario: Scenario, replay: ReplayRun | None = None, mode: Dedupe | None = None
+) -> str:
+    """The directory under evals/out that holds this row's traces: `<id>.replay` for a
+    replay row, else the dedupe-mode folder."""
+    return f"{scenario.id}.replay" if replay else trace_dir(scenario, mode)
+
+
+def _notes(scenario: Scenario, records: invariants.Records, replay: ReplayRun | None = None) -> str:
     model_calls = tool_calls = reader_calls = max_est = 0
     cost = 0.0
     for record in records.all_records():
@@ -1271,17 +1360,36 @@ def _notes(scenario: Scenario, records: invariants.Records) -> str:
         f"approvals_checked={notes.get('approvals_checked', 'not checked')}; "
         f"typed_grants_checked={notes.get('typed_grants_checked', 'not checked')}; "
         f"claims_checked={notes.get('claims_checked', 'not checked')}; "
+        f"inv03_books={notes.get('inv03_books_checked', 'not checked')}; "
+        f"inv03_resends={notes.get('inv03_resends_checked', 'not checked')}; "
+        f"inv03_liveness={notes.get('inv03_liveness_checked', 'not checked')}; "
+        f"inv03_bounds={notes.get('inv03_count_bounds_checked', 'not checked')}; "
+        "never_mind=vacuous until M6; "
+        f"attempts_checked={notes.get('attempts_checked', 'not checked')}; "
+        f"attempts_unsettled={notes.get('attempts_unsettled', 'not checked')}; "
     )
     return (
         f"model_calls={model_calls}; reader_calls={reader_calls}; tool_calls={tool_calls}; "
         f"max_est_tokens={max_est}; "
         f"cost_usd={cost:.6f}; review_texts_checked={reviews}; {checked}"
-        f"trace=backend/evals/out/{scenario.id}/"
+        f"trace=backend/evals/out/{trace_name(scenario, replay)}/"
     )
 
 
-def save_traces(scenario: Scenario, root: Path) -> None:
-    dest = Path(os.environ.get(TRACE_DIR_ENV) or OUT) / scenario.id
+def trace_dir(scenario: Scenario, mode: Dedupe | None = None) -> str:
+    """The folder under evals/out for one run: the scenario id, plus `.dedupe-off` for a
+    scenario that runs in more than one mode."""
+    label = scenario.label(mode or scenario.modes()[0])
+    return label.replace("[dedupe=", ".dedupe-").rstrip("]")
+
+
+def save_traces(
+    scenario: Scenario,
+    root: Path,
+    replay: ReplayRun | None = None,
+    mode: Dedupe | None = None,
+) -> None:
+    dest = Path(os.environ.get(TRACE_DIR_ENV) or OUT) / trace_name(scenario, replay, mode)
     if dest.exists():
         shutil.rmtree(dest)
     if (root / "traces").exists():
@@ -1293,8 +1401,14 @@ async def run_scenario(
     root: Path,
     policy: Policy | None = None,
     on_records: Callable[[invariants.Records], None] | None = None,
+    replay: ReplayRun | None = None,
+    mode: Dedupe | None = None,
 ) -> ScenarioResult:
-    expectations = [d for d in (describe(s) for s in scenario.steps) if d]
+    """One run of `scenario` in one dedupe mode (the first it declares, unless given),
+    scripted or, with `replay`, on a cassette."""
+    mode = mode or scenario.modes()[0]
+    scenario = scenario.for_mode(mode)
+    expectations = [d for d in (describe(s, mode) for s in scenario.steps) if d]
     names = scenario.expect.invariants
     expanded = [n for name in names for n in (invariants.DEFAULT if name == "default" else [name])]
     expected = "; ".join(expectations) + f"; {', '.join(dict.fromkeys(expanded))} hold"
@@ -1302,10 +1416,16 @@ async def run_scenario(
     failures: list[str] = []
     planner = policy or PLANNERS[scenario.model]
     reader = reader_doubles.READERS[scenario.reader]
+    extra = replay.harness_kwargs() if replay else {}
     async with harness(
-        root, scenario.world_config(), planner, reader=reader, limits=scenario.limit_settings()
+        root,
+        scenario.world_config(),
+        planner,
+        reader=reader,
+        limits=scenario.limit_settings(),
+        **extra,
     ) as h:
-        runner = Runner(scenario, h, planner)
+        runner = Runner(scenario, h, planner, mode)
         started = time.monotonic()
         try:
             await runner.run()
@@ -1324,19 +1444,21 @@ async def run_scenario(
     violations = invariants.check(records, names)
     failures += runner.failures
     failures += [f"{name}: {v}" for name, vs in violations.items() for v in vs]
-    save_traces(scenario, root)
+    if replay:
+        failures += replay.extra_failures(records)
+    save_traces(scenario, root, replay, mode)
     actual = _actual(runner.runs, op_log, violations)
     checks = [f for f in failures if not f.startswith("INV-")]
     if checks:
         actual += f"; {len(checks)} expectation(s) failed"
     return ScenarioResult(
-        scenario=scenario.id,
+        scenario=replay.scenario_id(scenario) if replay else scenario.label(mode),
         category=", ".join(scenario.category),
-        model_mode=scenario.model_mode,
+        model_mode=replay.model_mode if replay else scenario.model_mode,
         world=scenario.world_label(),
         expected=expected,
         actual=actual,
         passed=not failures,
-        notes=_notes(scenario, records),
+        notes=(replay.notes(records) if replay else "") + _notes(scenario, records, replay),
         failures=failures,
     )

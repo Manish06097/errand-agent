@@ -2,6 +2,7 @@ id: S01_happy_path_plumber
 title: Brief example 1 with the area in the message; no questions, one card at the held quote, one verified booking
 category: [core]
 seed: 1
+replay: {cassette: S01}
 world:
   book: {forced: [success]}
 user:

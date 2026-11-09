@@ -52,6 +52,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
+from errand.api import dev_routes, web_routes
 from errand.api.runs import (
     Answer,
     ClientMsgIdReused,
@@ -68,6 +69,7 @@ from errand.approvals.typed_grant import VisibleCard as VisibleCardRef
 from errand.clock import AGENT_CLOCK_HEADER, IST, encode_clock_header, reading_of, to_ms
 from errand.config import (
     ApprovalSettings,
+    BookingSettings,
     LangfuseKeys,
     LimitSettings,
     ModelSettings,
@@ -122,6 +124,7 @@ class AppConfig:
     tz: tzinfo = IST
     user_id: str | None = None
     approval_settings: ApprovalSettings | None = None
+    booking_settings: BookingSettings | None = None
     # Tests replace the per-user consequential lock (the S28 backstop test runs two
     # executes with no lock at all).
     consequential: Any = None
@@ -330,6 +333,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 limits=limits,
                 model_factory=factory,
                 approval_settings=config.approval_settings,
+                booking_settings=config.booking_settings,
                 consequential=config.consequential,
                 reader_factory=reader_factory,
                 trace_sink=trace_sink,
@@ -522,6 +526,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         ):
             yield event
 
+    web_routes.register(app)
+    dev_routes.register(app)
     return app
 
 

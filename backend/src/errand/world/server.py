@@ -120,6 +120,12 @@ class _Load(BaseModel):
     clock_mode: ClockMode | None = None
 
 
+class _Force(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["success", "slot_taken", "timeout_booked", "timeout_not_booked"]
+
+
 class _Fire(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -311,6 +317,12 @@ def _add_dev_routes(app: FastAPI, host: WorldHost, settings: ServeSettings) -> N
     @app.post("/dev/world/events")
     async def fire_event(body: _Fire) -> dict[str, Any]:
         return _event_json(host.world.fire_provider_cancel(body.booking_id))
+
+    @app.post("/dev/world/force_book")
+    async def force_book(body: _Force) -> dict[str, str]:
+        """The next `book` answers `body.outcome`, without resetting the store."""
+        host.world.force_next_book(body.outcome)
+        return {"next_book": body.outcome}
 
     @app.post("/dev/world/tick")
     async def tick() -> list[dict[str, Any]]:

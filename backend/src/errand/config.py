@@ -41,6 +41,10 @@ class ModelSettings(BaseSettings):
     cassette_path: Path | None = None
 
 
+# p95 of a live planning turn in seconds, measured in M7 (16 turns; journal M7 entry).
+LIVE_PLANNING_TURN_P95_S = 11.5
+
+
 class LimitSettings(BaseSettings):
     """The limits from architecture 15.1 that are enforced in the model gateway so far."""
 
@@ -65,6 +69,13 @@ class LimitSettings(BaseSettings):
     # What an open intent may run past the deadline: execute, verify and respond finish.
     critical_grace_s: float = 20.0
 
+    # The wall clock per run when the planner is the real model (15.1), live and record
+    # modes only; evals keep run_deadline_s. M13 owns the enforcement.
+    # 43 = ceil(2 x p95 of a planning turn) + the reader's timeout: the reader is skipped
+    # once less run time is left than its timeout, so 2 x p95 alone turns it off on every
+    # cold-cache turn. tests/quarantine/test_live_deadline_leaves_reader_time.py pins it.
+    live_run_deadline_s: float = Field(default=43.0, gt=0)
+
     def recorded(self) -> dict[str, float | int]:
         """The limits as run.start records them for INV-09."""
         return {
@@ -78,6 +89,20 @@ class LimitSettings(BaseSettings):
             "status_checks": self.status_checks_per_run,
             "critical_grace_s": self.critical_grace_s,
         }
+
+
+class BookingSettings(BaseSettings):
+    """How the agent recovers from an ambiguous `book` (architecture 9.4 steps 6 and 7)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_BOOKING_", extra="ignore")
+
+    # A same-key retry per approval after `not_found` on a live hold. 0 gives the pure
+    # wait rule (the hold-lapse fallback), and the tests build both.
+    max_same_key_retries: int = Field(default=1, ge=0)
+    # Declared, never guessed: whether the provider treats a repeated key as the same
+    # request. With false there is never a second `book` on a hold. The eval harness
+    # derives it from the scenario's `world.enforce_idempotency`.
+    provider_dedupes_keys: bool = True
 
 
 class ReaderSettings(BaseSettings):
