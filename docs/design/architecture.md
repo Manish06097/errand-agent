@@ -1068,6 +1068,11 @@ Recorded when N1 built the reconciler, cancel and reschedule; where one differs 
 - **A time bound stated before the day is known is not kept:** "not before 10 a.m." in a message with no day cannot be stored (a window needs a day phrase), so the user restates it with the day. S08 does.
 - **Fault-point wiring over HTTP:** the agent's `TrackingClock` over a simulated world sleeps through `/dev/clock/advance`, so a verify backoff works in the restart harness.
 
+**Lead review, round 1** (these override the build's entries above where they differ):
+- Accepted: S65's cancel as a new errand with "Cancel B-n" as the user's quick reply (the mismatched book intent stays `needs_attention`; nothing re-checks it, because nothing waits on the provider); "Last visit" instead of the last price (the `list_bookings` contract carries no price, and the contract is fixed); a reschedule with no day asks in plain text (decision 17's pattern); `Verified.kind` as the action; no RUN_INTERRUPTED message for a dead run that already left one; `get_provider` on the proposer's allowlist; the tool list at 426 tokens for N1's additions, which leaves N2 656 tokens for its three tools. The HTTP clock wiring needs no BUGS row: the world's default clock is `system_offset`, so only the new subprocess harness ever slept on a simulated world over HTTP.
+- Rejected: a cancel or reschedule left `prepared` is not closed `not_applied`. `token_for_consumed` reads the consumed approval back from agent.sqlite and works after a restart, so the stated reason does not hold, and closing it told the user "the provider didn't answer" when nothing had been sent. It is sent once with its own key, like a booking (9.4 step 6, S36).
+- Rejected: a time bound said before the day ("not before 10 a.m.", then "tomorrow") must be kept. It is example 3 as the brief words it, and a user who has already said the bound will not say it again. Its span may come from an earlier user message of the same errand; the day phrase still comes from the current one.
+
 ---
 
 ## 10. LLM responsibilities vs code responsibilities
