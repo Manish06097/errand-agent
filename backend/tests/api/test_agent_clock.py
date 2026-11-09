@@ -8,10 +8,12 @@ reads `X-Agent-Clock` (or `clock` in GET /api/conversations/{id}) is granted.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from errand.clock import AGENT_CLOCK_HEADER, from_ms, parse_clock_header, to_ms, wall_now
+from errand.clock import AGENT_CLOCK_HEADER, IST, from_ms, parse_clock_header, to_ms, wall_now
+from errand.world.scenario import ScenarioConfig
 from evals.runner import Harness, harness
 from tests.api.test_approvals import card_of, ops, to_card, world
 
@@ -63,8 +65,20 @@ async def test_a_client_synced_to_the_agent_clock_is_granted(tmp_path: Path) -> 
     assert ops(rec.op_log, "book") == 1
 
 
+def a_world_starting_after_now() -> ScenarioConfig:
+    """The default scenario starts Mon 9 Nov 2026 08:00 IST. Once real time is past that
+    the agent's offset is negative and a client on its own clock is *ahead* of the agent,
+    which legitimately composes after the render and is granted. The contract under test
+    is a client behind the agent, so start the scenario on the next Monday 08:00 IST."""
+    base = world()
+    now = wall_now().astimezone(IST)
+    days = (7 - now.weekday()) % 7 or 7
+    start = (now + timedelta(days=days)).replace(hour=8, minute=0, second=0, microsecond=0)
+    return base.model_copy(update={"clock_start": start})
+
+
 async def test_a_client_on_its_own_clock_gets_an_ordinary_message(tmp_path: Path) -> None:
-    async with harness(tmp_path, world(), clock_mode="system_offset") as h:
+    async with harness(tmp_path, a_world_starting_after_now(), clock_mode="system_offset") as h:
         await to_card(h)
         own = to_ms(wall_now())
         routed = await _type(h, own + 2_000, own + 1_000)
