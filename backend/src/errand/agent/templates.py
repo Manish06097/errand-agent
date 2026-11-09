@@ -95,6 +95,15 @@ def internal_error(run_id: str) -> OutcomeNotice:
     )
 
 
+def run_interrupted() -> OutcomeNotice:
+    """The message of a run the process died in (15.2); the verified or failed result, if
+    there is one, comes from the recovery run that follows it."""
+    return OutcomeNotice(
+        outcome=RunOutcome.RUN_INTERRUPTED,
+        text="I was interrupted; here is where things stand.",
+    )
+
+
 def recommendation_line(text: str) -> str | None:
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
     if not line:

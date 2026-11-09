@@ -2,7 +2,8 @@
 
 M4 wires the booking path:
 
-    START -> ingress -> plan | prepare_proposal | execute | respond
+    START -> ingress -> plan | prepare_proposal | execute | verify | respond
+                 (verify: a Recover or check_now inbound, N1)
     plan -> prepare_proposal (a validated proposal) | respond
     prepare_proposal -> respond | plan (one SystemNote replan per run)
     execute -> verify | prepare_proposal (a lapsed hold or changed material) | respond
@@ -72,7 +73,7 @@ def build_graph(checkpointer: BaseCheckpointSaver[Any]) -> Graph:
     g.add_node("await_approval", await_approval)
     g.add_edge(START, "ingress")
     g.add_conditional_edges(
-        "ingress", route_after_ingress, ["plan", "prepare_proposal", "execute", "respond"]
+        "ingress", route_after_ingress, ["plan", "prepare_proposal", "execute", "verify", "respond"]
     )
     g.add_conditional_edges("plan", route_after_plan, ["prepare_proposal", "respond"])
     g.add_conditional_edges("prepare_proposal", route_after_prepare, ["plan", "respond"])

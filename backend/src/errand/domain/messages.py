@@ -85,7 +85,14 @@ class ShortlistCard(_Body):
 
 class NoticeAction(_Body):
     kind: Literal[
-        "retry", "narrow_search", "shorten", "answer", "refresh_hold", "raise_budget", "options"
+        "retry",
+        "narrow_search",
+        "shorten",
+        "answer",
+        "refresh_hold",
+        "raise_budget",
+        "options",
+        "check_now",
     ]
     label: str
     # For refresh_hold: the approval whose slot gets a fresh hold and a new card.

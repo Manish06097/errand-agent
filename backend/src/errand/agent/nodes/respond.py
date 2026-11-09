@@ -30,7 +30,7 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from errand.agent import cards
+from errand.agent import cards, critical, recovery
 from errand.agent.claim_guard import BOOKING_ID, guard
 from errand.agent.deps import RunDeps
 from errand.agent.records import live_approval, verified_records
@@ -38,7 +38,7 @@ from errand.agent.state import ThreadState
 from errand.agent.templates import internal_error, render
 from errand.clock import to_ms
 from errand.domain.errand import Errand, Phase
-from errand.domain.inbound import UserMessage
+from errand.domain.inbound import Recover, UserMessage
 from errand.domain.messages import (
     KIND_OF,
     ActionCard,
@@ -122,6 +122,20 @@ class _Respond:
 
     async def run(self) -> RunOutcome:
         deps = self.deps
+        # An exit with an open intent is PENDING_VERIFICATION whatever else it was (15.1).
+        left_open = await critical.exit_critical_section(
+            deps.db,
+            conversation_id=deps.conversation_id,
+            intent_ids=deps.intents,
+            now_ms=to_ms(deps.clock.now()),
+            tracer=deps.tracer,
+            reason="limit",
+        )
+        if left_open is not None:
+            if not isinstance(self.state.result, PendingCheck):
+                self.state = self.state.model_copy(update={"result": left_open})
+            if self.errand is not None and self.errand.phase is Phase.EXECUTING:
+                self.errand = self.errand.model_copy(update={"phase": Phase.NEEDS_ATTENTION})
         live = await live_approval(deps)
         outcome, bodies = await self._render(live)
         pending = live if live is not None and live.status == "pending" else None
@@ -273,27 +287,16 @@ class _Respond:
         if isinstance(result, Booked):
             card = await self._card_of(result.approval_id)
             assert card is not None
-            return RunOutcome.BOOKED_VERIFIED, [cards.booked_card(card, result.booking_id)]
+            inbound = self.state.inbound
+            after_restart = isinstance(inbound, Recover) and inbound.after_restart
+            return RunOutcome.BOOKED_VERIFIED, [
+                cards.booked_card(card, result.booking_id, after_restart=after_restart)
+            ]
         if isinstance(result, ActionFailed):
             return RunOutcome.ACTION_FAILED, [_failed(result)]
         if isinstance(result, PendingCheck):
-            if result.reason == "fenced_off":
-                text = (
-                    "Another request took over before this one was sent, so nothing was sent "
-                    "from this request. Please check your bookings, or ask me again."
-                )
-            elif result.reason == "material_mismatch":
-                text = (
-                    "The provider recorded something different from what you approved "
-                    f"({result.detail}), so I haven't treated it as confirmed. I'll sort it "
-                    "out with you here."
-                )
-            else:
-                text = (
-                    "The provider hasn't confirmed yet, and it can't end up booked twice. "
-                    "I'll tell you here as soon as I know."
-                )
-            return RunOutcome.PENDING_VERIFICATION, [notice(RunOutcome.PENDING_VERIFICATION, text)]
+            pending = critical.pending_notice(result)
+            return RunOutcome.PENDING_VERIFICATION, [pending]
         if isinstance(result, OverBudget):
             self.asked = True
             return RunOutcome.ASKED_USER, [
@@ -325,6 +328,8 @@ class _Respond:
                     "I couldn't check your bookings just now; nothing was booked. "
                     "Tap the button again to retry."
                 )
+            elif result.reason == recovery.NOTHING_TO_CHECK:
+                text = "There is nothing left to check: that booking is already settled."
             elif result.reason in ("consumed", "not_consumable"):
                 text = "Already approved: that booking is in progress or done."
             else:

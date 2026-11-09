@@ -61,6 +61,7 @@ from errand.domain.outcomes import (
 )
 from errand.execution import intents as drafts
 from errand.execution.executor import ConsequentialClient
+from errand.faults import fault_point
 from errand.store.agent_db import Repos
 from errand.store.repos.approvals import ApprovalRow
 from errand.store.repos.intents import IntentRow
@@ -241,6 +242,7 @@ class _Execute:
             )
             return AlreadyHandled(approval_id=self.approval_id, reason=token.reason)
 
+        deps.intents.add(intent_row.intent_id)
         tracer = deps.tracer
         tracer.emit(
             "approval.consumed",
@@ -259,6 +261,7 @@ class _Execute:
             state="prepared",
         )
         self._move(Phase.EXECUTING, "approval_granted")
+        fault_point("after_intent_write")
 
         async with deps.db.transaction() as repos:
             moved = await repos.intents.move_attempt(
@@ -304,6 +307,7 @@ class _Execute:
             error = None
         except ToolError as exc:
             answer, error = None, type(exc).__name__
+        fault_point("after_world_book")
         return await self._classify(intent_row, sent.attempt_id, held.epoch, answer, error)
 
     async def _classify(
@@ -421,7 +425,7 @@ class _Execute:
             )
             await repos.intents.resolve_intent(
                 intent.intent_id,
-                frm=("open",),
+                frm=("open", "needs_attention"),
                 to="failed",
                 result_json=json.dumps({"error": "never_sent"}),
                 now_ms=now_ms,
@@ -429,7 +433,10 @@ class _Execute:
         deps.tracer.emit(
             "intent.resolved", intent_id=intent.intent_id, state="failed", error="never_sent"
         )
-        self._move(Phase.COMPARING, "never_sent")
+        self._move(
+            Phase.FAILED if self.errand.phase is Phase.NEEDS_ATTENTION else Phase.COMPARING,
+            "never_sent",
+        )
         return ActionFailed(approval_id=self.approval_id, reason="never_sent")
 
     async def _invalidate_and_requote(

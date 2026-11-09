@@ -196,3 +196,22 @@ class IntentsRepo:
             (to, result_json, now_ms, intent_id, *frm),
         )
         return cur.rowcount == 1
+
+    async def unresolved_for_conversation(self, conversation_id: str) -> list[IntentRow]:
+        async with self._conn.execute(
+            f"SELECT {_INTENT} FROM action_intents WHERE conversation_id = ? "
+            "AND state IN ('open', 'needs_attention') ORDER BY created_at, rowid",
+            (conversation_id,),
+        ) as cur:
+            return [_intent(r) for r in await cur.fetchall()]
+
+    async def recoverable(self) -> list[IntentRow]:
+        """Unresolved intents that have an attempt the world may or may not have seen
+        (`prepared`, `in_flight` or `unknown`): what the reconciler re-checks. One indexed
+        read of our own tables; LangGraph's `next` is never consulted (9.7)."""
+        async with self._conn.execute(
+            f"SELECT {_INTENT} FROM action_intents i WHERE i.state IN ('open', 'needs_attention') "
+            "AND EXISTS (SELECT 1 FROM intent_attempts a WHERE a.intent_id = i.intent_id "
+            "AND a.state IN ('prepared', 'in_flight', 'unknown')) ORDER BY i.created_at, i.rowid"
+        ) as cur:
+            return [_intent(r) for r in await cur.fetchall()]

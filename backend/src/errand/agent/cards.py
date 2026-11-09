@@ -141,14 +141,15 @@ def confirm_hint(card: ActionCard) -> str:
     return f"To confirm, tap '{card.button_label}' or type '{suggestion(card.action)}'."
 
 
-def booked_card(card: ActionCard, booking_id: str) -> OutcomeCard:
+def booked_card(card: ActionCard, booking_id: str, *, after_restart: bool = False) -> OutcomeCard:
+    suffix = " I checked after a restart." if after_restart else ""
     return OutcomeCard(
         outcome=RunOutcome.BOOKED_VERIFIED,
         verified=True,
         title=f"Booked: {card.provider_name}",
         text=(
             f"Booked {card.provider_name} for {card.slot_label} at "
-            f"{rupees(card.quoted_price_inr)} ({booking_id}). Confirmed with the provider."
+            f"{rupees(card.quoted_price_inr)} ({booking_id}). Confirmed with the provider.{suffix}"
         ),
         lines=[
             MaterialLine(label="Booking", value=booking_id),

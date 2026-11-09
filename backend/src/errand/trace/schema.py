@@ -70,6 +70,9 @@ class RunEnd(Envelope):
     # The approval the run ended parked on, read from the graph's v2 output interrupts,
     # not from agent state (M4). None when the run did not end at an interrupt.
     parked_approval_id: str | None = None
+    # Set by the reconciler when it ends a run the process died in (N1): the recovery
+    # run that took the intent over, or None when no recovery run was needed.
+    recovered_by: str | None = None
 
 
 class NodeRecord(Envelope):

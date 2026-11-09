@@ -77,6 +77,17 @@ class ReaderSettings(BaseSettings):
     max_reviews: int = Field(default=10, gt=0)
 
 
+class ReconcilerSettings(BaseSettings):
+    """The reconciler (architecture 9.7 as trimmed, 9.9)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_RECONCILER_", extra="ignore")
+
+    # Real seconds between background re-checks of `needs_attention` intents in a running
+    # process. 0 turns the periodic task off; the evals set it to 0 and drive every tick
+    # themselves, so they stay deterministic.
+    interval_s: float = Field(default=30.0, ge=0)
+
+
 class PathSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ERRAND_", extra="ignore")
 
