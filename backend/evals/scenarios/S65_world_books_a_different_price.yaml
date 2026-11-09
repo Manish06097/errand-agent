@@ -1,0 +1,31 @@
+id: S65_world_books_a_different_price
+title: The world books 150 rupees above the held quote; the book answer and the status disagree with what was approved, so it is not BOOKED_VERIFIED, the intent needs attention, and the user is told what the provider recorded (the cancel card is M9)
+category: [booking_correctness]
+seed: 65
+world:
+  book: {forced: [success]}
+faults:
+  book_price_mismatch: 150
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - approve: {}
+  - expect_outcome: PENDING_VERIFICATION
+  - expect_transcript: {last_includes: ["a price of", "you approved", "not treating this one as final"], excludes: ["Confirmed with the provider"]}
+  - expect_world: {book: 1, get_booking_status: 1}
+  - expect_booking: {count: 1}
+  - expect_rows:
+      - {table: action_intents, where: {state: needs_attention}, count: 1}
+      - {table: known_bookings, where: {}, count: 0}
+      - {table: approvals, where: {action: cancel}, count: 0}
+expect:
+  invariants: [default]

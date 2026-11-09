@@ -1,0 +1,31 @@
+id: S68_timeout_not_booked_twice
+title: Book times out unbooked and the same-key retry also times out unbooked; the retry budget is spent, no third book, PENDING_VERIFICATION naming when the hold lapses (the reconciler's completion is M6)
+category: [booking_timeout]
+seed: 68
+world:
+  book: {forced: [timeout_not_booked, timeout_not_booked]}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+dedupe: [on]
+dedupe_reason: the retry budget only exists at a provider that dedupes keys; S69 covers dedupe off
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - approve: {}
+  - expect_outcome: PENDING_VERIFICATION
+  - expect_transcript: {last_includes: ["hasn't confirmed yet", "I'll know for sure by", "when the hold lapses"]}
+  - expect_world: {book: 2, get_booking_status: 2}
+  - expect_book_calls: {agent_calls: 2, world_rows: 2, keys: 1, holds: 1}
+  - expect_booking: {count: 0}
+  - expect_rows:
+      - {table: action_intents, where: {state: needs_attention, same_key_retries: 1}, count: 1}
+      - {table: intent_attempts, where: {state: unknown, calls: 2}, count: 1}
+expect:
+  invariants: [default]

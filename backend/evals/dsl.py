@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from errand.domain.brief import BriefField
 from errand.domain.outcomes import RunOutcome
@@ -309,6 +309,59 @@ class ExpectBrief(_Strict):
     expect_brief: BriefSpec
 
 
+class BookCallsSpec(_Strict):
+    # `book` calls the agent made (tool.call records), `book` rows in the world's op_log
+    # (a duplicate delivery adds a row without a second agent call), distinct keys and
+    # holds among them, and the op_log outcome of each row in order.
+    agent_calls: int | None = None
+    world_rows: int | None = None
+    keys: int | None = None
+    holds: int | None = None
+    outcomes: list[str] | None = None
+
+
+class ExpectBookCalls(_Strict):
+    """M5: the shape of the book traffic, from the trace and the world's op_log."""
+
+    expect_book_calls: BookCallsSpec
+
+
+class RowsSpec(_Strict):
+    table: Literal[
+        "action_intents", "intent_attempts", "followup_jobs", "known_bookings", "approvals"
+    ]
+    where: dict[str, str | int] = Field(default_factory=dict)
+    count: int
+
+
+class ExpectRows(_Strict):
+    """M5: rows in agent.sqlite (an intent's state, an attempt's calls, a follow-up job)."""
+
+    expect_rows: list[RowsSpec]
+
+
+Dedupe = Literal["on", "off"]
+
+
+def _yaml_bool_modes(value: Any) -> Any:
+    """YAML 1.1 reads a bare `on` or `off` as a boolean; the scenarios write them bare."""
+    if isinstance(value, list):
+        return ["on" if v is True else "off" if v is False else v for v in value]
+    if isinstance(value, dict):
+        return {("on" if k is True else "off" if k is False else k): v for k, v in value.items()}
+    return value
+
+
+class IfDedupe(_Strict):
+    """M5: steps that apply in one dedupe mode only, where the facts differ between the
+    two (`if_dedupe: {on: [...], off: [...]}`). A mode with no list runs nothing."""
+
+    if_dedupe: Annotated[
+        dict[Dedupe, list[Annotated[Any, BeforeValidator(lambda raw: parse_step(raw))]]],
+        BeforeValidator(_yaml_bool_modes),
+    ]
+
+
 STEP_TYPES: dict[str, type[_Strict]] = {
     "say": Say,
     "answer": Answer,
@@ -339,6 +392,9 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "expect_planner": ExpectPlanner,
     "expect_no_side_effects": ExpectNoSideEffects,
     "expect_brief": ExpectBrief,
+    "if_dedupe": IfDedupe,
+    "expect_book_calls": ExpectBookCalls,
+    "expect_rows": ExpectRows,
 }
 
 Step = (
@@ -371,7 +427,15 @@ Step = (
     | ExpectPlanner
     | ExpectNoSideEffects
     | ExpectBrief
+    | IfDedupe
+    | ExpectBookCalls
+    | ExpectRows
 )
+
+
+# A step that grants an approval can reach `book`; a scenario with one runs in both
+# dedupe modes unless it says otherwise.
+GRANTING = ("approve", "approve_concurrently", "type_confirm")
 
 
 def parse_step(raw: Any) -> Step:
@@ -427,6 +491,56 @@ class Scenario(_Strict):
     user: UserSpec
     steps: list[Annotated[Step, BeforeValidator(parse_step)]]
     expect: FinalExpect = Field(default_factory=FinalExpect)
+    # M5: the world's dedupe modes this scenario runs in. Default: both for a scenario
+    # that can reach `book`, else just the one `world.enforce_idempotency` says. A single
+    # mode that is not forced by `world.enforce_idempotency` needs a reason (one line).
+    dedupe: Annotated[list[Dedupe] | None, BeforeValidator(_yaml_bool_modes)] = None
+    dedupe_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _dedupe_is_consistent(self) -> Scenario:
+        if self.dedupe is None:
+            return self
+        if len(set(self.dedupe)) != len(self.dedupe) or not self.dedupe:
+            raise ValueError("dedupe lists each mode once")
+        if len(self.dedupe) == 1 and not self.dedupe_reason:
+            raise ValueError(f"dedupe: {self.dedupe} runs one mode only; say why in dedupe_reason")
+        if len(self.dedupe) == 2 and self.dedupe_reason:
+            raise ValueError("dedupe_reason explains a single mode; this scenario runs both")
+        if "off" not in self.dedupe and not self.world.enforce_idempotency:
+            raise ValueError("world.enforce_idempotency: false contradicts dedupe: [on]")
+        return self
+
+    @property
+    def reaches_book(self) -> bool:
+        def grants(steps: list[Any]) -> bool:
+            for s in steps:
+                if isinstance(s, IfDedupe):
+                    if any(grants(branch) for branch in s.if_dedupe.values()):
+                        return True
+                elif any(type(s) is STEP_TYPES[v] for v in GRANTING):
+                    return True
+            return False
+
+        return grants(self.steps)
+
+    def modes(self) -> list[Dedupe]:
+        """The dedupe modes to run, in order."""
+        if self.dedupe is not None:
+            return list(self.dedupe)
+        if not self.world.enforce_idempotency:
+            return ["off"]
+        return ["on", "off"] if self.reaches_book else ["on"]
+
+    def label(self, mode: Dedupe) -> str:
+        """The row and test id: plain for a scenario that never reaches `book`."""
+        if not self.reaches_book and self.dedupe is None:
+            return self.id
+        return f"{self.id}[dedupe={mode}]"
+
+    def for_mode(self, mode: Dedupe) -> Scenario:
+        world = self.world.model_copy(update={"enforce_idempotency": mode == "on"})
+        return self.model_copy(update={"world": world})
 
     def world_config(self) -> ScenarioConfig:
         return ScenarioConfig(id=self.id, seed=self.seed, world=self.world, faults=self.faults)
@@ -437,6 +551,8 @@ class Scenario(_Strict):
 
     def world_label(self) -> str:
         names = self.faults.fault_names()
+        if not self.world.enforce_idempotency:
+            names = [*names, "dedupe off"]
         return ", ".join(names) if names else "default"
 
 

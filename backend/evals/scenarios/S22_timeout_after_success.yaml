@@ -1,0 +1,29 @@
+id: S22_timeout_after_success
+title: Brief example 1; book commits and then times out; the first status check finds it confirmed, nothing is re-sent, one booking
+category: [booking_timeout, booking_correctness]
+seed: 22
+world:
+  book: {forced: [timeout_booked]}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_card: {kind: outcome}
+  - expect_world: {hold_slot: 1, book: 1, get_booking_status: 1}
+  - expect_book_calls: {agent_calls: 1, world_rows: 1, keys: 1, holds: 1}
+  - expect_booking: {count: 1, price_is_held_quote: true}
+  - expect_rows:
+      - {table: action_intents, where: {state: succeeded}, count: 1}
+      - {table: intent_attempts, where: {state: applied, calls: 1, status_checks: 1}, count: 1}
+expect:
+  invariants: [default]
