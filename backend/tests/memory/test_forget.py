@@ -223,3 +223,31 @@ async def test_a_stale_brief_cannot_write_a_forgotten_value_back_into_a_booking(
     stored = json.loads(booking.origin_brief_json)
     assert stored["area"] is None and stored["budget_max_inr"]["value"] == 800
     assert "I live in Indiranagar" not in booking.origin_brief_json  # the field's own evidence
+
+
+async def test_value_hash_is_keyed_so_a_dictionary_cannot_recover_a_forgotten_value(
+    env: Env,
+) -> None:
+    """Review round 1: a bare sha256 of the canonical value let a 30-line dictionary
+    recover 11:00, 17:00 and 16:00 from agent.sqlite alone."""
+    import hashlib
+
+    from errand.memory import hmac_key
+    from errand.memory.registry import dump_value
+    from errand.memory.service import MemoryService
+
+    await env.remember("earliest_time", "global", "11:00", "I always want to start after 11 am")
+    await env.remember("budget_ceiling", "service:plumber", 1200, "I never pay over 1200 rupees")
+    await env.service.forget(user_id=USER, memory_id="m-01", client_action_id="f1")
+    await env.service.forget(user_id=USER, memory_id="m-02", client_action_id="f2")
+
+    async with env.db.session() as repos:
+        stored = {(await repos.memories.get(m)).value_hash for m in ("m-01", "m-02")}  # type: ignore[union-attr]
+        blocked = {h for _, _, h, _ in await repos.memories.blocklist(USER)}
+    assert len(stored) == 2 and blocked == stored
+    for value in ("11:00", 1200):
+        assert hashlib.sha256(dump_value(value).encode()).hexdigest() not in stored | blocked
+    # the same value under another install key hashes differently
+    other = MemoryService(env.db, lambda: 1, hmac_key.fixed_key("another-install"))
+    assert other.hash_value("11:00") != env.service.hash_value("11:00")  # type: ignore[attr-defined]
+    assert env.service.hash_value("11:00") == env.service.hash_value("11:00")  # type: ignore[attr-defined]
