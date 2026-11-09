@@ -116,7 +116,7 @@ async def test_the_backstop_ends_a_blocked_node_as_wall_clock_exceeded(
         return await real(state, runtime)
 
     monkeypatch.setattr(graph_module, "plan", hang)
-    limits = LimitSettings(run_backstop_s=0.3)
+    limits = LimitSettings.model_construct(run_backstop_s=0.3)
     async with harness(tmp_path, world(), limits=limits) as h:
         view = await h.say(OPENER)
         rec = await h.records()
@@ -196,7 +196,9 @@ async def test_a_live_card_survives_the_backstop_and_still_books_once(
         return await real(state, runtime)
 
     monkeypatch.setattr(graph_module, "plan", hang)
-    async with harness(tmp_path, booking_world(), limits=LimitSettings(run_backstop_s=1.0)) as h:
+    async with harness(
+        tmp_path, booking_world(), limits=LimitSettings.model_construct(run_backstop_s=1.0)
+    ) as h:
         card = await _live_card(h)
         armed["on"] = True
         slow = await h.say("which one is closest?")

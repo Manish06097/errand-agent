@@ -146,7 +146,7 @@ async def test_not_found_after_the_hold_lapsed_is_definitive_and_asks_for_a_fres
     monkeypatch.setattr(verify_node, "BACKOFF_S", (700.0, 1.0, 2.0, 4.0))
     # The 700 s wait is a test device to get past the hold's TTL in one run; INV-09 would
     # rightly flag it against the default 20 s grace, so the grace is raised to cover it.
-    limits = LimitSettings(critical_grace_s=800.0)
+    limits = LimitSettings(critical_grace_s=800.0, run_backstop_s=900.0)
     async with harness(tmp_path, world("timeout_not_booked"), limits=limits) as h:
         view = await approve(h)
         rec = await h.records()

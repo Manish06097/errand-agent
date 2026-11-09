@@ -81,7 +81,7 @@ async def test_stats_over_a_scripted_run_through_the_cli(
 
 
 async def test_the_live_deadline_applies_only_to_live_and_record_runs(tmp_path: Path) -> None:
-    limits = LimitSettings(run_deadline_s=60.0, live_run_deadline_s=200.0)
+    limits = LimitSettings(run_deadline_s=60.0, live_run_deadline_s=200.0, run_backstop_s=300.0)
 
     async def deadline(root: Path, mode: str) -> float:
         extra: dict[str, Any] = {}

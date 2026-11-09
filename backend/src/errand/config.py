@@ -77,6 +77,18 @@ class LimitSettings(BaseSettings):
     # cold-cache turn. tests/quarantine/test_live_deadline_leaves_reader_time.py pins it.
     live_run_deadline_s: float = Field(default=43.0, gt=0)
 
+    @model_validator(mode="after")
+    def _backstop_outlasts_the_live_deadline(self) -> LimitSettings:
+        """The outer backstop must leave an open intent its full grace after the longest
+        deadline (15.1): live deadline + critical grace + 10 s."""
+        need = self.live_run_deadline_s + self.critical_grace_s + 10.0
+        if self.run_backstop_s < need:
+            raise ValueError(
+                f"run_backstop_s {self.run_backstop_s} is under live_run_deadline_s + "
+                f"critical_grace_s + 10 = {need}"
+            )
+        return self
+
     def recorded(self) -> dict[str, float | int]:
         """The limits as run.start records them for INV-09."""
         return {
