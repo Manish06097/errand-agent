@@ -138,3 +138,27 @@ def test_inv09_grace_with_an_intent(s01: Records) -> None:
     assert not any(run in v and "over 80 s" in v for v in inv09(s01)), base
     end["ts"] = (datetime.fromisoformat(start["ts"]) + timedelta(seconds=81)).isoformat()
     assert any("with an intent open, over 80 s" in v for v in inv09(copy.deepcopy(s01)))
+
+
+async def test_run_start_records_the_deadline_the_run_actually_ran_under(tmp_path: Path) -> None:
+    """In live and record mode the manager enforces live_run_deadline_s (43), so run.start
+    must record that, not run_deadline_s (60); and INV-09 then judges against it."""
+    from errand.config import ModelSettings
+    from errand.llm.scripted import ScriptedChatModel
+    from evals.policies import reference
+    from evals.runner import harness
+    from tests.api.support import OPENER, world
+
+    model = ScriptedChatModel(script=reference.policy)
+    settings = ModelSettings(model_mode="live")
+    async with harness(
+        tmp_path, world(), model_factory=lambda: model, model_settings=settings
+    ) as h:
+        view = await h.say(OPENER)
+        rec = await h.records()
+    start = next(r for r in rec.traces[view.run_id] if r["type"] == "run.start")
+    assert start["limits"]["deadline_s"] == 43
+    assert inv09(rec) == []
+    end = next(r for r in rec.traces[view.run_id] if r["type"] == "run.end")
+    end["ts"] = (datetime.fromisoformat(start["ts"]) + timedelta(seconds=50)).isoformat()
+    assert any("with no intent open, over 43 s" in v for v in inv09(rec))

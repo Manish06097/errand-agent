@@ -7,7 +7,6 @@ a different hash; the schema version is part of it; `hold_id` is not material at
 
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -127,7 +126,7 @@ PLAIN_BOOK_JSON = (
     '"same_service_nearby":[],"service":"plumber","slot_end":"2026-11-10T10:00:00+05:30",'
     '"slot_start":"2026-11-10T09:00:00+05:30","user_id":"u_demo","v":1}'
 )
-PLAIN_BOOK_FINGERPRINT = "fp1_" + hashlib.sha256(PLAIN_BOOK_JSON.encode("ascii")).hexdigest()
+PLAIN_BOOK_FINGERPRINT = "fp1_3ba1e1c64f5db84648338730521404dc0d4c0a89eb2322e6bb69ddbfcc2beb71"
 
 
 def test_a_plain_book_fingerprint_is_what_it_was_before_replaces_booking_id() -> None:

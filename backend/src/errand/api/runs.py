@@ -146,6 +146,7 @@ class _Run:
     trigger: str
     lease: LeaseKeeper
     stream: RunStream
+    deadline_s: float = 0.0
     user_message_id: str | None = None
     client: dict[str, Any] | None = None
     deps: RunDeps | None = None
@@ -593,6 +594,7 @@ class RunManager:
             trigger=trigger,
             lease=lease,
             stream=self.broadcaster.open(run_id),
+            deadline_s=deadline_s,
             user_message_id=user_message_id,
             client=client,
         )
@@ -626,7 +628,7 @@ class RunManager:
                 inbound_type=run.inbound.type,
                 user_message_id=run.user_message_id,
                 routed_as=run.routed_as,
-                limits=self.limits.recorded(),
+                limits=self.limits.recorded(run.deadline_s),
                 **(run.client or {}),
             )
             backstop = asyncio.timeout(self.limits.run_backstop_s)

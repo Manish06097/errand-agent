@@ -89,13 +89,15 @@ class LimitSettings(BaseSettings):
             )
         return self
 
-    def recorded(self) -> dict[str, float | int]:
-        """The limits as run.start records them for INV-09."""
+    def recorded(self, deadline_s: float | None = None) -> dict[str, float | int]:
+        """The limits as run.start records them for INV-09. `deadline_s` is the effective
+        deadline admission computed (live and record runs use `live_run_deadline_s`), so the
+        invariant reads the limit the run actually ran under."""
         return {
             "model_calls": self.model_calls_per_run,
             "iterations": self.loop_iterations,
             "tool_calls": self.tool_calls_per_run,
-            "deadline_s": self.run_deadline_s,
+            "deadline_s": self.run_deadline_s if deadline_s is None else deadline_s,
             "backstop_s": self.run_backstop_s,
             "reprompts": self.reprompts_per_run,
             "replans": self.replans_per_run,

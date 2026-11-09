@@ -11,8 +11,9 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-from errand.llm.scripted import ScriptedChatModel
+from errand.llm.scripted import ScriptedChatModel, ScriptedRequest
 from evals import invariants
+from evals.policies.common import answer, tool_calls
 from evals.runner import harness
 from tests.api.support import OPENER, world
 
@@ -27,12 +28,7 @@ def stopped(reason: str, text: str = "partial") -> AIMessage:
     )
 
 
-def factory(script: list[AIMessage]) -> Any:
-    model = ScriptedChatModel(script=script)
-    return lambda: model
-
-
-async def run(tmp_path: Path, script: list[AIMessage]) -> tuple[Any, Any, ScriptedChatModel]:
+async def run(tmp_path: Path, script: Any) -> tuple[Any, Any, ScriptedChatModel]:
     model = ScriptedChatModel(script=script)
     async with harness(tmp_path, world(), model_factory=lambda: model) as h:
         view = await h.say(OPENER)
@@ -70,6 +66,28 @@ async def test_a_second_max_tokens_ends_model_no_progress(tmp_path: Path) -> Non
     assert view.outcome == "MODEL_NO_PROGRESS"
     assert len(model.requests) == 2
     assert invariants.inv07_one_end_per_run(rec) == []
+    assert invariants.check(rec)["INV-09"] == []
+
+
+async def test_max_tokens_after_a_tool_round_resends_the_same_request(tmp_path: Path) -> None:
+    """The risky path: retry_last must restore the loop's prefix bookkeeping after a
+    tool_use round, so the second and third requests are byte-identical and the cut-off
+    answer never goes back."""
+
+    def policy(request: ScriptedRequest) -> AIMessage:
+        if request.n == 0:
+            return tool_calls(request, "Look first.", ("list_bookings", {}))
+        if request.n == 1:
+            return stopped("max_tokens", "CUTOFF")
+        return answer(request, "Which area is that in?")
+
+    view, rec, model = await run(tmp_path, policy)
+    assert view.outcome == "REPLIED"
+    assert len(model.requests) == 3
+    assert model.requests[1].canonical == model.requests[2].canonical
+    assert "CUTOFF" not in str(model.requests[2].messages)
+    reprompts = [r for r in rec.traces[view.run_id] if r["type"] == "guard.reprompt"]
+    assert [r["detail"]["reason"] for r in reprompts] == ["max_tokens"]
     assert invariants.check(rec)["INV-09"] == []
 
 
