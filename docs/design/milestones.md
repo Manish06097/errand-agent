@@ -226,7 +226,7 @@ Scope:
 - Generated `docs/EVAL_TABLE.md` from a clean run.
 - README: setup, `make dev`, `make evals`, architecture overview, limits, known limitations, the retention statement.
 - Demo script and rehearsal: one full booking with chat and trace side by side, then a live timeout-after-success through the dev drawer, optionally the injection badge. I record the video.
-- Coding-assistant transcript: `scripts/export_transcripts.py` renders the main session into one file, `docs/AI_TRANSCRIPT.md`. The only edits are the API key (`[REDACTED-KEY]`) and the local Langfuse keys, and the README says so.
+- Coding-assistant transcript: the main session as one file, `docs/AI_TRANSCRIPT.md`. The only edits are the API key (`[REDACTED-KEY]`) and the local Langfuse keys, and the README says so.
 - Rotate the Anthropic API key that was pasted in chat, and confirm no key is in the repo history or in `docs/AI_TRANSCRIPT.md`.
 
 Acceptance:
