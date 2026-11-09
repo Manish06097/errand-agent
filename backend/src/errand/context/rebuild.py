@@ -158,6 +158,13 @@ async def gather(
         prov = getattr(fact, "prov", None)
         if prov is not None and prov.source == "memory" and prov.memory_id:
             prefilled[prov.memory_id] = name
+    pref = getattr(brief, "provider_pref", None)
+    for pref_id in (
+        getattr(pref, "prefer_memory_id", None),
+        getattr(pref, "avoid_memory_id", None),
+    ):
+        if pref_id:
+            prefilled[pref_id] = "provider_pref"
     for bound in brief_window_bounds(brief):
         prefilled.setdefault(bound, "window")
     return Gathered(
@@ -177,11 +184,10 @@ async def gather(
 
 
 def brief_window_bounds(brief: Any) -> list[str]:
-    """Memory ids behind a window's time bounds, if the brief records them (N2B 2.4)."""
+    """Memory ids behind a window's time bounds (N2B 2.4, 13.7)."""
     window = getattr(brief, "window", None)
-    prov = getattr(window, "prov", None)
-    ids = getattr(prov, "memory_ids", None)
-    return list(ids) if ids else []
+    ids = getattr(window, "bound_memory_ids", None)
+    return list(ids.values()) if ids else []
 
 
 def build_with(

@@ -101,6 +101,10 @@ class TextFact(_Fact):
 class WindowFact(_Fact):
     value: TimeWindow
     expr: TimeWindowExpr | None = None
+    # The memory row behind each time bound code applied ("not_before" / "not_after"),
+    # kept apart from `prov`, which stays the user's own day: a forgotten bound drops the
+    # bound and keeps the day.
+    bound_memory_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class BudgetFact(_Fact):
@@ -109,6 +113,9 @@ class BudgetFact(_Fact):
 
 class ProviderPrefFact(_Fact):
     value: ProviderPref
+    # The memory row behind each component, so forgetting one clears only that one.
+    prefer_memory_id: str | None = None
+    avoid_memory_id: str | None = None
 
 
 class AskRecord(_Model):

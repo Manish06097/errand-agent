@@ -9,12 +9,14 @@ scoped to a service fill here, after a patch sets or changes the service or the 
 - `earliest_time` and `latest_time` (global or service-scoped; selection picks the row, so
   an electrician 10:00 shadows a global 08:00, the same rule the manifest reports) apply to
   the window as `not_before` and `not_after` when the user's own expression left them
-  unset. The window then carries `prov.memory_id` of the bound's row, so a forget clears
-  it and the day is asked again. A bound never makes the window count as filled: only the
-  user's day does.
+  unset. The window records each bound's row in `bound_memory_ids`, apart from `prov`
+  (the user's day), so a forget drops the bound and keeps the day. A bound never makes
+  the window count as filled: only the user's day does.
 - `preferred_provider` and `avoid_provider` feed `provider_pref` (`prefer_id`, `avoid_ids`)
-  with source `memory`; `brief_ops.pinned` only pins on `booking_history`, so a preference
-  ranks and never pins. `avoid_ids` reaches the hard filter in code.
+  with source `memory`, each component with its own row id (`prefer_memory_id`,
+  `avoid_memory_id`) so forgetting one clears only that one; `brief_ops.pinned` only pins on
+  `booking_history`, so a preference ranks and never pins. `avoid_ids` reaches the hard
+  filter in code.
 
 The current message beats memory: a bound or budget the user set stays. `language`,
 `access_note` and `avoid_days` feed nothing in code here (avoid_days is an open item).
@@ -98,24 +100,29 @@ async def apply_service_prefill(
     window = brief.window
     if window is not None and window.expr is not None and (service_set or window_set):
         earliest, latest = chosen.get("earliest_time"), chosen.get("latest_time")
-        expr = window.expr
+        # bounds code applied from memory earlier are ours to replace; the user's are not
+        base = window.expr.model_copy(update={k: None for k in window.bound_memory_ids})
         changes: dict[str, object] = {}
-        if expr.not_before is None and earliest is not None:
-            changes["not_before"] = timewin_time(earliest.value)
-        if expr.not_after is None and latest is not None:
-            changes["not_after"] = timewin_time(latest.value)
-        changes = {k: v for k, v in changes.items() if v is not None}
-        if changes:
-            new_expr = expr.model_copy(update=changes)
+        owners: dict[str, str] = {}
+        for bound, row, have in (
+            ("not_before", earliest, base.not_before),
+            ("not_after", latest, base.not_after),
+        ):
+            if have is None and row is not None and (t := timewin_time(row.value)) is not None:
+                changes[bound], owners[bound] = t, row.memory_id
+        new_expr = base.model_copy(update=changes)
+        if new_expr != window.expr or owners != window.bound_memory_ids:
             resolved = timewin.resolve(new_expr, now, tz)
             if not isinstance(resolved, timewin.Unresolved):
-                owner = earliest if "not_before" in changes else latest
-                assert owner is not None
-                prov = window.prov.model_copy(update={"memory_id": owner.memory_id})
                 update["window"] = WindowFact(
-                    value=resolved, expr=new_expr, prov=prov, set_at_turn=window.set_at_turn
+                    value=resolved,
+                    expr=new_expr,
+                    prov=window.prov,
+                    set_at_turn=window.set_at_turn,
+                    bound_memory_ids=owners,
                 )
-                filled.append(BriefField.WINDOW)
+                if changes:
+                    filled.append(BriefField.WINDOW)
 
     if service_set:
         prefer, avoid = chosen.get("preferred_provider"), chosen.get("avoid_provider")
@@ -123,16 +130,15 @@ async def apply_service_prefill(
         if (prefer is not None or avoid is not None) and (
             pref is None or pref.prov.source == "memory"
         ):
-            owner = prefer or avoid
-            assert owner is not None
-            avoid_ids = list(avoid.value) if avoid is not None else []
             update["provider_pref"] = ProviderPrefFact(
                 value=ProviderPref(
                     prefer_id=str(prefer.value) if prefer is not None else None,
-                    avoid_ids=avoid_ids,
+                    avoid_ids=list(avoid.value) if avoid is not None else [],
                 ),
-                prov=Provenance(source="memory", memory_id=owner.memory_id),
+                prov=Provenance(source="memory"),
                 set_at_turn=turn,
+                prefer_memory_id=prefer.memory_id if prefer is not None else None,
+                avoid_memory_id=avoid.memory_id if avoid is not None else None,
             )
     if not update:
         return brief, []
