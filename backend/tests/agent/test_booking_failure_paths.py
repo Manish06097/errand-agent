@@ -23,22 +23,41 @@ from errand.config import BookingSettings
 from errand.domain.outcomes import PendingCheck
 from errand.execution import executor
 from errand.world.contracts import BookError
-from errand.world.scenario import BookConfig, QuoteDrift, ScenarioConfig, WorldConfig
+from errand.world.scenario import (
+    BookConfig,
+    FaultsConfig,
+    QuoteDrift,
+    ScenarioConfig,
+    StatusOutage,
+    WorldConfig,
+)
 from evals import invariants
 from evals.runner import Harness, harness
 
 OPENER = "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
 
 
-def world(*forced: str, drift: int = 0, dedupe: bool = True, **extra: Any) -> ScenarioConfig:
+def world(
+    *forced: str,
+    drift: int = 0,
+    dedupe: bool = True,
+    faults_status_down: int = 0,
+    **extra: Any,
+) -> ScenarioConfig:
     quote = (
         QuoteDrift(mode="on_rehold", providers={f"P{n}": drift for n in range(1, 21)})
         if drift
         else QuoteDrift()
     )
+    faults = (
+        FaultsConfig(get_booking_status=StatusOutage(unavailable_n=faults_status_down))
+        if faults_status_down
+        else FaultsConfig()
+    )
     return ScenarioConfig(
         id="m5_paths",
         seed=5,
+        faults=faults,
         world=WorldConfig(
             book=BookConfig(forced=list(forced)),  # type: ignore[arg-type]
             enforce_idempotency=dedupe,
@@ -374,3 +393,31 @@ async def test_every_book_goes_out_after_its_write_ahead_commit(
     assert view.outcome == "BOOKED_VERIFIED"
     # first send: calls 1, no retry yet; the retry: calls 2, one retry, the first pass counted
     assert seen == [(1, 0, "in_flight", 0), (2, 1, "in_flight", 1)]
+
+
+async def _last_notice(h: Harness) -> dict[str, Any]:
+    convo = await h.conversation()
+    return [m for m in convo["messages"] if m["role"] == "assistant"][-1]["body"]
+
+
+async def test_the_pending_notice_carries_its_facts_for_the_card(tmp_path: Path) -> None:
+    """`OutcomeNotice.pending` (additive, domain/messages.py): the shape M7's VerifyingCard
+    is built on. Facts only; there is no action to render until M6."""
+    async with harness(tmp_path / "wait", world("timeout_not_booked", "timeout_not_booked")) as h:
+        await approve(h)
+        wait = await _last_notice(h)
+    assert wait["outcome"] == "PENDING_VERIFICATION" and wait["actions"] == []
+    assert wait["pending"]["reason"] == "hold_live"
+    assert wait["pending"]["lapse_label"] == "08:10" and wait["pending"]["lapse_at"].endswith(
+        "+05:30"
+    )
+    assert wait["pending"]["booking_id"] is None and "I'll know for sure by 08:10" in wait["text"]
+
+    down = world("timeout_booked", faults_status_down=4)
+    async with harness(tmp_path / "down", down) as h:
+        await approve(h)
+        unavailable = await _last_notice(h)
+    assert unavailable["pending"]["reason"] == "status_unavailable"
+    assert (
+        unavailable["pending"]["lapse_at"] is None and unavailable["pending"]["lapse_label"] is None
+    )

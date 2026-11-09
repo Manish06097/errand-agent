@@ -38,6 +38,7 @@ from errand.agent.state import ThreadState
 from errand.agent.templates import (
     NOT_BOOKED_TEXT,
     SLOT_TAKEN_TEXT,
+    clock_hhmm,
     internal_error,
     pending_text,
     provider_cancelled_text,
@@ -54,6 +55,7 @@ from errand.domain.messages import (
     MessageBody,
     NoticeAction,
     OutcomeNotice,
+    PendingFacts,
 )
 from errand.domain.outcomes import (
     ActionFailed,
@@ -283,8 +285,23 @@ class _Respond:
         if isinstance(result, ActionFailed):
             return RunOutcome.ACTION_FAILED, [_failed(result)]
         if isinstance(result, PendingCheck):
-            text = pending_text(result, self.deps.tz)
-            return RunOutcome.PENDING_VERIFICATION, [notice(RunOutcome.PENDING_VERIFICATION, text)]
+            pending = OutcomeNotice(
+                outcome=RunOutcome.PENDING_VERIFICATION,
+                text=pending_text(result, self.deps.tz),
+                pending=PendingFacts(
+                    reason=result.reason
+                    if result.reason != "status_not_confirmed"
+                    else "status_unavailable",
+                    intent_id=result.intent_id,
+                    lapse_at=result.lapse_at,
+                    lapse_label=clock_hhmm(result.lapse_at, self.deps.tz)
+                    if result.lapse_at
+                    else None,
+                    booking_id=result.booking_id,
+                    recorded=result.detail or None,
+                ),
+            )
+            return RunOutcome.PENDING_VERIFICATION, [pending]
         if isinstance(result, OverBudget):
             self.asked = True
             return RunOutcome.ASKED_USER, [
