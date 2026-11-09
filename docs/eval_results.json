@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-11-09T08:50:57Z",
-  "git_sha": "b89773407747",
+  "generated_at": "2026-11-09T08:54:41Z",
+  "git_sha": "5434f0f7eeba",
   "model_mode": "scripted, hostile, replay",
   "seeds": "1-632",
-  "passed": 138,
+  "passed": 139,
   "total": 139,
   "results": [
     {
@@ -652,9 +652,9 @@
       "model_mode": "scripted:memory + reader:keyword",
       "world": "default",
       "expected": "PRESENTED_OPTIONS; memory home_area active; brief area=indiranagar; PRESENTED_OPTIONS; memory home_area superseded; memory home_area active; brief area=koramangala; context manifest; INV-01, INV-02, INV-04, INV-07, INV-08, INV-09, INV-10, INV-11, INV-12, INV-13, INV-15, INV-16, INV-17, INV-05, INV-06, INV-19, INV-20, INV-03, INV-18 hold",
-      "actual": "runs PRESENTED_OPTIONS -> PRESENTED_OPTIONS; world get_provider=9, search_providers=2; invariants ok; 5 expectation(s) failed",
-      "pass": false,
-      "notes": "model_calls=9; reader_calls=7; tool_calls=11; max_est_tokens=8701; cost_usd=0.128043; review_texts_checked=15; book_ops_checked=0; approvals_checked=0; typed_grants_checked=0; claims_checked=0; inv03_books=0; inv03_resends=0; inv03_liveness=0; inv03_bounds=0; never_mind=vacuous until M6; attempts_checked=0; attempts_unsettled=0; trace=backend/evals/out/S32_moved_to_koramangala/"
+      "actual": "runs PRESENTED_OPTIONS -> PRESENTED_OPTIONS; world get_provider=9, search_providers=2; invariants ok",
+      "pass": true,
+      "notes": "model_calls=10; reader_calls=7; tool_calls=11; max_est_tokens=8804; cost_usd=0.141732; review_texts_checked=15; book_ops_checked=0; approvals_checked=0; typed_grants_checked=0; claims_checked=0; inv03_books=0; inv03_resends=0; inv03_liveness=0; inv03_bounds=0; never_mind=vacuous until M6; attempts_checked=0; attempts_unsettled=0; trace=backend/evals/out/S32_moved_to_koramangala/"
     },
     {
       "scenario": "S34_forget_then_keep_talking",
