@@ -47,6 +47,8 @@ class FollowupCtx(_Model):
     mode: Literal["start", "widen", "dismiss", "lapse"] = "start"
     variant: Variant = "stale"
     urgent: bool = False
+    # Delivered outside the contact window (an urgent notice): the badge, no toast or banner.
+    quiet: bool = False
     provider_name: str = ""
     service: str = ""
     slot_label: str = ""  # the cancelled slot, "Thu 13 Nov at 09:00" or "tomorrow at 09:00"

@@ -29,7 +29,7 @@ steps:
   - expect_transcript: {last_includes: ["window for replacing", "stopped looking"]}
   - expect_notification: {count: 1, unread: 1}
   - expect_rows:
-      - {table: followup_jobs, where: {state: done}, count: 1}
+      - {table: followup_jobs, where: {state: done, done_reason: lapsed}, count: 1}
   - expect_world: {search_providers: 2, hold_slot: 2, book: 1}
 expect:
   invariants: [default]

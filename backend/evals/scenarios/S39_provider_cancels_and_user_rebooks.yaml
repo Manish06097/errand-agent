@@ -47,7 +47,7 @@ steps:
   - expect_outcome: BOOKED_VERIFIED
   - expect_world: {book: 2}
   - expect_rows:
-      - {table: followup_jobs, where: {state: done}, count: 1}
+      - {table: followup_jobs, where: {state: done, done_reason: replaced}, count: 1}
       - {table: action_intents, where: {state: succeeded}, count: 2}
   - watcher_tick: {}
   - expect_notification: {count: 1}

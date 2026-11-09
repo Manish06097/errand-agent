@@ -65,6 +65,9 @@ class SystemEvent(_Inbound):
     kind: Literal["followup_start", "followup_lapsed"]
     booking_id: str | None = None
     job_id: str | None = None
+    # followup_start only: delivered outside the saved contact window, so the badge only
+    # (decision 7); set by delivery, never by the user.
+    quiet: bool = False
 
 
 class Recover(_Inbound):

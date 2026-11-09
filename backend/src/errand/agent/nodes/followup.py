@@ -186,6 +186,7 @@ class _Followup:
             job_id=job.job_id,
             booking_id=job.booking_id,
             urgent=urgent,
+            quiet=inbound.quiet,
             provider_name=provider_name,
             service=known.service,
             slot_label=self._label(known, urgent=urgent),

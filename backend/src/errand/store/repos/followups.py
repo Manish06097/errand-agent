@@ -14,7 +14,8 @@ from dataclasses import dataclass
 
 import aiosqlite
 
-STATES = ("detected", "notified", "ignored", "done")
+STATES = ("detected", "deferred", "notified", "ignored", "done")
+DONE_REASONS = ("replaced", "dismissed", "lapsed")
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,8 @@ class Job:
     state: str
     conversation_id: str | None
     updated_at: int
+    deliver_at: int | None = None  # set exactly while the job is deferred
+    done_reason: str | None = None  # replaced, dismissed or lapsed, once the job is done
 
 
 def job_id_for(booking_id: str) -> str:
@@ -34,6 +37,11 @@ def job_id_for(booking_id: str) -> str:
 def conversation_id_for(job_id: str) -> str:
     """The follow-up conversation of a job, deterministic so delivery is idempotent."""
     return f"cf_{job_id}"
+
+
+_COLUMNS = (
+    "job_id, booking_id, event_kind, state, conversation_id, updated_at, deliver_at, done_reason"
+)
 
 
 class FollowupsRepo:
@@ -69,21 +77,20 @@ class FollowupsRepo:
 
     async def get(self, job_id: str) -> Job | None:
         async with self._conn.execute(
-            "SELECT job_id, booking_id, event_kind, state, conversation_id, updated_at "
-            "FROM followup_jobs WHERE job_id = ?",
+            f"SELECT {_COLUMNS} FROM followup_jobs WHERE job_id = ?",
             (job_id,),
         ) as cur:
             row = await cur.fetchone()
-        return Job(*(row[i] for i in range(6))) if row else None
+        return Job(*(row[i] for i in range(8))) if row else None
 
     async def in_state(self, *states: str) -> list[Job]:
         marks = ", ".join("?" * len(states))
         async with self._conn.execute(
-            "SELECT job_id, booking_id, event_kind, state, conversation_id, updated_at "
-            f"FROM followup_jobs WHERE state IN ({marks}) ORDER BY updated_at, rowid",
+            f"SELECT {_COLUMNS} FROM followup_jobs WHERE state IN ({marks}) "
+            "ORDER BY updated_at, rowid",
             states,
         ) as cur:
-            return [Job(*(r[i] for i in range(6))) for r in await cur.fetchall()]
+            return [Job(*(r[i] for i in range(8))) for r in await cur.fetchall()]
 
     async def move(
         self,
@@ -93,13 +100,32 @@ class FollowupsRepo:
         to: str,
         now_ms: int,
         conversation_id: str | None = None,
+        done_reason: str | None = None,
+        deliver_at: int | None = None,
     ) -> bool:
-        """Conditional on the state it leaves, so two movers cannot both win."""
+        """Conditional on the state it leaves, so two movers cannot both win. `deliver_at`
+        belongs to `deferred` alone: any other target clears it."""
         marks = ", ".join("?" * len(frm))
         cur = await self._conn.execute(
             "UPDATE followup_jobs SET state = ?, updated_at = ?, "
-            "conversation_id = COALESCE(?, conversation_id) "
+            "conversation_id = COALESCE(?, conversation_id), "
+            "done_reason = COALESCE(?, done_reason), deliver_at = ? "
             f"WHERE job_id = ? AND state IN ({marks})",
-            (to, now_ms, conversation_id, job_id, *frm),
+            (
+                to,
+                now_ms,
+                conversation_id,
+                done_reason,
+                deliver_at if to == "deferred" else None,
+                job_id,
+                *frm,
+            ),
         )
         return cur.rowcount == 1
+
+    async def deferred_for_release(self, *, due_ms: int | None = None) -> list[Job]:
+        """Deferred jobs: all of them (the user is active), or those whose `deliver_at` has
+        passed (`due_ms` = now)."""
+        if due_ms is None:
+            return await self.in_state("deferred")
+        return [j for j in await self.in_state("deferred") if (j.deliver_at or 0) <= due_ms]

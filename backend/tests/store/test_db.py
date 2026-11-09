@@ -350,3 +350,54 @@ async def test_control_a_deferred_read_then_write_hits_sqlite_busy(tmp_path: Pat
     assert await _rows(a, "SELECT n FROM counter") == [(1,)]
     await a.close()
     await b.close()
+
+
+async def test_migration_5_rebuilds_followup_jobs_and_keeps_the_rows_that_exist(
+    tmp_path: Path,
+) -> None:
+    """A database at schema 4 with a job in every old state upgrades in place: rows stay,
+    the new columns are NULL, and the table now accepts `deferred` with its `deliver_at`."""
+    conn = await connect(tmp_path / "agent.sqlite")
+    upto4 = [m for m in load_migrations() if m.version <= 4]
+    assert await migrate(conn, upto4) == [1, 2, 3, 4]
+    for i, state in enumerate(("detected", "notified", "ignored", "done")):
+        await conn.execute(
+            "INSERT INTO followup_jobs (job_id, booking_id, event_kind, state, updated_at) "
+            "VALUES (?, ?, 'provider_cancel', ?, ?)",
+            (f"j{i}", f"B-{i}", state, 100 + i),
+        )
+    await conn.commit()
+
+    assert await migrate(conn) == [5]
+    rows = await _rows(
+        conn,
+        "SELECT job_id, state, updated_at, deliver_at, done_reason FROM followup_jobs "
+        "ORDER BY job_id",
+    )
+    assert rows == [
+        ("j0", "detected", 100, None, None),
+        ("j1", "notified", 101, None, None),
+        ("j2", "ignored", 102, None, None),
+        ("j3", "done", 103, None, None),
+    ]
+
+    insert = (
+        "INSERT INTO followup_jobs (job_id, booking_id, event_kind, state, updated_at, "
+        "deliver_at, done_reason) VALUES (?, ?, 'provider_cancel', ?, 1, ?, ?)"
+    )
+    await conn.execute(insert, ("j4", "B-4", "deferred", 5000, None))
+    await conn.execute(insert, ("j5", "B-5", "done", None, "lapsed"))
+    # a deferred job without its opening, a stray opening, a reason on a live job and an
+    # unknown reason are all refused
+    for args in (
+        ("j6", "B-6", "deferred", None, None),
+        ("j7", "B-7", "detected", 5000, None),
+        ("j8", "B-8", "notified", None, "lapsed"),
+        ("j9", "B-9", "done", None, "because"),
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            await conn.execute(insert, args)
+    # the unique (booking, kind) index survived the rebuild
+    with pytest.raises(sqlite3.IntegrityError):
+        await conn.execute(insert, ("j10", "B-0", "detected", None, None))
+    await conn.close()

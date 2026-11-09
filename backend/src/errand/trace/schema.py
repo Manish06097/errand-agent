@@ -291,13 +291,23 @@ class MemoryRecord(Envelope):
 
 
 class FollowupRecord(Envelope):
-    type: Literal["followup.detected", "followup.ignored", "followup.notified", "followup.done"]
+    type: Literal[
+        "followup.detected",
+        "followup.deferred",
+        "followup.ignored",
+        "followup.notified",
+        "followup.done",
+    ]
     booking_id: str
     urgency: str | None = None
     job_id: str | None = None
-    # ignored: slot_started or already_replaced; done: replaced, dismissed or lapsed.
+    # ignored: slot_started or already_replaced; done: replaced, dismissed or lapsed;
+    # deferred: contact_window.
     reason: str | None = None
     variant: str | None = None
+    # deferred: when the contact window next opens (ISO 8601); notified: badge only.
+    deliver_at: str | None = None
+    quiet: bool | None = None
 
 
 class GuardRecord(Envelope):

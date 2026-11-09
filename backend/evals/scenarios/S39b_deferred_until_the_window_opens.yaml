@@ -1,0 +1,40 @@
+id: S39b_deferred_until_the_window_opens
+title: With a saved contact window of 09:00 to 19:00 a normal cancel noticed at 08:00 is deferred to 09:00; nothing is searched, held or notified meanwhile, and when the window opens one notification and one Rebook card arrive
+category: [followup, memory]
+seed: 39
+memory_seed: memory_demo
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: the scenario ends at the Rebook card, so nothing reaches `book`
+steps:
+  # the clock starts at 08:00, outside the window
+  - world_event: {type: provider_cancelled, booking: "seeded:1"}
+  - watcher_tick: {}
+  - expect_followup: {delivered: 0}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: deferred}, count: 1}
+      - {table: notifications, where: {kind: followup}, count: 0}
+  # search and hold run at delivery, never at detection
+  - expect_world: {search_providers: 0, hold_slot: 0}
+  # still before 09:00 on the next tick: nothing changes
+  - advance: 30m
+  - watcher_tick: {}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: deferred}, count: 1}
+      - {table: notifications, where: {kind: followup}, count: 0}
+  # 09:01: the window has opened
+  - advance: 31m
+  - watcher_tick: {}
+  - expect_outcome: NOTIFIED
+  - expect_notification: {count: 1, quiet: false, unread: 1}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: notified}, count: 1}
+  - expect_world: {search_providers: 1, hold_slot: 1}
+  - open_followup: {}
+  - expect_card: {kind: action, status: pending, typed_grant_ok: true}
+  - watcher_tick: {}
+  - expect_notification: {count: 1}
+expect:
+  invariants: [default]

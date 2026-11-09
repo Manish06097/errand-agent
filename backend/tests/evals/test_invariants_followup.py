@@ -49,6 +49,27 @@ def test_inv17_fails_on_a_job_left_detected(s39: Records) -> None:
     assert any("ended detected" in v for v in inv17(s39))
 
 
+def test_inv17_accepts_a_deferred_job_only_while_its_opening_is_ahead(s39: Records) -> None:
+    from evals.invariants_followup import scenario_clock_ms
+
+    job = s39.followup_jobs[0]
+    job["state"] = "deferred"
+    job["deliver_at"] = scenario_clock_ms(s39) + 1
+    s39.notifications.clear()
+    assert inv17(s39) == []
+    job["deliver_at"] = scenario_clock_ms(s39) - 1
+    assert any("deferred with deliver_at" in v for v in inv17(s39))
+    job["deliver_at"] = None
+    assert any("deferred with deliver_at" in v for v in inv17(s39))
+
+
+def test_inv17_fails_on_a_done_job_with_no_reason(s39: Records) -> None:
+    job = s39.followup_jobs[0]
+    assert job["state"] == "done" and job["done_reason"] == "replaced"
+    job["done_reason"] = None
+    assert any("done with no reason" in v for v in inv17(s39))
+
+
 def test_inv17_fails_on_a_second_notification_for_a_job(s39: Records) -> None:
     s39.notifications.append(copy.deepcopy(s39.notifications[0]) | {"notification_id": "n_dup"})
     assert any("2 notifications for job" in v for v in inv17(s39))

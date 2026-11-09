@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { OPENER, createdBookings, loadWorld, newErrand, say, WORLD } from "./helpers";
 
 // A provider cancels a verified booking. With no message sent, the watcher notices, the
@@ -56,4 +56,72 @@ test("provider cancels: the bell shows 1 with no message sent, the Rebook card b
   await page.waitForTimeout(3000);
   const bell = await request.get("/api/notifications");
   expect(((await bell.json()) as { notifications: unknown[] }).notifications).toHaveLength(1);
+});
+
+// Gate 3 decision 7: an urgent cancel noticed outside the saved contact window is delivered
+// at once, with the badge only. The control test is the same cancel with no window saved,
+// where the banner shows.
+
+async function cancelBookedPlumber(page: Page, request: APIRequestContext): Promise<void> {
+  await newErrand(page);
+  await say(page, OPENER);
+  await page.getByTestId("approve-button").click();
+  await expect(page.getByTestId("verified-badge")).toBeVisible();
+  const booked = await createdBookings(request);
+  await page.getByTestId("dev-open").click();
+  await page.getByTestId("dev-booking").selectOption(booked[0]!.booking_id);
+  await page.getByTestId("dev-provider-cancel").click();
+  await expect(page.getByTestId("dev-message")).toContainText("done");
+  await page.keyboard.press("Escape");
+}
+
+/** A one-hour contact window about twelve hours from the agent's clock, so it never holds it. */
+async function saveWindowAwayFromNow(request: APIRequestContext): Promise<string> {
+  const health = await request.get("/api/health");
+  const header = health.headers()["x-agent-clock"] ?? "";
+  const nowMs = Number(/now_ms=(\d+)/.exec(header)?.[1]);
+  expect(Number.isFinite(nowMs), header).toBe(true);
+  const istHour = new Date(nowMs + 5.5 * 3600_000).getUTCHours();
+  const start = Math.min((istHour + 12) % 24, 22);
+  const hh = (h: number) => `${String(h).padStart(2, "0")}:00`;
+  const saved = await request.post("/api/memory", {
+    data: {
+      key: "contact_window",
+      scope: "global",
+      value: { from: hh(start), to: hh(start + 1) },
+      client_action_id: `e2e-window-${Date.now()}`,
+    },
+  });
+  expect(saved.ok(), await saved.text()).toBe(true);
+  const body = (await saved.json()) as { memory_id?: string; memory?: { memory_id: string } };
+  return (body.memory_id ?? body.memory?.memory_id) as string;
+}
+
+test("an urgent cancel with no contact window saved shows the banner", async ({ page, request }) => {
+  await cancelBookedPlumber(page, request);
+  await expect(page.getByTestId("bell-count")).toHaveText("1");
+  await expect(page.getByTestId("urgent-banner")).toBeVisible();
+});
+
+test("an urgent cancel outside the saved contact window is quiet: the badge, no toast, no banner", async ({
+  page,
+  request,
+}) => {
+  const memoryId = await saveWindowAwayFromNow(request);
+  try {
+    await cancelBookedPlumber(page, request);
+    await expect(page.getByTestId("bell-count")).toHaveText("1");
+    // the bell polls every five seconds and the stream nudges it: give a loud notice time to show
+    await page.waitForTimeout(2000);
+    await expect(page.getByTestId("urgent-banner")).toHaveCount(0);
+    await expect(page.getByTestId("toast")).toHaveCount(0);
+    const bell = (await (await request.get("/api/notifications")).json()) as {
+      notifications: { urgency: string; quiet: boolean }[];
+    };
+    expect(bell.notifications).toHaveLength(1);
+    expect(bell.notifications[0]).toMatchObject({ urgency: "urgent", quiet: true });
+  } finally {
+    // the data directory outlives the test: leave no contact window behind
+    await request.delete(`/api/memory/${memoryId}?client_action_id=e2e-window-forget-${Date.now()}`);
+  }
 });
