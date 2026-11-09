@@ -282,3 +282,21 @@ Two things were needed to make parallel runs safe. Tests that run a scenario wro
 **Open doubts.** The 2,000 ms tolerance is a guess at real clock skew over a network hop; it is a setting. INV-04 treats every name in the run's search results as known, the guard only the shortlist, so INV-04 is the weaker net there on purpose.
 
 **Lead rulings, review round 1.** The slow step on three xdist workers with `--dist loadfile` instead of serial: accepted, and it replaces the "own serial step" in GATE-02's "What gets built next". The serial rule was there to keep tests that write repo paths from racing; I checked what the slow step writes while it runs, and apart from per-test temp directories it only touches `web/next-env.d.ts` (one test, the `make dev` repro) and the pytest cache of the evals subprocess, so nothing two workers share. Serial cannot meet the 120 s goal, and the goal is what the brief was for. `-n 4 --dist loadscope` for the fast step, the port formula, the 2,000 ms tolerance and the private eval trace directory: accepted. Manjunath for the S62 probes: accepted, the brief asked for the name that is really on the shortlist, and that is the one carded. The timing table in the journal commit body rather than the tiering commits: accepted, history is not rewritten for it. INV-04 reading names from every search result while the guard reads the shortlist: accepted as the weaker net, stated in 8.7.
+
+## N3: bounded execution and proactive follow-up
+
+**Status: part A is done and part B waits.** M5, M7, M8, N1 and N2 are not on main yet, so the build order stopped after step 1 and the pure parts of part B. This entry is extended when the rest lands.
+
+**Goal.** Hard limits with a clear outcome on every exit path, and a provider cancel the agent notices on its own, with a fresh approval before anything is rebooked.
+
+**Built so far.** Gate 3 in the design (architecture 14, 4.1, 18.5, 18.6, ADR 0014, milestones). Part A without the `stop_reason` mapping (waits for M8) and the open-intent legs (wait for N1): `WALL_CLOCK_EXCEEDED` with its own template, the node wrapper and the deadline check before every node, `MODEL_UNAVAILABLE` with the planner call bounded by the time left and one SDK retry, the backstop as a time limit, `ToolUnexpected` wording, `LoopForeverPolicy` and the strict `limits:` scenario key, S44 (three legs), S45, S63 (three modes) and INV-09. Part B pure pieces: the notify policy, the replacement window and price ceiling, the templates, `FollowupSettings`, the import contracts, `replaces_booking_id` in the book material and the `rebook it` grammar.
+
+**Decisions.** The wrapper routes through `ThreadState.node_failed`, set per run in the run input, and every router is wrapped by one `route_guard`, so no router needs to know about failures. `execute` and `verify` are exempt from the deadline check until N1's `critical.py` replaces the exemption with "an intent is open". A failed planner call writes a zero-usage `model.call` record with `error` and counts as a model call. The simulated clock is confirmed to advance by `latency_ms`.
+
+**BUG-N3-1.** INV-09 failed S45 on its first run: 63.5 s of simulated time against a 60 s deadline. Two causes, one repro (4461c70, fix 2ac49e3): the in-process transport moved the clock by the world's whole latency before comparing it with the capped timeout, and the read retry slept its backoff before re-checking the deadline.
+
+**Deviations.** Urgency is computed only for notices that have something to act on (policy rows 4 to 6); rows 2 and 3 are information and never urgent. Ports used were 9210 to 9212 (the task text), not 9400 to 9402 (the brief).
+
+**Verified.** `make check` green in 71 s; `make evals` 40 of 40; the mutations "wrapper swallows GraphInterrupt" and "deadline check removed" each turn tests red.
+
+**Next.** Merge main as M5, N1, N2, M7 and M8 land, then part B's core.
