@@ -304,6 +304,8 @@ class RunManager:
             visible_card=visible_card,
             composed_at_ms=composed_at_ms,
             latest=latest,
+            now_ms=now_ms,
+            tolerance_ms=round(self.approval_settings.composed_tolerance_s * 1000),
         )
         if verdict.decision is Decision.HINT:
             return message.model_copy(update={"confirm_hint": True}), None
