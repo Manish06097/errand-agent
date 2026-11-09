@@ -322,6 +322,8 @@ export interface components {
             fingerprint: string;
             /** Hold Expires At */
             hold_expires_at: string;
+            /** Hold Id */
+            hold_id?: string | null;
             /** Lines */
             lines: components["schemas"]["MaterialLine"][];
             /** Material */
@@ -816,6 +818,7 @@ export interface components {
             /** Actions */
             actions?: components["schemas"]["NoticeAction"][];
             outcome: components["schemas"]["RunOutcome"];
+            pending?: components["schemas"]["PendingFacts"] | null;
             /** Status Line */
             status_line?: string | null;
             /** Still Needed */
@@ -827,6 +830,31 @@ export interface components {
              * @enum {string}
              */
             type: "notice";
+        };
+        /**
+         * PendingFacts
+         * @description The facts behind a PENDING_VERIFICATION notice (M5), for the card M7 builds on it.
+         *
+         *     The text is the whole message; these fields let a card show the same facts in its own
+         *     layout without parsing it. No "Check now" or "Never mind" button exists yet: M6 adds
+         *     the actions and their routes, and the notice carries facts only until then.
+         */
+        PendingFacts: {
+            /** Booking Id */
+            booking_id?: string | null;
+            /** Intent Id */
+            intent_id: string;
+            /** Lapse At */
+            lapse_at?: string | null;
+            /** Lapse Label */
+            lapse_label?: string | null;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "hold_live" | "status_unavailable" | "material_mismatch" | "check_incomplete" | "fenced_off";
+            /** Recorded */
+            recorded?: string | null;
         };
         /** RenderedIn */
         RenderedIn: {
