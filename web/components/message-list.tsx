@@ -11,6 +11,7 @@ import { ClarifyCard } from "./cards/clarify-card";
 import { OutcomeCard } from "./cards/outcome-card";
 import { OutcomeNotice, VerifyingCard } from "./cards/outcome-notice";
 import { ProviderComparisonCard } from "./cards/provider-comparison-card";
+import { LatestMessage } from "./cards/status-line";
 import { TextMessage } from "./cards/text-message";
 import { useChatContext } from "./chat-context";
 
@@ -86,7 +87,12 @@ export function MessageList({ messages }: { messages: MessageOut[] }) {
             {message.body.type === "text" ? message.body.text : ""}
           </p>
         ) : (
-          <Body message={message} live={!chat.busy && lastAssistant?.message_id === message.message_id} />
+          <LatestMessage.Provider value={lastAssistant?.message_id === message.message_id}>
+            <Body
+              message={message}
+              live={!chat.busy && lastAssistant?.message_id === message.message_id}
+            />
+          </LatestMessage.Provider>
         );
         return (
           <li

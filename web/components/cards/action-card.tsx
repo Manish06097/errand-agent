@@ -122,9 +122,7 @@ export function ActionCard({
           {note}
         </p>
       )}
-      {/* The stored line describes the card while it waits ("Not booked yet"); once the
-          approval has moved on it would contradict the status badge above it. */}
-      {pending && <StatusLine text={body.status_line} />}
+      <StatusLine text={body.status_line} />
     </div>
   );
 }

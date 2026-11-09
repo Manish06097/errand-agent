@@ -24,7 +24,7 @@ export function ConversationList({ currentId }: { currentId?: string }) {
               )}
             >
               <span className="block truncate">{c.title ?? c.preview ?? "New errand"}</span>
-              <span className="block text-xs text-neutral-500">{c.conversation_id}</span>
+              <span className="block truncate text-xs text-neutral-500">{c.conversation_id}</span>
             </Link>
           </li>
         ))}
