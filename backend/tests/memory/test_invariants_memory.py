@@ -97,6 +97,32 @@ def test_inv06_checks_reported_tokens_only_when_they_are_real(rec: Records) -> N
     assert any("API reported 12500" in v for v in fails("INV-06", rec))
 
 
+def test_inv06_recomputes_a_lower_bound_so_the_gateway_cannot_vouch_for_itself(
+    rec: Records,
+) -> None:
+    """Review round 1: INV-06 trusted est_request_tokens, which the code under test writes."""
+    rec = copy.deepcopy(rec)
+    call = _model_calls(rec)[0]
+    recorded = call["est_request_tokens"]
+    # a request that really holds 30,000 characters, recorded with its honest-looking estimate
+    call["request"]["messages"].append({"role": "user", "content": "x" * 30_000})
+    got = fails("INV-06", rec)
+    assert any("independent lower bound" in v and "over 12000" in v for v in got), got
+    # one that is under the budget but above what the gateway recorded for it
+    call["request"]["messages"][-1]["content"] = "x" * 9_000  # 6,000 tokens by the bound
+    call["est_request_tokens"] = 100
+    got = fails("INV-06", rec)
+    assert any("above the recorded estimate of 100" in v for v in got), got
+    # honest records are clean: the bound sits under the estimate
+    call["est_request_tokens"] = recorded + 6_100
+    assert fails("INV-06", rec) == []
+
+
+def test_inv06_reports_the_biggest_lower_bound_it_computed(rec: Records) -> None:
+    assert fails("INV-06", rec) == []
+    assert 0 < rec.notes["max_lower_bound_tokens"] <= rec.notes["max_estimated_tokens"]
+
+
 def test_inv06_fails_on_a_request_sent_after_context_built_said_no(rec: Records) -> None:
     rec = copy.deepcopy(rec)
     call = _model_calls(rec)[0]
