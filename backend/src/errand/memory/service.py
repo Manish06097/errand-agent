@@ -493,10 +493,25 @@ class MemoryService:
                 assert current is not None
                 raise MemoryConflict(f"{memory_id} is {current.status}", view(current))
             await mem.add_event(memory_id, "confirmed", "user", now)
+            # Keep settles its (key, scope): the other pending suggestions for it are
+            # answered too, or their Keep buttons could only ever fail. The user did not
+            # dismiss those values, so nothing is blocklisted.
+            superseded: list[str] = []
+            for other in await mem.find(user_id, row.key, row.scope, ["pending_confirmation"]):
+                if other.memory_id == memory_id:
+                    continue
+                if await mem.transition(
+                    other.memory_id, from_statuses=["pending_confirmation"], to="rejected"
+                ):
+                    await mem.add_event(
+                        other.memory_id, "rejected", "user", now,
+                        details={"reason": "superseded_by_keep", "by": memory_id},
+                    )  # fmt: skip
+                    superseded.append(other.memory_id)
             await mem.bump_epoch(user_id)
             current = await mem.get(memory_id)
             assert current is not None
-            return {"memory": view(current)}
+            return {"memory": view(current), "superseded": superseded}
 
         return await self._idempotent("memory.keep", client_action_id, body)
 
