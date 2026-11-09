@@ -113,6 +113,30 @@ async def test_keep_dismiss_and_undo_over_http(tmp_path: Path) -> None:
         assert undone.json()["memory"]["status"] == "rejected"
 
 
+async def test_keep_on_a_suggestion_with_pending_siblings_succeeds_over_http(
+    tmp_path: Path,
+) -> None:
+    async with harness(tmp_path, world()) as h:
+        for provider in ("E4", "E5", "E6"):
+            await service_of(h).suggest(
+                user_id="u_demo", key="preferred_provider", scope="service:electrician",
+                value=provider, rule="same_provider_twice", booking_ids=["B1", "B2"],
+            )  # fmt: skip
+        c = h.client
+        listed = (await c.get("/api/memory")).json()
+        assert [s["memory_id"] for s in listed["suggestions"]] == ["m-01", "m-02", "m-03"]
+        kept = await c.post("/api/memory/m-02/confirm", json={"client_action_id": "k1"})
+        assert kept.status_code == 200 and kept.json()["memory"]["status"] == "active"
+        after = (await c.get("/api/memory")).json()
+        assert after["suggestions"] == []
+        assert [p["memory_id"] for p in after["preferences"]] == ["m-02"]
+        siblings = {r["memory_id"]: r for r in after["history"]}
+        assert siblings["m-01"]["status"] == siblings["m-03"]["status"] == "rejected"
+        # the siblings are not pending any more: Keep on one is a 409, not a stuck button
+        late = await c.post("/api/memory/m-01/confirm", json={"client_action_id": "k2"})
+        assert late.status_code == 409 and late.json()["current"]["status"] == "rejected"
+
+
 async def test_after_a_forget_the_database_holds_no_plaintext_and_the_trace_reads_masked(
     tmp_path: Path,
 ) -> None:

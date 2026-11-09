@@ -211,6 +211,39 @@ async def test_keep_and_dismiss_are_conditional_and_a_second_click_is_a_409(env:
         await env.service.dismiss(user_id=USER, memory_id="m-01", client_action_id="d1")
 
 
+async def test_keep_settles_its_key_and_scope_by_rejecting_the_other_pending_rows(
+    env: Env,
+) -> None:
+    """Review round 1: Keep on a row with a pending sibling hit the one-active index and
+    answered 409 with the row still pending. A Keep now settles its (key, scope)."""
+    for provider in ("E4", "E5", "E6"):
+        await _suggest_provider(env, provider)
+    await _suggest_provider(env, "P1", "service:plumber")  # another scope: untouched
+    before = await env.epoch()
+
+    kept = await env.service.keep(user_id=USER, memory_id="m-02", client_action_id="k1")
+    assert kept["memory"]["status"] == "active"
+    assert kept["superseded"] == ["m-01", "m-03"]
+    assert await env.epoch() == before + 1  # one transaction, one bump
+
+    for memory_id in ("m-01", "m-03"):
+        row = await env.service.detail(USER, memory_id)
+        assert row["status"] == "rejected"
+        last = row["events"][-1]
+        assert (last["type"], last["actor"]) == ("rejected", "user")
+        assert last["details"]["reason"] == "superseded_by_keep"
+    assert (await env.row("m-04")).status == "pending_confirmation"
+    # nobody dismissed those values, so nothing is blocklisted
+    async with env.db.session() as repos:
+        assert await repos.memories.blocklist(USER) == []
+    # and they can be suggested again later, once the kept row goes
+    again = await _suggest_provider(env, "E4")
+    assert again is not None and again["declined"] == "active_row_exists"
+    # a replay of the same click returns the first answer and changes nothing
+    assert await env.service.keep(user_id=USER, memory_id="m-02", client_action_id="k1") == kept
+    assert await env.epoch() == before + 1
+
+
 async def test_one_client_action_id_cannot_be_reused_for_another_action(env: Env) -> None:
     await env.service.suggest(
         user_id=USER, key="latest_time", scope="global", value="12:00",
