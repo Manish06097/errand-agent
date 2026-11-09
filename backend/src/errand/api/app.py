@@ -51,10 +51,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from errand import faults
-from errand.agent.brief_ops import missing
+from errand.agent.brief_ops import INVALIDATES, missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
 from errand.api import dev_routes, followup_routes, web_routes
+from errand.api.memory_routes import (
+    MEMORY_ACTIONS,
+    memory_chat_action,
+    resolve_memory_body,
+)
 from errand.api.memory_routes import mount as mount_memory_routes
 from errand.api.reconciler import Reconciler
 from errand.api.runs import (
@@ -83,12 +88,14 @@ from errand.config import (
     ReconcilerSettings,
     TraceSettings,
 )
+from errand.domain.brief import BriefField
 from errand.domain.inbound import SystemEvent
-from errand.domain.messages import MessageBody
+from errand.domain.messages import MEMORY_BODY_TYPES, MessageBody
 from errand.followup.watcher import Watcher
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
 from errand.memory.hmac_key import load_or_create
+from errand.memory.registry import PREFILL_FIELD
 from errand.memory.scrub import scrub_brief
 from errand.memory.service import MemoryService
 from errand.store.agent_db import AgentDB
@@ -186,7 +193,17 @@ class ActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     client_action_id: str = Field(min_length=1, max_length=100)
-    kind: Literal["select_slot", "refresh_hold", "check_now", "widen_followup", "dismiss_followup"]
+    kind: Literal[
+        "select_slot",
+        "refresh_hold",
+        "check_now",
+        "widen_followup",
+        "dismiss_followup",
+        "keep_memory",
+        "confirm_forget",
+        "update_memory",
+        "save_memory",
+    ]
     payload: dict[str, str] = Field(default_factory=dict)
 
 
@@ -282,6 +299,16 @@ async def _highest(db: AgentDB, table: Literal["conversations", "runs"]) -> int:
     return int(row[0]) if row and row[0] is not None else 0
 
 
+def card_invalidating_keys() -> frozenset[str]:
+    """Memory keys whose change always discards a pending card, read from the brief's
+    INVALIDATES table: the key's brief field says `approval` in its `always` set."""
+    return frozenset(
+        key
+        for key, name in PREFILL_FIELD.items()
+        if "approval" in INVALIDATES[BriefField(name)].always
+    )
+
+
 def create_app(config: AppConfig | None = None) -> FastAPI:
     config = config or AppConfig()
 
@@ -361,7 +388,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 db,
                 lambda: to_ms(manager.clock.now()),
                 load_or_create(data_dir / MemorySettings().hmac_key_file),
+                card_keys=card_invalidating_keys(),
             )
+            manager.memory = app.state.memory
 
             async def start_followup(conversation_id: str, event: SystemEvent) -> None:
                 await manager.submit_system(conversation_id, event)
@@ -475,9 +504,14 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         snapshot = await manager.graph.aget_state(run_config(conversation_id))
         async with manager.db.session() as repos:
             eligible = await repos.memories.eligible_ids(conversation.user_id)
+            memory_rows = (
+                {r.memory_id: r for r in await repos.memories.for_user(conversation.user_id)}
+                if any(m.body.get("type") in MEMORY_BODY_TYPES for m in messages)
+                else {}
+            )
         return {
             "conversation_id": conversation_id,
-            "messages": [_message_view(m, approvals) for m in messages],
+            "messages": [_message_view(m, approvals, memory_rows) for m in messages],
             "runs": [
                 {"run_id": r.run_id, "status": r.status, "outcome": r.outcome, "trigger": r.trigger}
                 for r in runs
@@ -553,6 +587,10 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     @app.post("/api/conversations/{conversation_id}/actions", response_model=None)
     async def post_action(conversation_id: str, body: ActionIn, request: Request) -> Any:
+        if body.kind in MEMORY_ACTIONS:
+            return await memory_chat_action(
+                request, conversation_id, body.kind, body.client_action_id, body.payload
+            )
         manager = manager_of(request)
         try:
             answer = await manager.submit_action(
@@ -610,13 +648,17 @@ def _answer(answer: Answer) -> JSONResponse:
     return JSONResponse(answer.body, status_code=answer.status)
 
 
-def _message_view(m: Any, approvals: dict[str, Any]) -> dict[str, Any]:
+def _message_view(
+    m: Any, approvals: dict[str, Any], memory_rows: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """A transcript row as the client renders it. An approval card's body is the stored
     `card_json` (what code fingerprinted), and its current status rides beside it."""
     body = m.body
     approval = approvals.get(m.approval_id) if m.approval_id else None
     if approval is not None and body.get("type") == "action":
         body = approval.card
+    if body.get("type") in MEMORY_BODY_TYPES:
+        body = resolve_memory_body(body, memory_rows or {})
     view: dict[str, Any] = {
         "message_id": m.message_id,
         "role": m.role,
@@ -657,6 +699,8 @@ def _state_view(
     errand = state.errand
     if errand is not None:
         # A field sourced from a memory that is no longer eligible is not shown (decision 10).
+        # Deliberately coarse: a window with a stale bound is hidden whole until the next turn's
+        # apply_memory re-resolves it (this read has no clock to re-resolve with).
         brief, _ = scrub_brief(errand.brief, eligible)
         errand = errand.model_copy(update={"brief": brief})
     return {

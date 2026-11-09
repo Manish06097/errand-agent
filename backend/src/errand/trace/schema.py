@@ -308,6 +308,7 @@ class GuardRecord(Envelope):
         "guard.forgotten_value_masked",
         "guard.planner_tool_rejected",
         "guard.reprompt",
+        "guard.context_stale",
     ]
     detail: dict[str, Json] = Field(default_factory=dict)
 

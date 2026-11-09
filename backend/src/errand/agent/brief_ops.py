@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from typing import Literal
 
-from errand.agent import evidence, timewin
-from errand.domain import aliases
+from errand.agent import timewin
+from errand.domain import aliases, evidence
 from errand.domain.brief import (
     AreaFact,
     Brief,
@@ -491,6 +491,13 @@ def known_lines(brief: Brief) -> list[str]:
 def render_value(fact: object) -> str:
     value = getattr(fact, "value", None)
     if isinstance(value, ProviderPref):
+        prov = getattr(fact, "prov", None)
+        if prov is not None and prov.source == "memory":
+            # A saved preference ranks and filters in code; it is not "the same as last time".
+            parts = ([f"prefers {value.prefer_id}"] if value.prefer_id else []) + (
+                [f"avoids {', '.join(value.avoid_ids)}"] if value.avoid_ids else []
+            )
+            return "a saved preference: " + "; ".join(parts)
         return f"the same provider as last time ({value.prefer_id})"
     label = getattr(value, "label", None)
     if isinstance(label, str):

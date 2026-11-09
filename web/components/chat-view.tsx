@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Activity, Menu } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { useChat } from "@/lib/use-chat";
@@ -88,6 +89,9 @@ export function ChatView({ conversationId }: { conversationId: string }) {
               <Menu className="h-4 w-4" aria-hidden />
             </Button>
             <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">Errand {conversationId}</h1>
+            <Link href="/memory" className="text-sm underline" data-testid="memory-link">
+              Memory
+            </Link>
             <NotificationBell />
             {meta.data?.dev && <DevDrawer />}
             <Button

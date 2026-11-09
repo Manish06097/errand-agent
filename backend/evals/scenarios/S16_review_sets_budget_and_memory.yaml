@@ -15,8 +15,10 @@ steps:
     gives: [service, area, issue, window, budget_max_inr]
   - expect_outcome: AWAITING_APPROVAL
   - expect_planner: {called: [get_provider:P3, update_brief, remember]}
-  - expect_trace: {guard.evidence_rejected: 1}
+  - expect_trace: {guard.evidence_rejected: 2}
   - expect_brief: {version: 1, values: {budget_max_inr: 1500}}
+  - expect_memory: {key: budget_ceiling, scope: "service:plumber", status: active, count: 0}
+  - expect_chip: {type: memory_saved, absent: true}
   - expect_no_side_effects: {pending_card_ok: true}
 expect:
   invariants: [default]

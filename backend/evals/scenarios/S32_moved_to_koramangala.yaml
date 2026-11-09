@@ -1,0 +1,26 @@
+id: S32_moved_to_koramangala
+title: '"I moved to Koramangala" corrects the saved home area; the old row is superseded and absent from every later request, its evidence span reads "[updated preference]" to the model, and the new value is used in the brief and the search'
+category: [memory]
+seed: 32
+model: scripted:memory
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    window: tomorrow morning
+    budget_max_inr: "1500"
+steps:
+  - say: "I live in Indiranagar. Find a plumber for my kitchen tap tomorrow morning, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_memory: {key: home_area, status: active, kind: explicit, evidence_type: user_msg}
+  - expect_brief: {values: {area: indiranagar}}
+  - say: "I moved to Koramangala. Find a plumber for my kitchen tap tomorrow morning, under ₹1,500."
+    gives: [area]
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_memory: {key: home_area, status: superseded, count: 1}
+  - expect_memory: {key: home_area, status: active, kind: explicit}
+  - expect_brief: {values: {area: koramangala}}
+  - expect_context: {from_call: 2, present: ["[updated preference]"], absent: ["I live in Indiranagar"]}
+expect:
+  invariants: [default]

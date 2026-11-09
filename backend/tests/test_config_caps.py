@@ -42,6 +42,8 @@ def test_the_builder_reads_the_same_numbers() -> None:
         "rules": caps.rules,
         "tools": caps.tools,
         "state": caps.state,
+        "memory": caps.memory,
+        "ledger": caps.ledger,
         "recent": caps.recent,
         "current": caps.current,
     } == CAPS

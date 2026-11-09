@@ -84,6 +84,27 @@ export function ActionCard({
           </div>
         ))}
       </dl>
+      {(body.brief ?? []).length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-1" data-testid="brief-chips">
+          {(body.brief ?? []).map((chip) => {
+            const cleared = chip.value.startsWith("[removed") || chip.value === "[updated]";
+            return (
+              <li
+                key={chip.field}
+                data-testid="brief-chip"
+                data-field={chip.field}
+                data-source={chip.source}
+                className="rounded-full border border-neutral-200 px-2 py-0.5 text-xs text-neutral-700 dark:border-neutral-700 dark:text-neutral-300"
+              >
+                {chip.field.replaceAll("_", " ")}: {cleared ? "cleared" : (chip.window_label ?? chip.value)}
+                {chip.source === "memory" && !cleared && (
+                  <span className="text-indigo-700 dark:text-indigo-300"> (from memory)</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {body.action === "book" && pending && left !== null && (
         <p data-testid="hold-countdown" className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
           {holdExpired ? "Hold expired · Refresh hold" : `Hold expires in ${remaining(left)}`}

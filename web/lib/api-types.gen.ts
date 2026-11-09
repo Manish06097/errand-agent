@@ -532,7 +532,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "select_slot" | "refresh_hold" | "check_now" | "widen_followup" | "dismiss_followup";
+            kind: "select_slot" | "refresh_hold" | "check_now" | "widen_followup" | "dismiss_followup" | "keep_memory" | "confirm_forget" | "update_memory" | "save_memory";
             /** Payload */
             payload?: {
                 [key: string]: string;
@@ -715,7 +715,7 @@ export interface components {
              * Body
              * @default null
              */
-            body: (components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["ProactiveLine"] | components["schemas"]["OutcomeCard"]) | null;
+            body: (components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["ProactiveLine"] | components["schemas"]["OutcomeCard"] | components["schemas"]["MemorySavedChip"] | components["schemas"]["MemorySuggestionChip"] | components["schemas"]["MemoryOfferChip"] | components["schemas"]["MemoryUpdateChip"] | components["schemas"]["MemoryForgetChip"] | components["schemas"]["MemoryListCard"]) | null;
             /**
              * Errand Id
              * @default null
@@ -950,13 +950,120 @@ export interface components {
             /** Client Action Id */
             client_action_id: string;
         };
+        /**
+         * MemoryForgetChip
+         * @description What `propose_forget` renders. The forget is the user's click, never the model's.
+         */
+        MemoryForgetChip: {
+            memory?: components["schemas"]["ResolvedMemory"] | null;
+            /** Memory Id */
+            memory_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_forget";
+        };
+        /**
+         * MemoryListCard
+         * @description What `list_memories` renders: references only, resolved with their status at read time.
+         */
+        MemoryListCard: {
+            /** Memory Ids */
+            memory_ids?: string[];
+            /** Preferences */
+            preferences?: components["schemas"]["ResolvedMemory"][] | null;
+            /** Suggestion Ids */
+            suggestion_ids?: string[];
+            /** Suggestions */
+            suggestions?: components["schemas"]["ResolvedMemory"][] | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_list";
+        };
+        /**
+         * MemoryOfferChip
+         * @description "Remember this for next time?" It stores no value, only where the user said it: a
+         *     click re-reads the span out of the user's message, so a forgotten value has no copy.
+         */
+        MemoryOfferChip: {
+            /** End */
+            end: number;
+            /** Key */
+            key: string;
+            /** Scope */
+            scope: string;
+            /** Source Message Id */
+            source_message_id: string;
+            /** Start */
+            start: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_offer";
+        };
+        /**
+         * MemorySavedChip
+         * @description "Saved: home area" with Undo. References the row; the value is resolved at read time.
+         */
+        MemorySavedChip: {
+            memory?: components["schemas"]["ResolvedMemory"] | null;
+            /** Memory Id */
+            memory_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_saved";
+        };
+        /**
+         * MemorySuggestionChip
+         * @description One per errand that produced a suggestion: Keep and Dismiss.
+         */
+        MemorySuggestionChip: {
+            memory?: components["schemas"]["ResolvedMemory"] | null;
+            /** Memory Id */
+            memory_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_suggestion";
+        };
+        /**
+         * MemoryUpdateChip
+         * @description "Update your saved home area? [Update] [Just this time]" with the same no-value rule.
+         */
+        MemoryUpdateChip: {
+            /** End */
+            end: number;
+            /** Key */
+            key: string;
+            memory?: components["schemas"]["ResolvedMemory"] | null;
+            /** Memory Id */
+            memory_id: string;
+            /** Scope */
+            scope: string;
+            /** Source Message Id */
+            source_message_id: string;
+            /** Start */
+            start: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_update";
+        };
         /** MessageOut */
         MessageOut: {
             approval?: components["schemas"]["ApprovalStatusOut"] | null;
             /** Approval Id */
             approval_id?: string | null;
             /** Body */
-            body: components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["ProactiveLine"] | components["schemas"]["OutcomeCard"];
+            body: components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["ProactiveLine"] | components["schemas"]["OutcomeCard"] | components["schemas"]["MemorySavedChip"] | components["schemas"]["MemorySuggestionChip"] | components["schemas"]["MemoryOfferChip"] | components["schemas"]["MemoryUpdateChip"] | components["schemas"]["MemoryForgetChip"] | components["schemas"]["MemoryListCard"];
             /** Created At */
             created_at: number;
             /** Kind */
@@ -1211,6 +1318,26 @@ export interface components {
              * @constant
              */
             v: 1;
+        };
+        /**
+         * ResolvedMemory
+         * @description A memory row as the chat shows it, resolved at read time (never stored). `label` is
+         *     the display value, and only while the row is one the user may be shown: active, or
+         *     pending for the Keep and Dismiss chip. A forgotten, rejected or superseded row has none.
+         */
+        ResolvedMemory: {
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Label */
+            label?: string | null;
+            /** Memory Id */
+            memory_id: string;
+            /** Scope */
+            scope: string;
+            /** Status */
+            status: string;
         };
         /**
          * RunEvent

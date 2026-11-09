@@ -12,6 +12,14 @@ import { OutcomeCard } from "./cards/outcome-card";
 import { ProactiveLine } from "./cards/proactive-line";
 import { OutcomeNotice, VerifyingCard } from "./cards/outcome-notice";
 import { ProviderComparisonCard } from "./cards/provider-comparison-card";
+import {
+  MemoryForgetChip,
+  MemoryListCard,
+  MemoryOfferChip,
+  MemorySavedChip,
+  MemorySuggestionChip,
+  MemoryUpdateChip,
+} from "./cards/memory-chips";
 import { LatestMessage } from "./cards/status-line";
 import { TextMessage } from "./cards/text-message";
 import { useChatContext } from "./chat-context";
@@ -66,6 +74,18 @@ function Body({ message, live }: { message: MessageOut; live: boolean }) {
       ) : (
         <OutcomeNotice body={body} live={live} verifying={false} />
       );
+    case "memory_saved":
+      return <MemorySavedChip body={body} />;
+    case "memory_suggestion":
+      return <MemorySuggestionChip body={body} />;
+    case "memory_offer":
+      return <MemoryOfferChip body={body} messageId={message.message_id} />;
+    case "memory_update":
+      return <MemoryUpdateChip body={body} messageId={message.message_id} />;
+    case "memory_forget":
+      return <MemoryForgetChip body={body} />;
+    case "memory_list":
+      return <MemoryListCard body={body} />;
     default:
       return null;
   }

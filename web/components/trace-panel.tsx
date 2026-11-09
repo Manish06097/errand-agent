@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { keyLabel } from "@/lib/memory";
 import {
   FILTERS,
   buildRows,
@@ -12,6 +13,7 @@ import {
   obj,
   rowDetail,
   rowLabel,
+  str,
   totalsOf,
   type FilterKey,
 } from "@/lib/trace";
@@ -32,6 +34,94 @@ function useTraceRecords(
   return running ? (live[runId] ?? []) : (stored.data?.records ?? live[runId] ?? []);
 }
 
+function ContextView({ manifest }: { manifest: Record<string, unknown> }) {
+  const memory = useQuery({ queryKey: ["memory"], queryFn: api.memory.list });
+  const names = new Map<string, string>();
+  const groups = memory.data;
+  for (const row of [
+    ...(groups?.preferences ?? []),
+    ...(groups?.suggestions ?? []),
+    ...(groups?.history ?? []),
+  ]) {
+    names.set(row.memory_id, keyLabel(row.key));
+  }
+  const name = (id: string) => `${names.get(id) ?? "memory"} ${id}`;
+  const sections = (manifest["sections"] ?? {}) as Record<string, number>;
+  const caps = (manifest["caps"] ?? {}) as Record<string, number>;
+  const included = (manifest["memory_included"] ?? []) as {
+    id: string;
+    score: number;
+    prefill: string | null;
+  }[];
+  const excluded = Object.entries((manifest["memory_excluded"] ?? {}) as Record<string, string>);
+  const shed = (manifest["shed"] ?? []) as string[];
+  return (
+    <div data-testid="context-view" className="flex flex-col gap-2">
+      <p className="font-medium">Context for this call</p>
+      <table className="w-full text-left" data-testid="context-sections">
+        <thead>
+          <tr className="text-neutral-500">
+            <th className="font-normal">Section</th>
+            <th className="font-normal">Tokens</th>
+            <th className="font-normal">Cap</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Object.entries(sections).map(([section, tokens]) => (
+            <tr key={section} data-section={section}>
+              <td>{section}</td>
+              <td>{tokens}</td>
+              <td>{caps[section] ?? ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ul className="flex flex-wrap gap-x-3 gap-y-0.5" data-testid="context-facts">
+        <li>epoch {String(manifest["memory_epoch"] ?? "-")}</li>
+        <li>turns dropped {String(manifest["turns_dropped"] ?? 0)}</li>
+        <li>masked {String(manifest["masked"] ?? 0)}</li>
+        <li>compacted {String(manifest["compacted"] ?? false)}</li>
+        <li>ledger lines {String(manifest["ledger_lines"] ?? 0)}</li>
+        <li>shed {shed.length ? shed.join(", ") : "none"}</li>
+      </ul>
+      <div>
+        <p className="font-medium">Memory sent</p>
+        {included.length === 0 && <p className="text-neutral-500">none</p>}
+        <ul data-testid="context-included">
+          {included.map((item) => (
+            <li key={item.id} data-testid="context-included-row" data-memory-id={item.id}>
+              {name(item.id)}
+              {item.prefill ? ` (filled ${item.prefill.replaceAll("_", " ")})` : ""}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div>
+        <p className="font-medium">Memory left out</p>
+        {excluded.length === 0 && <p className="text-neutral-500">none</p>}
+        <ul data-testid="context-excluded">
+          {excluded.map(([id, reason]) => (
+            <li
+              key={id}
+              data-testid="context-excluded-row"
+              data-memory-id={id}
+              data-reason={reason}
+            >
+              {name(id)}: {reason.replaceAll("_", " ")}
+            </li>
+          ))}
+        </ul>
+      </div>
+      <details>
+        <summary className="cursor-pointer text-neutral-500">Raw manifest</summary>
+        <pre data-testid="context-manifest" className="overflow-x-auto whitespace-pre-wrap break-all">
+          {JSON.stringify(manifest, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
 function Detail({ record, manifest }: { record: TraceRecord; manifest: TraceRecord | null }) {
   const response = obj(record, "response");
   const usage = obj(record, "usage");
@@ -43,14 +133,7 @@ function Detail({ record, manifest }: { record: TraceRecord; manifest: TraceReco
           {Number(usage["output"] ?? 0)}, {moneyUsd(num(record, "cost_usd") ?? 0)}
         </p>
       )}
-      {manifest && (
-        <div data-testid="context-manifest">
-          <p className="font-medium">Context manifest</p>
-          <pre className="overflow-x-auto whitespace-pre-wrap break-all">
-            {JSON.stringify(obj(manifest, "manifest"), null, 2)}
-          </pre>
-        </div>
-      )}
+      {manifest && <ContextView manifest={obj(manifest, "manifest") ?? {}} />}
       {response && (
         <div>
           <p className="font-medium">Response</p>
@@ -80,8 +163,12 @@ export function RunTrace({
   const rows = useMemo(() => buildRows(records), [records]);
   const totals = useMemo(() => totalsOf(records), [records]);
   const maxLatency = Math.max(1, ...records.map((r) => num(r, "latency_ms") ?? 0));
+  // A model call's manifest is the context.built record for the same request.
   const manifests = new Map<string, TraceRecord>();
-  for (const r of records) if (r.type === "context.built") manifests.set(r.span_id, r);
+  for (const r of records) {
+    const sha = obj(r, "manifest")?.["request_sha256"];
+    if (r.type === "context.built" && typeof sha === "string") manifests.set(sha, r);
+  }
 
   const visible = rows.filter(({ record }) => {
     const category = categoryOf(record.type);
@@ -155,7 +242,10 @@ export function RunTrace({
                 )}
               </button>
               {open === key && expandable && (
-                <Detail record={record} manifest={manifests.get(record.span_id) ?? null} />
+                <Detail
+                  record={record}
+                  manifest={manifests.get(str(record, "request_sha256") ?? "") ?? null}
+                />
               )}
             </li>
           );

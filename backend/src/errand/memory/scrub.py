@@ -11,10 +11,19 @@ from __future__ import annotations
 
 from collections.abc import Collection
 
-from errand.domain.brief import Brief
+from errand.domain.brief import Brief, ProviderPref, ProviderPrefFact, WindowFact
 from errand.memory.briefjson import FACT_FIELDS, clear_fields, scrub_brief_json
 
 __all__ = ["clear_fields", "scrub_brief", "scrub_brief_json", "stale_fields"]
+
+
+def _stale_pref(fact: ProviderPrefFact, eligible: Collection[str]) -> tuple[bool, bool]:
+    """(prefer component stale, avoid component stale)."""
+    prefer, avoid = fact.prefer_memory_id, fact.avoid_memory_id
+    return (
+        prefer is not None and prefer not in eligible,
+        avoid is not None and avoid not in eligible,
+    )
 
 
 def stale_fields(brief: Brief, eligible: Collection[str]) -> list[str]:
@@ -22,15 +31,49 @@ def stale_fields(brief: Brief, eligible: Collection[str]) -> list[str]:
     out: list[str] = []
     for name in FACT_FIELDS:
         fact = getattr(brief, name)
-        memory_id = fact.prov.memory_id if fact is not None else None
-        if memory_id is not None and memory_id not in eligible:
+        if fact is None:
+            continue
+        memory_id = fact.prov.memory_id
+        own = memory_id is not None and memory_id not in eligible
+        bound = isinstance(fact, WindowFact) and any(
+            m not in eligible for m in fact.bound_memory_ids.values()
+        )
+        pref = isinstance(fact, ProviderPrefFact) and any(_stale_pref(fact, eligible))
+        if own or bound or pref:
             out.append(name)
     return out
 
 
 def scrub_brief(brief: Brief, eligible: Collection[str]) -> tuple[Brief, list[str]]:
-    """The brief without its stale fields, and which fields were cleared."""
+    """The brief without its stale fields, and which fields were cleared.
+
+    A window with a stale time bound is cleared whole here (this pure form cannot
+    re-resolve it); `apply_memory` drops only the bound before this runs. A provider
+    preference loses only the component whose row is stale.
+    """
     cleared = stale_fields(brief, eligible)
     if not cleared:
         return brief, []
-    return brief.model_copy(update={name: None for name in cleared}), cleared
+    update: dict[str, object] = {}
+    for name in cleared:
+        fact = getattr(brief, name)
+        if isinstance(fact, ProviderPrefFact) and fact.prov.memory_id is None:
+            drop_prefer, drop_avoid = _stale_pref(fact, eligible)
+            value = ProviderPref(
+                prefer_id=None if drop_prefer else fact.value.prefer_id,
+                avoid_ids=[] if drop_avoid else list(fact.value.avoid_ids),
+            )
+            update[name] = (
+                fact.model_copy(
+                    update={
+                        "value": value,
+                        "prefer_memory_id": None if drop_prefer else fact.prefer_memory_id,
+                        "avoid_memory_id": None if drop_avoid else fact.avoid_memory_id,
+                    }
+                )
+                if value.prefer_id or value.avoid_ids
+                else None
+            )
+        else:
+            update[name] = None
+    return brief.model_copy(update=update), cleared

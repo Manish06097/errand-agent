@@ -1,0 +1,27 @@
+id: S49b_forget_between_loop_calls
+title: 'The harness forgets the pre-filled area between two loop calls of one run, through the real DELETE route; the next call is rebuilt without it (a stale epoch and a fresh builder manifest in the trace) and the agent asks for the area instead of ending on a card built from it'
+category: [memory]
+seed: 491
+model: scripted:memory
+memory_seed: memory_demo
+hooks:
+  - before_call: 1
+    forget: {key: home_area}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: tomorrow morning
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber for my kitchen tap tomorrow morning, under ₹1,500."
+    gives: [service, issue, window, budget_max_inr]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [area]
+  - expect_trace: {invalidate: 1, guard.context_stale: 1}
+  - expect_memory: {key: home_area, status: forgotten}
+  - expect_context: {stale: 1, rebuilt_calls: 1}
+  - expect_world: {hold_slot: 0, book: 0}
+expect:
+  invariants: [default]

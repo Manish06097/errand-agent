@@ -157,6 +157,12 @@ source_modules = ["errand.context", "errand.llm"]
 forbidden_modules = ["errand.memory.service"]
 
 [[tool.importlinter.contracts]]
+name = "Memory never imports the agent or the API (the evidence parsers live in errand.domain)"
+type = "forbidden"
+source_modules = ["errand.memory"]
+forbidden_modules = ["errand.agent", "errand.api"]
+
+[[tool.importlinter.contracts]]
 name = "The mock world never imports the agent"
 type = "forbidden"
 source_modules = ["errand.world"]

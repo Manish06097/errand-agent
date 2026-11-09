@@ -32,6 +32,7 @@ from errand.config import LimitSettings
 from errand.domain.brief import BriefField
 from errand.domain.outcomes import RunOutcome
 from errand.world.scenario import FaultsConfig, ScenarioConfig, WorldConfig
+from evals import memory_steps
 
 
 class _Loader(yaml.SafeLoader):
@@ -580,7 +581,7 @@ class ExpectFollowup(_Strict):
     expect_followup: dict[str, Any]
 
 
-STEP_TYPES: dict[str, type[_Strict]] = {
+STEP_TYPES: dict[str, type[BaseModel]] = {
     "say": Say,
     "answer": Answer,
     "post": Post,
@@ -632,6 +633,7 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "click_followup": ClickFollowup,
     "expect_followup": ExpectFollowup,
 }
+STEP_TYPES.update(memory_steps.MEMORY_STEP_TYPES)
 
 Step = (
     Say
@@ -678,6 +680,11 @@ Step = (
     | ExpectShortlist
     | ExpectOptions
     | ExpectApprovals
+    | memory_steps.ForgetMemory
+    | memory_steps.MemoryAction
+    | memory_steps.ExpectChip
+    | memory_steps.ExpectMemory
+    | memory_steps.ExpectContext
     | WorldEvent
     | WatcherTick
     | ExpectNotification
@@ -737,6 +744,8 @@ PlannerName = Literal[
     "hostile:no_evidence",
     "hostile:no_day_part",
     "hostile:reask",
+    "scripted:memory",
+    "scripted:growing",
 ]
 ReaderName = Literal["keyword", "blind", "hostile", "skipper", "timeout", "refusal", "max_tokens"]
 
@@ -767,6 +776,10 @@ class Scenario(_Strict):
     steps: list[Annotated[Step, BeforeValidator(parse_step)]]
     expect: FinalExpect = Field(default_factory=FinalExpect)
     replay: ReplaySpec | None = None
+    # N2B: a seed loaded into the agent's data directory before the app starts (the demo
+    # conversation becomes this scenario's chat) and harness-side triggers (S49b).
+    memory_seed: Literal["memory_demo", "memory_rich_v1"] | None = None
+    hooks: list[memory_steps.CallHook] = Field(default_factory=list)
     # M5: the world's dedupe modes this scenario runs in. Default: both for a scenario
     # that can reach `book`, else just the one `world.enforce_idempotency` says. A single
     # mode that is not forced by `world.enforce_idempotency` needs a reason (one line).

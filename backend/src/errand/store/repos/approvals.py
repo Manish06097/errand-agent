@@ -136,6 +136,23 @@ class ApprovalsRepo:
             ),
         )
 
+    async def set_memory_ids(self, approval_id: str, memory_ids: list[str]) -> None:
+        await self._conn.execute(
+            "UPDATE approvals SET memory_ids_json = ? WHERE approval_id = ?",
+            (json.dumps(sorted(set(memory_ids))), approval_id),
+        )
+
+    async def pending_listing(self, memory_id: str) -> list[str]:
+        """Pending approvals whose card depends on `memory_id` (decision 11)."""
+        async with self._conn.execute(
+            "SELECT approval_id FROM approvals WHERE status = 'pending' "
+            "AND memory_ids_json IS NOT NULL AND EXISTS "
+            "(SELECT 1 FROM json_each(approvals.memory_ids_json) WHERE value = ?) "
+            "ORDER BY requested_at, rowid",
+            (memory_id,),
+        ) as cur:
+            return [str(r[0]) for r in await cur.fetchall()]
+
     async def _ids(self, sql: str, params: tuple[Any, ...]) -> list[str]:
         async with self._conn.execute(sql, params) as cur:
             return [str(r[0]) for r in await cur.fetchall()]

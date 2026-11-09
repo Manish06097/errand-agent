@@ -1,0 +1,28 @@
+id: S01b_happy_path_area_from_memory
+title: S01 with the area from memory; the message names no area, yet no question is asked, the brief's area comes from the saved home area, one card at the held quote, one verified booking
+category: [core, memory]
+seed: 1
+memory_seed: memory_demo
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_no_card: {}
+  - expect_brief: {values: {area: indiranagar}}
+  - expect_context: {included: [m-01, m-02, m-06, m-07], prefill: {m-01: area}}
+  - expect_card: {kind: action, status: pending, typed_grant_ok: true, price_is_held_quote: true}
+  - expect_world: {search_providers: 1, hold_slot: 1, book: 0}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_booking: {count: 1, price_is_held_quote: true}
+expect:
+  invariants: [default]

@@ -1,0 +1,29 @@
+id: S49_forget_the_prefilled_area_mid_errand
+title: 'Memory pre-fills the area; the user forgets it between two turns of the errand; the brief field is cleared by its memory id with an invalidate record, the value is absent from S3 and every later request, and the agent asks for the area'
+category: [memory]
+seed: 49
+model: scripted:memory
+memory_seed: memory_demo
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: tomorrow morning
+    budget_max_inr: "1500"
+steps:
+  - say: "I need a plumber for a leaking tap tomorrow morning."
+    gives: [service, issue, window]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [budget_max_inr]
+  - expect_brief: {values: {area: indiranagar}}
+  - expect_context: {prefill: {m-01: area}}
+  - forget_memory: {key: home_area}
+  - say: "Under ₹1,500, please."
+    gives: [budget_max_inr]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [area]
+  - expect_trace: {invalidate: 1}
+  - expect_context: {excluded: {m-01: forgotten}, absent: ["indiranagar"]}
+expect:
+  invariants: [default]

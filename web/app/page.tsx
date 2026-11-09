@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ConversationList } from "@/components/conversation-list";
 import { NotificationBell } from "@/components/notifications";
 import { ApiHealth } from "./api-health";
@@ -8,7 +9,12 @@ export default function Home() {
       <header className="flex flex-col gap-1">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold tracking-tight">Errand agent</h1>
-          <NotificationBell />
+          <div className="flex items-center gap-3">
+            <Link href="/memory" className="text-sm underline" data-testid="memory-link">
+              Memory
+            </Link>
+            <NotificationBell />
+          </div>
         </div>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
           Arrange a home-service errand. The agent asks before it books anything.

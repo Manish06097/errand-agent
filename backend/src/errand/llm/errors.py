@@ -20,6 +20,18 @@ class ContextOverBudget(Exception):
         )
 
 
+class ContextStale(Exception):
+    """The memory epoch moved since the request was built; nothing was sent (11)."""
+
+    def __init__(self, *, built: int, current: int) -> None:
+        self.built = built
+        self.current = current
+        super().__init__(
+            f"the request was built at memory epoch {built} but the epoch is {current}; "
+            "nothing was sent"
+        )
+
+
 class ModelCallLimit(Exception):
     """The run already made its maximum number of model calls; nothing was sent."""
 

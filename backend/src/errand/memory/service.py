@@ -25,6 +25,7 @@ from errand.memory.evidence import Checked, EvidenceRefused, ValueCheck, check_e
 from errand.memory.evidence import value_in_quote as default_value_check
 from errand.memory.hmac_key import hmac_hex
 from errand.memory.registry import (
+    PREFILL_FIELD,
     KeySpec,
     RegistryError,
     conflicts,
@@ -137,11 +138,21 @@ class MemoryService:
         hmac_key: bytes,
         *,
         value_check: ValueCheck = default_value_check,
+        card_keys: frozenset[str] = frozenset({"home_area"}),
     ) -> None:
+        # Memory keys whose change invalidates a pending card that depends on the row. The
+        # wiring derives them from the brief's INVALIDATES table (data in, no import of the
+        # agent): a changed area discards the card, a changed time bound does not.
+        self._card_keys = card_keys
         self._db = db
         self._now = now_ms
         self._key = hmac_key
         self._value_check = value_check
+
+    @property
+    def mask_key(self) -> bytes:
+        """The install key, for the n-gram mask (context building reads, never writes)."""
+        return self._key
 
     def hash_value(self, value: Any) -> str:
         """HMAC-SHA256 of the canonical value under the install key.
@@ -353,6 +364,10 @@ class MemoryService:
         await self._reject_pending(
             mem, user_id, spec, scope, value, by=new_id, actor=actor, now=now
         )
+        cards = await self._invalidate_cards(
+            repos, [r for r in replaced if r.key in self._card_keys]
+        )
+        await self._scrub_cards(repos, user_id, replaced, {}, only_ids=set(cards))
         await mem.bump_epoch(user_id)
         stored = await mem.get(new_id)
         assert stored is not None
@@ -360,7 +375,50 @@ class MemoryService:
             "memory": view(stored),
             "unchanged": False,
             "replaced": [view(r) for r in replaced],
+            "cards_invalidated": cards,
         }
+
+    async def _invalidate_cards(self, repos: Repos, rows: Sequence[MemoryRow]) -> list[str]:
+        """Pending cards that list one of `rows` become `invalidated` (request_changed), in
+        the caller's transaction. A granted card or an open intent is left alone (decision
+        11): the user approved the provider, slot and price, none of which is a memory value."""
+        done: list[str] = []
+        for r in rows:
+            for approval_id in await repos.approvals.pending_listing(r.memory_id):
+                if await repos.approvals.invalidate(approval_id, "request_changed"):
+                    done.append(approval_id)
+        return done
+
+    async def _scrub_cards(
+        self,
+        repos: Repos,
+        user_id: str,
+        rows: Sequence[MemoryRow],
+        forms: dict[str, tuple[str, ...]],
+        *,
+        only_ids: set[str] | None,
+    ) -> None:
+        """Blank the old value in the stored cards (`approvals.card_json`), which the read
+        serves in place of the redacted message body. A forget redacts every surface form in
+        every card of the user and blanks the memory-sourced chip of the forgotten fields on
+        the cards that list the row; a correct blanks that chip on the cards it just
+        invalidated (`only_ids`). Status and the fingerprinted material are untouched."""
+        ids = {r.memory_id for r in rows}
+        fields = {PREFILL_FIELD[r.key] for r in rows if r.key in PREFILL_FIELD}
+        all_forms = tuple(f for fs in forms.values() for f in fs)
+        marker = redaction.FORGOTTEN_MARKER if forms else "[updated]"
+        for approval_id, card_json, listed in await repos.memories.user_cards(user_id):
+            if only_ids is not None and approval_id not in only_ids:
+                continue
+            depends = listed is not None and bool(ids & set(json.loads(listed)))
+            card = json.loads(card_json)
+            new, changed = redaction.redact_card_chips(
+                card, all_forms, blank_fields=fields if depends else (), marker=marker
+            )
+            if changed:
+                await repos.memories.set_card_json(
+                    approval_id, json.dumps(new, ensure_ascii=False, separators=(",", ":"))
+                )
 
     async def _refuse_contradiction(
         self, mem: MemoriesRepo, user_id: str, spec: KeySpec, scope: str, value: Any
@@ -594,6 +652,7 @@ class MemoryService:
                 await self._forget_row(repos, r, now, actor="user")
             cleared = await self._redact_messages(repos, user_id, chain, forms, span_hashes, now)
             archived = await self._cascade_archives(repos, user_id, set(ids), forms)
+            await self._scrub_cards(repos, user_id, chain, forms, only_ids=None)
             for r in chain:
                 await mem.add_hashes(
                     r.memory_id,
@@ -604,6 +663,9 @@ class MemoryService:
                     r.memory_id, "redacted_span", sorted(set(span_hashes.get(r.memory_id, [])))
                 )
                 await mem.blank_client_responses(r.memory_id)
+            cards = await self._invalidate_cards(
+                repos, [r for r in chain if r.key in self._card_keys]
+            )
             await mem.bump_epoch(user_id)
             for r in chain:  # last: the value and the quote leave the row
                 await mem.null_value(r.memory_id, _bare_evidence(r.evidence))
@@ -624,6 +686,7 @@ class MemoryService:
                 "earlier_values": len(chain) - 1,
                 "messages_redacted": cleared,
                 "briefs_cleared": archived,
+                "cards_invalidated": cards,
                 "memory": view((await mem.get(memory_id)) or row),
             }
 
@@ -696,7 +759,9 @@ class MemoryService:
                 )
                 if moved is not None:
                     kept.append(Redaction(message_id, moved[0], moved[1], old.memory_id, old.kind))
-            primary_owner = chain[0].memory_id
+            # The row whose evidence this message is owns its redaction (BUG-N2B-1); a message
+            # that only repeats a value belongs to the chain's newest row.
+            primary_owner = spans_here[0][2] if spans_here else chain[0].memory_id
             for s, e in redaction.new_spans(edited, redaction.FORGOTTEN_MARKER):
                 kept.append(Redaction(message_id, s, e, primary_owner, "forgotten"))
             await mem.replace_redactions(message_id, kept)

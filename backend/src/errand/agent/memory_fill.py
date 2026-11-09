@@ -21,7 +21,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from errand.agent import timewin
 from errand.agent.deps import RunDeps
+from errand.agent.memory_prefill import timewin_time
 from errand.domain.brief import AreaFact, Brief, ErrandKind, Provenance
 from errand.domain.errand import Errand
 from errand.memory.registry import GLOBAL, RegistryError, spec_for
@@ -51,16 +53,50 @@ def _area_from(row: MemoryRow, turn: int) -> AreaFact | None:
     return AreaFact(value=area, prov=prov, set_at_turn=turn)
 
 
+def _drop_stale_bounds(
+    deps: RunDeps, brief: Brief, rows: dict[str, MemoryRow], eligible: set[str]
+) -> Brief:
+    """A time bound whose row was forgotten or corrected leaves the window, or is replaced
+    by the active successor's value; the user's own day stays (13.7)."""
+    window = brief.window
+    if window is None or window.expr is None or not window.bound_memory_ids:
+        return brief
+    stale = {k: m for k, m in window.bound_memory_ids.items() if m not in eligible}
+    if not stale:
+        return brief
+    owners = {k: m for k, m in window.bound_memory_ids.items() if k not in stale}
+    changes: dict[str, Any] = dict.fromkeys(stale)
+    for bound, old_id in stale.items():
+        successor = _active_successor(rows, old_id)
+        value = timewin_time(successor.value) if successor is not None else None
+        if successor is not None and value is not None:
+            changes[bound], owners[bound] = value, successor.memory_id
+        deps.tracer.emit(
+            "invalidate",
+            what={"brief_field": f"window.{bound}", "memory_id": old_id},
+            reason="memory_superseded" if successor is not None else "memory_forgotten",
+        )
+    expr = window.expr.model_copy(update=changes)
+    resolved = timewin.resolve(expr, deps.clock.now(), deps.tz)
+    if isinstance(resolved, timewin.Unresolved):
+        return brief  # the pure scrub then clears the window whole
+    fact = window.model_copy(update={"value": resolved, "expr": expr, "bound_memory_ids": owners})
+    return brief.model_copy(update={"window": fact})
+
+
 async def apply_memory(deps: RunDeps, errand: Errand, *, fresh: bool, turn: int) -> Errand:
     """The errand with stale memory fields cleared and global pre-fill applied."""
     async with deps.db.session() as repos:
         rows = {r.memory_id: r for r in await repos.memories.for_user(deps.user_id)}
     eligible = {mid for mid, r in rows.items() if r.status == "active"}
-    brief: Brief = errand.brief
+    brief: Brief = _drop_stale_bounds(deps, errand.brief, rows, eligible)
     updates: dict[str, Any] = {}
 
     for name in stale_fields(brief, eligible):
         fact = getattr(brief, name)
+        if name == "provider_pref":  # a component leaves, the other stays (scrub_brief below)
+            deps.tracer.emit("invalidate", what={"brief_field": name}, reason="memory_forgotten")
+            continue
         old_id = fact.prov.memory_id
         successor = _active_successor(rows, old_id)
         reason = "memory_superseded" if successor is not None else "memory_forgotten"

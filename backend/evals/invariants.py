@@ -1181,6 +1181,8 @@ def inv15_parked_on_every_live_card(rec: Records) -> Violations:
                 for m in rec.messages
                 if m["conversation_id"] == thread
                 and m["role"] == "assistant"
+                # memory chips are transcript lines of no run, never the card on screen
+                and not str(m["body"].get("type", "")).startswith("memory_")
                 and m.get("kind") != "proactive"
                 and _run_index(rec, m["run_id"]) <= _run_index(rec, rid)
             ]
@@ -1285,12 +1287,13 @@ def _request_strings(record: dict[str, Any]) -> list[str]:
 
 def _block(strings: list[str], tag: str) -> str:
     """The text of one tagged block of the user turn (S3 `errand_state`, S4 `memory`)."""
+    found: list[str] = []
     for text in strings:
         start = text.find(f"<{tag}>")
         if start >= 0:
             end = text.find(f"</{tag}>", start)
-            return text[start : end if end >= 0 else len(text)]
-    return ""
+            found.append(text[start : end if end >= 0 else len(text)])
+    return "\n".join(found)
 
 
 def inv05_no_forgotten_value_in_requests(rec: Records) -> Violations:
@@ -1516,6 +1519,11 @@ def inv19_memory_authority(rec: Records) -> Violations:
         for m in rec.messages:
             if _contains_run(_words(json.dumps(m["body"], ensure_ascii=False)), needle):
                 out.append(f"{m['message_id']}: plaintext of forgotten {canary['text']!r}")
+        # the read serves approvals.card_json in place of the message body, so it is scanned too
+        for a in rec.approvals:
+            stored = _words(f"{a['card_json']} {a['material_json']}")
+            if _contains_run(stored, needle):
+                out.append(f"{a['approval_id']}: plaintext of forgotten {canary['text']!r}")
     return out
 
 
@@ -1579,6 +1587,7 @@ def inv20_the_manifest_tells_the_truth(rec: Records) -> Violations:
     request, so the manifest cannot vouch for itself."""
     out: Violations = []
     messages = {m["message_id"]: m for m in rec.messages}
+    epoch_seen: int | None = None
     for run, records in rec.run_records():
         built: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for record in records:
@@ -1596,6 +1605,62 @@ def inv20_the_manifest_tells_the_truth(rec: Records) -> Violations:
             if manifest.get("builder") != "context.builder":
                 continue  # loop calls carry the first call's manifest, merged
             out += _check_recent(where, manifest, record, messages)
+            out += _check_memory_ids(where, manifest, record, rec)
+            epoch = manifest.get("memory_epoch")
+            if isinstance(epoch, int):
+                if epoch_seen is not None and epoch < epoch_seen:
+                    out.append(
+                        f"{where}: sent at memory epoch {epoch} after a request at {epoch_seen}"
+                    )
+                epoch_seen = max(epoch, epoch_seen or 0)
+        out += _check_stale_rebuilds(run["run_id"], records)
+    return out
+
+
+def _check_memory_ids(
+    where: str, manifest: dict[str, Any], record: dict[str, Any], rec: Records
+) -> Violations:
+    """The memory ids S4 renders are exactly `memory_included`, and each is a row that was
+    active at some point (it has a written, corrected or confirmed event): read from the raw
+    request and agent.sqlite, never from the manifest alone."""
+    block = _block(_request_strings(record), "memory").replace(" ", "")
+    rendered = set(re.findall(r'"id":"([^"]+)"', block))
+    included = {str(i["id"]) for i in manifest.get("memory_included", [])}
+    out: Violations = []
+    if rendered != included:
+        out.append(f"{where}: S4 renders {sorted(rendered)}, the manifest lists {sorted(included)}")
+    rows = {r["memory_id"]: r for r in rec.memories}
+    activated = {
+        e["memory_id"]
+        for e in rec.memory_events
+        if e["type"] in ("written", "corrected", "confirmed")
+    }
+    for memory_id in sorted(rendered):
+        if memory_id not in rows:
+            out.append(f"{where}: S4 renders {memory_id}, which does not exist")
+        elif memory_id not in activated:
+            out.append(f"{where}: S4 renders {memory_id}, which was never active")
+        elif rows[memory_id]["kind"] == "inferred" and rows[memory_id]["confirmed_at"] is None:
+            out.append(f"{where}: S4 renders {memory_id}, an inferred row nobody confirmed")
+    return out
+
+
+def _check_stale_rebuilds(run_id: str, records: list[dict[str, Any]]) -> Violations:
+    """After a `guard.context_stale` the next sent request carries the epoch the guard saw."""
+    out: Violations = []
+    want: int | None = None
+    for record in records:
+        if record["type"] == "guard.context_stale":
+            want = int(record["detail"]["current"])
+        elif record["type"] == "context.built" and want is not None:
+            manifest = record["manifest"]
+            if manifest.get("sent"):
+                if manifest.get("memory_epoch") != want:
+                    out.append(
+                        f"{run_id}: rebuilt at epoch {manifest.get('memory_epoch')}, "
+                        f"the guard saw {want}"
+                    )
+                want = None
     return out
 
 

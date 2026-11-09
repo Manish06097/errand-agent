@@ -27,4 +27,4 @@ def test_the_card_models_are_named_components() -> None:
         assert name in schemas, name
     body = schemas["MessageOut"]["properties"]["body"]
     assert body["discriminator"]["propertyName"] == "type"
-    assert len(body["oneOf"]) == 8
+    assert len(body["oneOf"]) == 14

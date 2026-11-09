@@ -10,6 +10,7 @@ fetch on `pagehide` can send it without a body.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Query, Request
@@ -17,12 +18,14 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
+from errand.memory.evidence import value_from_span
 from errand.memory.service import (
     MemoryConflict,
     MemoryNotFound,
     MemoryRefused,
     MemoryService,
     RouteMismatch,
+    view,
 )
 
 router = APIRouter()
@@ -169,3 +172,130 @@ def mount(app: FastAPI) -> None:
                 status_code=route.status_code,
                 response_model=None,
             )
+
+
+# ----------------------------------------------------------------- chat actions (17.3)
+
+MEMORY_ACTIONS = frozenset({"keep_memory", "confirm_forget", "update_memory", "save_memory"})
+
+
+async def memory_chat_action(
+    request: Request,
+    conversation_id: str,
+    kind: str,
+    client_action_id: str,
+    payload: dict[str, str],
+) -> JSONResponse:
+    """The chat actions on memory chips. Each is idempotent on `client_action_id` (a repeat
+    replays the first answer) and answers 409 with the current row when the row is not in
+    the state the action needs. Dismiss and Undo use the memory routes."""
+    service, user = _service(request), _user(request)
+    db = request.app.state.manager.db
+    memory_id = payload.get("memory_id", "")
+    try:
+        if kind == "keep_memory":
+            out = await service.keep(
+                user_id=user,
+                memory_id=memory_id,
+                client_action_id=client_action_id,
+            )
+        elif kind == "confirm_forget":
+            out = await service.forget(
+                user_id=user,
+                memory_id=memory_id,
+                client_action_id=client_action_id,
+            )
+        else:
+            chip = await _chip_body(db, conversation_id, payload.get("chip_message_id", ""))
+            if chip is None:
+                return JSONResponse({"error": "not_found"}, status_code=404)
+            value = await _value_of_chip(db, chip)
+            if value is None:
+                return JSONResponse(
+                    {"error": "conflict", "detail": "nothing to save: those words are gone"},
+                    status_code=409,
+                )
+            if kind == "save_memory":
+                out = await service.remember_from_ui(
+                    user_id=user,
+                    key=chip["key"],
+                    scope=chip["scope"],
+                    value=value,
+                    client_action_id=client_action_id,
+                    action="save",
+                )
+            elif payload.get("choice") == "just_this_time":
+                return JSONResponse({"ok": True, "changed": False})
+            else:
+                out = await service.correct(
+                    user_id=user,
+                    memory_id=chip["memory_id"],
+                    value=value,
+                    client_action_id=client_action_id,
+                )
+    except (MemoryNotFound, MemoryConflict, MemoryRefused, RouteMismatch) as exc:
+        return _error(exc)
+    return JSONResponse(out)
+
+
+async def _chip_body(db: Any, conversation_id: str, message_id: str) -> dict[str, Any] | None:
+    async with db.session() as repos:
+        message = await repos.messages.get(message_id)
+    if message is None or message.conversation_id != conversation_id:
+        return None
+    body = message.body
+    return body if body.get("type") in ("memory_offer", "memory_update") else None
+
+
+async def _value_of_chip(db: Any, chip: dict[str, Any]) -> Any | None:
+    """Re-read the user's span and parse it; None if a forget redacted it meanwhile."""
+    async with db.session() as repos:
+        source = await repos.messages.get(chip["source_message_id"])
+        redactions = await repos.memories.redactions_for_message(chip["source_message_id"])
+    text = source.body.get("text") if source is not None else None
+    if not isinstance(text, str) or chip["end"] > len(text):
+        return None
+    # A forget that overwrote an earlier span moved the words, so the offsets read other text.
+    if any(r.kind == "forgotten" and r.start < chip["end"] for r in redactions):
+        return None
+    return value_from_span(chip["key"], text[chip["start"] : chip["end"]])
+
+
+# --------------------------------------------------------------- chips at read time (17.3)
+
+_SHOWN = ("active", "pending_confirmation")
+_SINGLE = ("memory_saved", "memory_suggestion", "memory_update", "memory_forget")
+
+
+def resolved(row: Any) -> dict[str, Any]:
+    """A row for the chat. The display value only while the user may be shown it."""
+    label = None
+    if row.status in _SHOWN and row.value is not None:
+        label = view(row)["label"]
+    return {
+        "memory_id": row.memory_id,
+        "key": row.key,
+        "scope": row.scope,
+        "kind": row.kind,
+        "status": row.status,
+        "label": label,
+    }
+
+
+def resolve_memory_body(body: dict[str, Any], rows: Mapping[str, Any]) -> dict[str, Any]:
+    """The stored reference chip with its row resolved at read time (status and, while
+    eligible, the display value); a list card with the rows still active and the
+    suggestions still pending. The stored body is untouched."""
+    kind = body.get("type")
+    if kind in _SINGLE:
+        row = rows.get(str(body.get("memory_id")))
+        return {**body, "memory": resolved(row)} if row is not None else body
+    if kind == "memory_list":
+        got = [rows[i] for i in body.get("memory_ids", []) if i in rows]
+        sug = [rows[i] for i in body.get("suggestion_ids", []) if i in rows]
+        return {
+            **body,
+            "preferences": [resolved(r) for r in got if r.status == "active"],
+            "suggestions": [resolved(r) for r in sug if r.status == "pending_confirmation"],
+        }
+    return body

@@ -114,6 +114,9 @@ def test_the_tools_are_the_read_brief_and_propose_tools_in_order() -> None:
         "propose_booking",
         "propose_cancel",
         "propose_reschedule",
+        "remember",
+        "list_memories",
+        "propose_forget",
     )
     assert not set(PLANNER_TOOL_NAMES) & CONSEQUENTIAL_TOOLS
 
@@ -139,7 +142,8 @@ def test_the_tool_list_fits_its_context_section() -> None:
     Measured in M8: 2,318 estimated tokens, 2,718 with the preamble. N1 adds
     `propose_cancel` and `propose_reschedule` (328 together) and `update_brief`'s
     `provider_pref` (98, with its evidence entry): 2,744, or 3,144 with the preamble, so
-    656 are left for M11's three memory tools. `update_brief` is 1,379 of the list.
+    656 were left for the three memory tools; N2B spent 699 of them (3,768 with the
+    preamble, 32 left). `update_brief` is 1,379 of the list.
     """
     tracer = Tracer(run_id="r_t", thread_id="c_t", sinks=[NullSink()])
     gateway = LLMGateway(

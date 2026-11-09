@@ -13,7 +13,7 @@ rows that follow an edit, so a second forget on the same message stays consisten
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from typing import Any
 
 FORGOTTEN_MARKER = "[removed at your request]"
@@ -166,6 +166,32 @@ def redact_body(
         # user's cut evidence. The window_label is the resolved search window, left alone.
         new["brief"] = [_redact_chip(c, forms) for c in chips]
     return new, edited
+
+
+def redact_card_chips(
+    card: dict[str, Any],
+    forms: Sequence[str],
+    *,
+    blank_fields: Collection[str] = (),
+    marker: str = FORGOTTEN_MARKER,
+) -> tuple[dict[str, Any], bool]:
+    """An approval card with its brief chips redacted: every surface form in `value` and
+    `evidence`, and the whole value of a memory-sourced chip on one of `blank_fields`.
+    Nothing else on the card is touched (the fingerprinted material is not here)."""
+    chips = card.get("brief")
+    if not isinstance(chips, list):
+        return card, False
+    out: list[Any] = []
+    for chip in chips:
+        new = _redact_chip(chip, forms)
+        if (
+            isinstance(new, dict)
+            and new.get("source") == "memory"
+            and new.get("field") in blank_fields
+        ):
+            new = {**new, "value": marker, "evidence": None}
+        out.append(new)
+    return ({**card, "brief": out}, True) if out != chips else (card, False)
 
 
 def _redact_chip(chip: Any, forms: Sequence[str]) -> Any:

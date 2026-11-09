@@ -41,7 +41,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langgraph.types import Command
 
-from errand.agent import critical
+from errand.agent import critical, memory_runend
 from errand.agent.deps import ConsequentialLocks, RunDeps
 from errand.agent.graph import Graph, RoutedAs, invoke, route_input, run_config
 from errand.agent.planner_tools import PLANNER_TOOLS
@@ -72,6 +72,7 @@ from errand.domain.messages import OutcomeNotice
 from errand.domain.outcomes import Limit, PendingCheck, RunOutcome
 from errand.ids import IdFactory, message_id_for, message_id_for_user
 from errand.llm.gateway import LLMGateway
+from errand.memory.service import MemoryService
 from errand.quarantine.reader import ReviewReader
 from errand.store.agent_db import AgentDB
 from errand.store.repos.messages import Message
@@ -204,6 +205,8 @@ class RunManager:
         self.approval_settings = approval_settings or ApprovalSettings()
         self.booking_settings = booking_settings or BookingSettings()
         self.consequential: ConsequentialLocks = consequential or UserLocks(db, self._holder)
+        # Set by the app once the memory service exists (it needs the manager's clock).
+        self.memory: MemoryService | None = None
         # The follow-up watcher, set by the lifespan; the reconciler's follow-up pass reads it.
         self.followup_watcher: Any = None
 
@@ -736,9 +739,20 @@ class RunManager:
                 backstop_hit=isinstance(exc, TimeoutError) and backstop.expired(),
             )
         finally:
+            await self._memory_run_end(run, tracer, outcome)
             await self._finish(run, tracer, outcome, parked, limit)
         if cancelled:
             raise asyncio.CancelledError()
+
+    async def _memory_run_end(self, run: _Run, tracer: Tracer, outcome: RunOutcome) -> None:
+        """Suggestions and `last_used_at` after the outcome is final (N2B 2.8). Never raises."""
+        try:
+            turn = run.inbound.turn_no if isinstance(run.inbound, UserMessage) else None
+            await memory_runend.run_end(
+                run.deps, tracer, outcome, self.trace_file(run.conversation_id, run.run_id), turn
+            )
+        except Exception:
+            log.exception("run %s: the memory run-end hook failed", run.run_id)
 
     def _dashboard(self, run: _Run) -> Sink:
         try:
@@ -792,6 +806,7 @@ class RunManager:
             approval_settings=self.approval_settings,
             booking_settings=self.booking_settings,
             consequential=self.consequential,
+            memory=self.memory,
         )
 
     async def _checkpointed_errand(self, run: _Run) -> Errand | None:

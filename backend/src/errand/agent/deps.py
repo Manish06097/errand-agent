@@ -16,6 +16,7 @@ from errand.clock import Clock
 from errand.config import ApprovalSettings, BookingSettings, LimitSettings
 from errand.domain.counters import RunCounters
 from errand.llm.gateway import LLMGateway
+from errand.memory.service import MemoryService
 from errand.quarantine.reader import ReviewReader
 from errand.store.agent_db import AgentDB
 from errand.tools.gateway import ToolGateway
@@ -64,6 +65,10 @@ class RunDeps:
     # The intents this run wrote (execute) or took over (a recovery run): the critical
     # section's exit (agent/critical.py) settles these and no other run's.
     intents: set[str] = field(default_factory=set)
+    # N2B: the memory service (None where a test builds deps without one) and the count of
+    # memory chips this run has written, for their message ids.
+    memory: MemoryService | None = None
+    chip_seq: int = 0
 
     @property
     def approval_policy(self) -> ApprovalPolicy:

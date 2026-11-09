@@ -269,6 +269,83 @@ class OutcomeCard(_Body):
     status_line: str | None = None
 
 
+class ResolvedMemory(_Body):
+    """A memory row as the chat shows it, resolved at read time (never stored). `label` is
+    the display value, and only while the row is one the user may be shown: active, or
+    pending for the Keep and Dismiss chip. A forgotten, rejected or superseded row has none."""
+
+    memory_id: str
+    key: str
+    scope: str
+    kind: str
+    status: str
+    label: str | None = None
+
+
+def _unset(value: object) -> bool:
+    return value is None
+
+
+class MemorySavedChip(_Body):
+    """ "Saved: home area" with Undo. References the row; the value is resolved at read time."""
+
+    type: Literal["memory_saved"] = "memory_saved"
+    memory_id: str
+    memory: ResolvedMemory | None = Field(default=None, exclude_if=_unset)
+
+
+class MemorySuggestionChip(_Body):
+    """One per errand that produced a suggestion: Keep and Dismiss."""
+
+    type: Literal["memory_suggestion"] = "memory_suggestion"
+    memory_id: str
+    memory: ResolvedMemory | None = Field(default=None, exclude_if=_unset)
+
+
+class MemoryOfferChip(_Body):
+    """ "Remember this for next time?" It stores no value, only where the user said it: a
+    click re-reads the span out of the user's message, so a forgotten value has no copy."""
+
+    type: Literal["memory_offer"] = "memory_offer"
+    key: str
+    scope: str
+    source_message_id: str
+    start: int
+    end: int
+
+
+class MemoryUpdateChip(_Body):
+    """ "Update your saved home area? [Update] [Just this time]" with the same no-value rule."""
+
+    type: Literal["memory_update"] = "memory_update"
+    memory_id: str
+    key: str
+    scope: str
+    source_message_id: str
+    start: int
+    end: int
+    memory: ResolvedMemory | None = Field(default=None, exclude_if=_unset)
+
+
+class MemoryForgetChip(_Body):
+    """What `propose_forget` renders. The forget is the user's click, never the model's."""
+
+    type: Literal["memory_forget"] = "memory_forget"
+    memory_id: str
+    memory: ResolvedMemory | None = Field(default=None, exclude_if=_unset)
+
+
+class MemoryListCard(_Body):
+    """What `list_memories` renders: references only, resolved with their status at read time."""
+
+    type: Literal["memory_list"] = "memory_list"
+    memory_ids: list[str] = Field(default_factory=list)
+    suggestion_ids: list[str] = Field(default_factory=list)
+    # Resolved at read time: the rows still active and the suggestions still pending.
+    preferences: list[ResolvedMemory] | None = Field(default=None, exclude_if=_unset)
+    suggestions: list[ResolvedMemory] | None = Field(default=None, exclude_if=_unset)
+
+
 MessageBody = Annotated[
     TextBody
     | ClarifyCard
@@ -277,9 +354,26 @@ MessageBody = Annotated[
     | ActionCard
     | CardReminder
     | ProactiveLine
-    | OutcomeCard,
+    | OutcomeCard
+    | MemorySavedChip
+    | MemorySuggestionChip
+    | MemoryOfferChip
+    | MemoryUpdateChip
+    | MemoryForgetChip
+    | MemoryListCard,
     Field(discriminator="type"),
 ]
+
+MEMORY_BODY_TYPES = frozenset(
+    {
+        "memory_saved",
+        "memory_suggestion",
+        "memory_offer",
+        "memory_update",
+        "memory_forget",
+        "memory_list",
+    }
+)
 
 KIND_OF: dict[str, Literal["text", "card", "notice", "proactive"]] = {
     "proactive": "proactive",
@@ -290,4 +384,10 @@ KIND_OF: dict[str, Literal["text", "card", "notice", "proactive"]] = {
     "action": "card",
     "reminder": "card",
     "outcome": "card",
+    "memory_saved": "card",
+    "memory_suggestion": "card",
+    "memory_offer": "card",
+    "memory_update": "card",
+    "memory_forget": "card",
+    "memory_list": "card",
 }

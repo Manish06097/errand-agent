@@ -26,7 +26,7 @@ refused, so a token built any other way is rejected at the call (`is_minted`).
 from __future__ import annotations
 
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal, NoReturn
@@ -105,12 +105,28 @@ class Created:
     created: bool
     superseded: list[str] = field(default_factory=list)
     swept: Swept = field(default_factory=list)
+    # Memory ids the card would depend on that are no longer eligible: no card was made.
+    stale_memory: tuple[str, ...] = ()
 
 
-async def create(db: AgentDB, row: ApprovalRow, policy: ApprovalPolicy) -> Created:
+async def create(
+    db: AgentDB,
+    row: ApprovalRow,
+    policy: ApprovalPolicy,
+    memory_ids: Sequence[str] = (),
+) -> Created:
+    """Insert a new pending approval. `memory_ids` are the memories behind the brief fields
+    the card's material depends on (gate 2 decision 11): each must still be eligible in this
+    same transaction, else nothing is inserted and `stale_memory` says which. That check is
+    the insert-time scrub point: the card shows the user's current value, never a mask."""
     if row.status != "pending":
         raise ValueError("a new approval starts pending")
     async with db.transaction() as repos:
+        if memory_ids:
+            eligible = await repos.memories.eligible_ids(await _user_of(repos, row.conversation_id))
+            gone = tuple(m for m in memory_ids if m not in eligible)
+            if gone:
+                return Created(row, created=False, stale_memory=gone)
         existing = await repos.approvals.get_by_proposal(row.proposal_id)
         if existing is not None:
             # A re-run of prepare_proposal: the row is already there, maybe already
@@ -119,7 +135,17 @@ async def create(db: AgentDB, row: ApprovalRow, policy: ApprovalPolicy) -> Creat
         swept = await sweep(repos, row.conversation_id, row.requested_at, policy)
         superseded = await repos.approvals.supersede_live(row.conversation_id, "superseded")
         await repos.approvals.insert(row)
+        if memory_ids:
+            await repos.approvals.set_memory_ids(row.approval_id, list(memory_ids))
     return Created(row, created=True, superseded=superseded, swept=swept)
+
+
+async def _user_of(repos: Repos, conversation_id: str) -> str:
+    async with repos.conn.execute(
+        "SELECT user_id FROM conversations WHERE conversation_id = ?", (conversation_id,)
+    ) as cur:
+        found = await cur.fetchone()
+    return str(found[0]) if found else ""
 
 
 class GrantOutcome(StrEnum):
