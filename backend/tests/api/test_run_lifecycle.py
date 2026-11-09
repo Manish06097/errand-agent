@@ -47,7 +47,7 @@ async def test_an_exception_in_a_node_still_ends_with_a_message_and_run_end(
     assert view.run_id in notice["text"]
     assert invariants.inv07_one_end_per_run(rec) == []
     errors = [r for r in rec.traces[view.run_id] if r["type"] == "error"]
-    assert [e["where"] for e in errors] == ["llm.gateway", "run_manager"]
+    assert [e["where"] for e in errors] == ["llm.gateway", "node:plan"]
 
 
 async def test_an_unmapped_stop_reason_is_internal_error_until_m13(tmp_path: Path) -> None:

@@ -44,5 +44,8 @@ class ThreadState(BaseModel):
     result: StepResult | None = None
     # The approval respond parked the run on; await_approval interrupts on it (M4).
     park: str | None = None
+    # A node raised or was skipped for the deadline (node_guard): every router sends the
+    # run to respond. Set per run in the run input, so a parked thread starts clean.
+    node_failed: bool = False
     counters: RunCounters = Field(default_factory=RunCounters)
     outcome: RunOutcome | None = None

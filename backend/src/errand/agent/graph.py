@@ -40,6 +40,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from errand.agent.deps import RunDeps
+from errand.agent.node_guard import guard_node, route_guard
 from errand.agent.nodes.await_approval import await_approval
 from errand.agent.nodes.execute import execute, route_after_execute
 from errand.agent.nodes.ingress import ingress, route_after_ingress
@@ -63,25 +64,35 @@ def build_graph(checkpointer: BaseCheckpointSaver[Any]) -> Graph:
     g: StateGraph[ThreadState, RunDeps, ThreadState, ThreadState] = StateGraph(
         ThreadState, context_schema=RunDeps
     )
-    g.add_node("ingress", ingress)
-    g.add_node("plan", plan)
-    g.add_node("prepare_proposal", prepare_proposal)
-    g.add_node("execute", execute)
-    g.add_node("verify", verify)
-    g.add_node("respond", respond)
-    g.add_node("await_approval", await_approval)
+    nodes: dict[str, Any] = {
+        "ingress": ingress,
+        "plan": plan,
+        "prepare_proposal": prepare_proposal,
+        "execute": execute,
+        "verify": verify,
+        "respond": respond,
+        "await_approval": await_approval,
+    }
+    for name, fn in nodes.items():
+        g.add_node(name, guard_node(name, fn))
     g.add_edge(START, "ingress")
     g.add_conditional_edges(
-        "ingress", route_after_ingress, ["plan", "prepare_proposal", "execute", "respond"]
+        "ingress",
+        route_guard(route_after_ingress),
+        ["plan", "prepare_proposal", "execute", "respond"],
     )
-    g.add_conditional_edges("plan", route_after_plan, ["prepare_proposal", "respond"])
-    g.add_conditional_edges("prepare_proposal", route_after_prepare, ["plan", "respond"])
+    g.add_conditional_edges("plan", route_guard(route_after_plan), ["prepare_proposal", "respond"])
     g.add_conditional_edges(
-        "execute", route_after_execute, ["verify", "prepare_proposal", "respond"]
+        "prepare_proposal", route_guard(route_after_prepare), ["plan", "respond"]
     )
-    g.add_edge("verify", "respond")
+    g.add_conditional_edges(
+        "execute", route_guard(route_after_execute), ["verify", "prepare_proposal", "respond"]
+    )
+    g.add_conditional_edges("verify", route_guard(lambda _s: "respond"), ["respond"])
     g.add_conditional_edges("respond", route_after_respond, ["await_approval", END])
-    g.add_edge("await_approval", "ingress")
+    g.add_conditional_edges(
+        "await_approval", route_guard(lambda _s: "ingress"), ["ingress", "respond"]
+    )
     return g.compile(checkpointer=checkpointer)
 
 
