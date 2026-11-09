@@ -1404,7 +1404,7 @@ Signed in `docs/design/GATE-03.md` (decisions 1 to 17); this section is the desi
 | wall clock per run | 60 s simulated in evals; live value set from the latency measured in M7 (p95 of a full planning turn times 2, rounded up) | checked before every node, model call and tool call outside the critical section |
 | per-tool timeout | see the timeout table below | `ToolGateway` |
 | critical-section grace | 20 s | `execute`/`verify` under `asyncio.shield` |
-| cost per run | $0.40 | `LLMGateway`; not applied inside the critical section |
+| cost per run | $0.40, applied to the quarantined reader only: a reader call is skipped once the run has spent it. The planner has no cost cap (scope trim: eight model calls and the context budget already bound its spend, and a second mid-run stop would add an exit path nothing in the brief asks for) | `quarantine/reader.py` |
 | `book` calls per approval | 1 + `max_same_key_retries` (2 by default), all with one key on one hold; a re-send only after `not_found` on a live hold; 1 when the provider does not dedupe | `execute`, `verify` |
 | same-key `book` retries per approval (`booking.max_same_key_retries`) | 1; 0 gives the pure wait rule | `verify` |
 | provider dedupes `book` keys (`booking.provider_dedupes_keys`) | true; false is the degraded mode with the wait rule | `verify` |
@@ -1430,6 +1430,18 @@ Signed in `docs/design/GATE-03.md` (decisions 1 to 17); this section is the desi
 Each timeout is also capped by the remaining run time plus the critical grace. In sim mode a timeout advances the simulated clock by exactly this value and raises without a real wait.
 
 **The critical section.** The deadline is never enforced in the middle of a side effect. `execute` checks it before the guard transaction; once an intent exists, `execute -> verify -> respond` runs to completion: the call runs under `asyncio.shield` with its own timeout, and Stop, the tool-call cap and the cost cap are deferred until `respond`. Any exit path that finds an open intent for the run, including the limit handlers, a node exception and the outer `asyncio.timeout(90)` backstop, sets the intent to `needs_attention` and emits `PENDING_VERIFICATION` instead of `LIMIT_REACHED`, `WALL_CLOCK_EXCEEDED` or `INTERNAL_ERROR`. The periodic reconciler picks it up. The intent row was written first, so a cancelled booking call never leaves an orphan (S59).
+
+### 15.3 N3 rulings
+
+Part A (bounded execution). The lead's rulings and what the build found.
+
+1. **The deadline renders `WALL_CLOCK_EXCEEDED`**, not `LIMIT_REACHED`: "I ran out of time for this turn, so I stopped. So far I have: plumber, Indiranagar. Still to do: compare providers. Nothing was booked." [Try again] [Narrow search]. "Still to do" comes from the errand phase and the missing brief fields, never from model text (`agent/templates_limits.py`).
+2. **One node wrapper** (`agent/node_guard.py`), applied to every node in `graph.build_graph` at registration. Before a node it checks time left and routes to `respond` with `Limit(deadline)` when none is left; the exemptions are `respond`, `await_approval` and (until N1's `critical.py` replaces the test with "an intent is open") `execute` and `verify`. It catches `Exception` and nothing wider, re-raises LangGraph's `GraphBubbleUp` family, writes an `error` record (`where: node:<name>`, the exception class and message, never a tool payload) and routes to `respond` through `ThreadState.node_failed`, which every router honours: `TOOL_UNAVAILABLE` for `ToolUnavailable` and `ToolUnexpected`, `INTERNAL_ERROR` otherwise. A failure inside `respond` stays with `RunManager._fail`.
+3. **`MODEL_UNAVAILABLE`**: after the SDK's own retries (one, `planner_max_retries = 1`), a 429 or 5xx (529 included), a connection error or a timeout with run time left becomes `ModelUnavailable` (`llm/errors.py`); a 400 or any other 4xx is our bug and stays `INTERNAL_ERROR`. Each planner call is bounded by `asyncio.timeout(min(planner_timeout_s, time left))`; hitting a cap that is the deadline's is `Limit(deadline)`. A failed call still writes its `model.call` record, with `error`, zero usage and zero cost, and counts as a model call because the request went out.
+4. **`ToolUnexpected`** keeps its rule (a malformed read answer ends the run, never retried) and its own wording: "A provider service sent back something I couldn't read, so I stopped. Nothing was booked." (S63).
+5. **The backstop** (`run_backstop_s`, 90 s) with no intent open ends `WALL_CLOCK_EXCEEDED`, not `INTERNAL_ERROR`; with an intent in the conversation unresolved it keeps the old path until N1's `critical.py` takes it over.
+6. **INV-09** reads the limits from `run.start` (`limits`, additive), so it never imports config; `run.end` names the binding cap (`limit`, additive). The `limits:` scenario key accepts `LimitSettings` fields only.
+7. **Simulated time stays inside the deadline.** A call that outlasts its timeout leaves the simulated clock at start plus the timeout, and the read retry's backoff is capped by the time left (BUG-N3-1).
 
 ### 15.2 Outcomes
 
