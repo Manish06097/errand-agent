@@ -383,6 +383,19 @@ Two things were needed to make parallel runs safe. Tests that run a scenario wro
 - The "Never mind" clause of INV-03 is vacuous until M6 and the table notes say so on every row.
 
 **Next.** M6: the reconciler turns `unknown` attempts into answers when the hold lapses, sends a `prepared` attempt once, and adds "Check now" and "Never mind" (the retry condition already reads the errand's phase).
+
+## M5, review round 2
+
+**Done.** The blocker: a `list_bookings` failure during verify is `check_incomplete` (no `mismatch`, `check_incomplete: true` on the status.check, needs_attention, "I couldn't finish checking the booking with the provider"), and a real mismatch names the recorded slot and provider (BUG-M5-3, repro 333126f, fix 9e0f0e6). Minors: the same-key retry only after an ambiguous `book` (a clean confirmed then not_found escalates); `booking_id` in the applied-mismatch intent's result_json; `rehold_used` compares `bound_hold_id` with the hold the card was issued on (first as a column, replaced in round 3 by `ActionCard.hold_id`; no migration); INV-03 reports "could not check" and defaults a missing budget to 1, with two new table notes. Rulings in architecture 9.8, round 2.
+
+**Surprise.** The claim guard strips "cancelled" even in "recorded the booking as cancelled", so the odd-status phrase is "no longer active".
+
+**Open doubts.** A clean `confirmed` then `not_found` reuses `check_incomplete` (its sentence is honest but generic); a dedicated reason is a one-line change if the lead wants one.
+
+## M5, landing
+
+**What review caught, in one place.** Round 1: a `list_bookings` blip during verify was reported to the user as a mismatch (BUG-M5-3, reproduced end to end before the fix), and a clean `confirmed` then `not_found` was retried on the same key when it should escalate. Round 2: my migration 0004 for the issued hold clashed with the memory work's 0004, so two version-4 files would have stopped the app starting; the hold now rides on the stored card (`ActionCard.hold_id`) and the migration is gone. Accepted deviations stand as in architecture 9.8: the softer template wording the claim guard forces ("two bookings", "pulled out", "no longer active"), `check_incomplete` reused for the confirmed then not_found case, and the reconciler halves of S24, S68 and S69 left to N1.
+
 ## M8: conversation quality
 
 **Goal.** The agent stops being merely safe and becomes pleasant to talk to: it understands "Thursday or Friday, not before 10", it notices when the user changes their mind and discards what that made stale, and it cannot be talked into a budget the user never said.
@@ -421,16 +434,13 @@ Two things were needed to make parallel runs safe. Tests that run a scenario wro
 - *Minors.* The eval table renders field values (`chips=['service', ...]`); a lone bound reads `from 10:00` or `until 18:00`; the alias coverage check is `tests/domain/test_aliases.py` (the import-time asserts are gone); `BriefChip.source` reuses `brief.ProvenanceSource`; the race test now drains the queued `approval_granted` resume (`REPLIED`, "That card can't be used any more, so nothing was booked.", 0 book ops); `parse_times` takes a dot as the minute separator ("by 7.30" is 07:30 or 19:30). The decide route itself answers 409 `run_in_progress` while the correction runs, so the race test still grants through `service.grant` (the narrow window between the route's checks and the correction) and starts the resume the way the route does.
 - *Verified after the merge (9180/9181/9182).* `make check` green in its two steps, 68 s wall (fast step then 235 slow tests passed, 1 skipped, under the 2-minute target); `make evals` 40 of 40, two runs differ only in the Generated line; largest estimated request still 8,807 (S60). Mutations: `carry_over` off turns S04, S05 and four carry-over tests red; the part-of-day check off turns S60c and two evidence tests red.
 
+**Review round 2 (lead).** One major, two minors.
+- *BUG-M8-4, a carried bound could not be widened.* Red 60bb71d (API: 'not before 10 a.m.' then 'any time this week is fine' keeps 'from 10:00' and no slot before 10), fix 5696b66: `carry_over` returns the new expression untouched when it sets `part_of_day: any`. Unit test `test_any_time_drops_the_bounds_kept_from_earlier` (also: a bound in the same patch still applies). Mutation, the `any` branch disabled: the API test and the unit test both turn red. 10.5 has the line.
+- *Minor, empty-window error.* `Unresolved` gained `empty_daily`; the error for a carried bound now reads 'morning cannot fit not before 15:00 kept from earlier; ask whether they want morning or not before 15:00', asserted in `test_a_carried_bound_that_empties_the_window_is_refused_not_guessed`.
+- *Minor, race test docstring.* It now says the grant goes in below the route and the resume starts the way the route starts it.
+
 **Next.** Review and merge. Then M8W (the React rendering of chips, "Why this order", the Excluded row and the greyed card) once M7 and this branch are on main.
 
-## M5, review round 2
+## M8, landing
 
-**Done.** The blocker: a `list_bookings` failure during verify is `check_incomplete` (no `mismatch`, `check_incomplete: true` on the status.check, needs_attention, "I couldn't finish checking the booking with the provider"), and a real mismatch names the recorded slot and provider (BUG-M5-3, repro 333126f, fix 9e0f0e6). Minors: the same-key retry only after an ambiguous `book` (a clean confirmed then not_found escalates); `booking_id` in the applied-mismatch intent's result_json; `rehold_used` compares `bound_hold_id` with the hold the card was issued on (first as a column, replaced in round 3 by `ActionCard.hold_id`; no migration); INV-03 reports "could not check" and defaults a missing budget to 1, with two new table notes. Rulings in architecture 9.8, round 2.
-
-**Surprise.** The claim guard strips "cancelled" even in "recorded the booking as cancelled", so the odd-status phrase is "no longer active".
-
-**Open doubts.** A clean `confirmed` then `not_found` reuses `check_incomplete` (its sentence is honest but generic); a dedicated reason is a one-line change if the lead wants one.
-
-## M5, landing
-
-**What review caught, in one place.** Round 1: a `list_bookings` blip during verify was reported to the user as a mismatch (BUG-M5-3, reproduced end to end before the fix), and a clean `confirmed` then `not_found` was retried on the same key when it should escalate. Round 2: my migration 0004 for the issued hold clashed with the memory work's 0004, so two version-4 files would have stopped the app starting; the hold now rides on the stored card (`ActionCard.hold_id`) and the migration is gone. Accepted deviations stand as in architecture 9.8: the softer template wording the claim guard forces ("two bookings", "pulled out", "no longer active"), `check_incomplete` reused for the confirmed then not_found case, and the reconciler halves of S24, S68 and S69 left to N1.
+**In short.** I set out to make the agent pleasant to talk to: a closed set of day and time phrases, corrections that discard what they made stale, and evidence bound to the value so a budget the user never said cannot get in. The deviations I accepted stand as written above: the existing window label, a granted but unconsumed card is invalidated by a correction (only a consumed one stands), the tool list headroom of about 1,080 tokens that M9 and M11 must respect, and the two one-line touches in `prepare_proposal` and `ingress`. Review caught four bugs a user would hit early, each reproduced end to end first: a rupee marker glued to the amount (BUG-M8-1), a day-only correction that dropped the day part and time bounds (BUG-M8-2), a day part the patch set without any day-part word in the evidence (BUG-M8-3), and a carried bound that "any time" could not widen (BUG-M8-4).

@@ -230,9 +230,10 @@ async def resume_run(h: Harness, approval_id: str) -> RunView:
 async def test_a_grant_that_commits_before_the_correction_cannot_book_the_old_card(
     tmp_path: Path,
 ) -> None:
-    """The click and the correction back to back, the click through the real decide route.
-    The grant commits while the correction's run is in flight (the run was admitted
-    first); the correction's conditional UPDATE then finds the row granted and not yet
+    """The click and the correction back to back. The grant goes in below the route (the
+    window between the route's checks and the correction) and the resume is started the way
+    the route starts it. The grant commits while the correction's run is in flight (the run
+    was admitted first); the correction's conditional UPDATE then finds the row granted and not yet
     consumed, and wins. The click's own resume run is drained too: it finds the card
     invalidated and books nothing. The old card can no longer be booked, and no granted
     row is left behind (INV-16)."""
@@ -391,3 +392,26 @@ async def test_not_covered_for_a_filled_field_is_a_notice_not_a_second_ask(
     assert "HSR Layout" in view.messages[0]["body"]["text"]
     assert brief["area"]["value"] == "indiranagar"
     assert invariants.check(rec) == {name: [] for name in invariants.DEFAULT}
+
+
+# ------------------------------------------------------------ widening a carried bound
+
+
+async def test_any_time_widens_a_time_bound_the_user_gave_earlier(tmp_path: Path) -> None:
+    """BUG-M8-4: 'not before 10' and then 'any time this week is fine' kept 'from 10:00'
+    and filtered out every early slot, and the model has no other way to drop a bound."""
+    async with harness(tmp_path, world()) as h:
+        first = await h.say(
+            "Find a plumber in Indiranagar for my kitchen tap this week, "
+            "not before 10 a.m., under ₹1,500."
+        )
+        before = (await h.conversation())["state"]["errand"]["brief"]["window"]["value"]["label"]
+        second = await h.say("Actually, any time this week is fine")
+        convo = await h.conversation()
+        label = convo["state"]["errand"]["brief"]["window"]["value"]["label"]
+    assert first.outcome != "FAILED" and second.outcome != "FAILED"
+    assert before.endswith("from 10:00"), before
+    assert "from 10:00" not in label, label
+    shortlist = [m["body"] for m in convo["messages"] if m["body"]["type"] == "shortlist"][-1]
+    slots = [s["start"][11:16] for c in shortlist["candidates"] for s in c["slots"]]
+    assert any(t < "10:00" for t in slots), slots

@@ -69,6 +69,7 @@ _LIST_SPLIT = re.compile(r"\s*,\s*(?:(?:or|and)\s+)?|\s+(?:or|and)\s+")
 class Unresolved:
     phrase: str
     reason: str
+    empty_daily: bool = False
 
 
 def _norm(text: str) -> str:
@@ -194,7 +195,7 @@ def resolve(
     local_now = now.astimezone(tz)
     daily_from, daily_to = _daily_window(expr, parts)
     if daily_from is not None and daily_to is not None and daily_from >= daily_to:
-        return Unresolved(expr.phrase, "the daily window is empty")
+        return Unresolved(expr.phrase, "the daily window is empty", empty_daily=True)
     found = _dates_for(phrase, local_now, daily_to)
     if found is None:
         return Unresolved(
