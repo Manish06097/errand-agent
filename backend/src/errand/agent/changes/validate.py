@@ -1,6 +1,6 @@
-"""Pure checks for a cancel proposal (architecture 8.6, 9.5, N1).
+"""Pure checks for a cancel or reschedule proposal (architecture 8.6, 9.5, N1).
 
-`check_cancel_proposal` is the one entry point whoever makes the proposal: the planner's
+`check_change_proposal` is the one entry point whoever makes the proposal: the planner's
 `propose_cancel` (a rejection is a tool error the model can correct) and
 `prepare_proposal`, which runs it again against a fresh list before it builds the card.
 `Rejected.code` values are stable:
@@ -62,7 +62,7 @@ def convertible(errand: Errand, *, awaiting_provider: bool = False) -> Rejected 
     return Rejected("not_convertible", "a change to a booking is in progress; wait for its result")
 
 
-def check_cancel_proposal(
+def check_change_proposal(
     errand: Errand,
     booking_id: str,
     bookings: Sequence[BookingItem],

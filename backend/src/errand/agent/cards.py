@@ -13,7 +13,7 @@ from errand.agent.brief_ops import render_value
 from errand.approvals.confirm_grammar import suggestion
 from errand.domain.brief import Brief, BriefField, ErrandKind
 from errand.domain.errand import Phase
-from errand.domain.material import BookMaterial, CancelMaterial
+from errand.domain.material import BookMaterial, CancelMaterial, RescheduleMaterial
 from errand.domain.messages import (
     ActionCard,
     BriefChip,
@@ -21,6 +21,7 @@ from errand.domain.messages import (
     MaterialLine,
     NearbyBooking,
     OutcomeCard,
+    SlotOption,
 )
 from errand.domain.outcomes import RunOutcome
 from errand.domain.slots import Candidate
@@ -120,6 +121,7 @@ def book_card(
     nearby: list[BookingItem],
     tz: tzinfo,
     brief: Brief | None = None,
+    last_visit: BookingItem | None = None,
 ) -> ActionCard:
     quote = material.quoted_price_inr
     delta = quote - search_price_inr
@@ -137,6 +139,16 @@ def book_card(
         MaterialLine(label="When", value=label),
         MaterialLine(label="Price", value=price),
     ]
+    if last_visit is not None:
+        # A provider chosen by history (7.3): the click approves this held quote, and the
+        # card says where it comes from. The contract gives no price paid before, so the
+        # earlier visit is shown instead of an invented amount.
+        lines.append(
+            MaterialLine(
+                label="Last visit",
+                value=f"{slot_label(last_visit.slot, tz)} ({last_visit.booking_id})",
+            )
+        )
     near = [
         NearbyBooking(
             booking_id=b.booking_id, provider_name=b.provider_name, label=slot_label(b.slot, tz)
@@ -314,4 +326,53 @@ def rescheduled_card(card: ActionCard, booking_id: str) -> OutcomeCard:
         ],
         booking_id=booking_id,
         approval_id=card.approval_id,
+    )
+
+
+def reschedule_card(
+    *,
+    approval_id: str,
+    errand_id: str,
+    fingerprint: str,
+    material: RescheduleMaterial,
+    booking: BookingItem,
+    new_slot: Slot,
+    alternatives: list[SlotOption],
+    expires_at: datetime,
+    tz: tzinfo,
+) -> ActionCard:
+    """The approval card for moving one booking to one new slot. The lines are the fresh
+    `list_bookings` record and the provider's own slot; the other eligible slots ride along
+    as `alternatives`. No hold exists and no price is approved (the booking keeps its)."""
+    old = slot_label(booking.slot, tz)
+    new = slot_label(new_slot, tz)
+    lines = [
+        MaterialLine(label="Provider", value=booking.provider_name),
+        MaterialLine(label="Service", value=service_words(booking.service.value)),
+        MaterialLine(label="From", value=old),
+        MaterialLine(label="To", value=new),
+        MaterialLine(label="Booking", value=f"{booking.booking_id}, confirmed"),
+    ]
+    return ActionCard(
+        approval_id=approval_id,
+        errand_id=errand_id,
+        action="reschedule",
+        fingerprint=fingerprint,
+        title=f"Move {booking.provider_name}",
+        lines=lines,
+        provider_id=booking.provider_id,
+        provider_name=booking.provider_name,
+        service=booking.service.value,
+        slot_start=new_slot.start.isoformat(),
+        slot_end=new_slot.end.isoformat(),
+        slot_label=new,
+        search_price_inr=0,
+        quoted_price_inr=0,
+        price_delta_inr=0,
+        hold_expires_at=expires_at.isoformat(),
+        expires_at=expires_at.isoformat(),
+        button_label="Move booking",
+        material=material,
+        alternatives=alternatives,
+        status_line=CHANGE_LINES[ErrandKind.RESCHEDULE][Phase.AWAITING_APPROVAL],
     )

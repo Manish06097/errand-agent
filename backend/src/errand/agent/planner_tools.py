@@ -45,6 +45,8 @@ def _object(properties: dict[str, Any]) -> dict[str, Any]:
 
 
 _PATCHABLE_FIELDS = ["service", "issue", "area", "window", "budget_max_inr"]
+# provider_pref is set from a booking handle and quoted as evidence, never cleared here.
+_EVIDENCE_FIELDS = [*_PATCHABLE_FIELDS, "provider_pref"]
 _ASKABLE_FIELDS = [f.value for f in BriefField]
 
 SEARCH_PROVIDERS: dict[str, Any] = {
@@ -70,7 +72,7 @@ UPDATE_BRIEF: dict[str, Any] = {
         "Record what the user said. Each value set or cleared needs an exact quote from "
         "the current message (4+ chars) that contains it. Never write dates: give the "
         "day phrase and part of day; times are HH:MM, 24-hour. A place or service we do "
-        "not cover goes in not_covered."
+        "not cover goes in not_covered. provider_pref: a booking handle (same as last time)."
     ),
     "input_schema": _object(
         {
@@ -101,6 +103,7 @@ UPDATE_BRIEF: dict[str, Any] = {
                             {"type": "null"},
                         ],
                     },
+                    "provider_pref": _nullable({"type": "string"}),
                 }
             ),
             "clear": {"type": "array", "items": {"type": "string", "enum": _PATCHABLE_FIELDS}},
@@ -108,7 +111,7 @@ UPDATE_BRIEF: dict[str, Any] = {
                 "type": "array",
                 "items": _object(
                     {
-                        "field": {"type": "string", "enum": _PATCHABLE_FIELDS},
+                        "field": {"type": "string", "enum": _EVIDENCE_FIELDS},
                         "quote": {"type": "string"},
                     }
                 ),
@@ -145,12 +148,18 @@ PROPOSE_BOOKING: dict[str, Any] = {
     "input_schema": _object({"provider_id": {"type": "string"}, "slot_ref": {"type": "string"}}),
 }
 
-# N1: cancel by a booking handle from this run's list_bookings view (B1, B2, ...). The
-# model never writes a booking id. Bound after propose_booking (10.3) once M8's 3,800
-# token S2 cap is in; until then the handler exists and the tool is not offered.
+# N1: cancel and reschedule name a booking by its handle in this run's list_bookings view
+# (B1, B2, ...); the model never writes a booking id. Bound right after propose_booking
+# (10.3), each as its own constant.
 PROPOSE_CANCEL: dict[str, Any] = {
     "name": "propose_cancel",
-    "description": "Propose cancelling one booking by its list_bookings handle; the user approves.",
+    "description": "Cancel a booking by its handle; the user approves.",
+    "input_schema": _object({"booking_ref": {"type": "string"}}),
+}
+
+PROPOSE_RESCHEDULE: dict[str, Any] = {
+    "name": "propose_reschedule",
+    "description": "Move a booking by its handle to the brief's window.",
     "input_schema": _object({"booking_ref": {"type": "string"}}),
 }
 
@@ -161,8 +170,12 @@ PLANNER_TOOLS: tuple[dict[str, Any], ...] = (
     UPDATE_BRIEF,
     ASK_USER,
     PROPOSE_BOOKING,
+    PROPOSE_CANCEL,
+    PROPOSE_RESCHEDULE,
 )
-PROPOSE_TOOLS: frozenset[str] = frozenset({"propose_booking", "propose_cancel"})
+PROPOSE_TOOLS: frozenset[str] = frozenset(
+    {"propose_booking", "propose_cancel", "propose_reschedule"}
+)
 PLANNER_TOOL_NAMES: tuple[str, ...] = tuple(t["name"] for t in PLANNER_TOOLS)
 
 
@@ -203,13 +216,17 @@ class BriefSet(_Args):
     area: Area | None = None
     window: WindowArg | None = None
     budget_max_inr: int | Literal["none"] | None = None
+    # A list_bookings handle (B1, ...) for "the same one as last time"; code resolves it to
+    # the provider (N1, brief_ops.pin_from_history).
+    provider_pref: str | None = Field(default=None, max_length=8)
 
 
 PatchableName = Literal["service", "issue", "area", "window", "budget_max_inr"]
+EvidenceName = Literal["service", "issue", "area", "window", "budget_max_inr", "provider_pref"]
 
 
 class EvidenceArg(_Args):
-    field: PatchableName
+    field: EvidenceName
     quote: str
 
 

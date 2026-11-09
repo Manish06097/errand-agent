@@ -714,3 +714,43 @@ def test_inv16_fails_on_a_granted_row_left_behind(s01: Records) -> None:
     doctored = copy.deepcopy(s01)
     doctored.approvals[0]["status"] = "granted"
     assert fails("INV-16", doctored) == [f"{doctored.approvals[0]['approval_id']} is still granted"]
+
+
+# INV-01 and INV-02 for reschedule (N1)
+
+
+@pytest.fixture
+async def s07(tmp_path: Path) -> Records:
+    return await records_of("S07_move_my_ac_servicing_to_saturday", tmp_path / "s07")
+
+
+def test_the_reschedule_is_checked_like_the_cancel(s07: Records) -> None:
+    assert invariants.check(s07) == {name: [] for name in invariants.DEFAULT}
+    assert s07.notes["book_ops_checked"] == 1
+
+
+def test_inv01_fails_on_a_reschedule_onto_a_slot_other_than_the_approved_one(s07: Records) -> None:
+    doctored = copy.deepcopy(s07)
+    for row in doctored.op_log:
+        if row["op"] == "reschedule":
+            args = json.loads(row["args_json"])
+            args["slot"]["start"] = "2026-11-14T16:00:00+05:30"
+            args["slot"]["end"] = "2026-11-14T17:00:00+05:30"
+            row["args_json"] = json.dumps(args)
+    assert any("not the one rebuilt" in v for v in fails("INV-01", doctored))
+
+
+def test_inv01_fails_on_a_reschedule_with_no_consumed_approval(s07: Records) -> None:
+    doctored = copy.deepcopy(s07)
+    for run_id, records in doctored.traces.items():
+        doctored.traces[run_id] = [r for r in records if r["type"] != "approval.consumed"]
+    assert any("no approval.consumed" in v for v in fails("INV-01", doctored))
+
+
+def test_inv02_fails_when_one_key_moved_a_booking_to_two_slots(s07: Records) -> None:
+    doctored = copy.deepcopy(s07)
+    applied = next(r for r in doctored.op_log if r["op"] == "reschedule" and r["outcome"] == "ok")
+    args = json.loads(applied["args_json"])
+    args["slot"]["start"] = "2026-11-14T16:00:00+05:30"
+    doctored.op_log.append({**applied, "seq": 10_000, "args_json": json.dumps(args)})
+    assert any("applied 2 different changes" in v for v in fails("INV-02", doctored))

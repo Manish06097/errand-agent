@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-from errand.agent.changes.validate import check_cancel_proposal, convertible
+from errand.agent.changes.validate import check_change_proposal, convertible
 from errand.agent.validation import Rejected
 from errand.clock import IST
 from errand.domain.booking_refs import BOOKING_REF, assign
@@ -76,7 +76,7 @@ def test_a_booking_id_or_a_malformed_handle_is_not_a_handle(ref: str) -> None:
 
 
 def test_a_valid_cancel_names_the_booking() -> None:
-    verdict = check_cancel_proposal(errand(), "B-3", [item("B-3", 24)], now=NOW, live_targets=set())
+    verdict = check_change_proposal(errand(), "B-3", [item("B-3", 24)], now=NOW, live_targets=set())
     assert not isinstance(verdict, Rejected) and verdict.booking.booking_id == "B-3"
 
 
@@ -92,7 +92,7 @@ def test_a_valid_cancel_names_the_booking() -> None:
     ],
 )
 def test_a_cancel_is_refused_with_its_code(booking: BookingItem, live: set[str], code: str) -> None:
-    verdict = check_cancel_proposal(errand(), "B-3", [booking], now=NOW, live_targets=live)
+    verdict = check_change_proposal(errand(), "B-3", [booking], now=NOW, live_targets=live)
     assert isinstance(verdict, Rejected) and verdict.code == code
 
 

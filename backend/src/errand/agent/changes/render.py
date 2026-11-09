@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from errand.agent import cards
 from errand.agent.deps import RunDeps
-from errand.domain.messages import ActionCard, MessageBody, OutcomeNotice
+from errand.domain.messages import ActionCard, MessageBody, OutcomeNotice, SlotOption
 from errand.domain.outcomes import Changed, ChangeFailed, RunOutcome
 
 _FAILED_TEXT = {
@@ -33,9 +33,7 @@ _FAILED_TEXT = {
     ),
     ("cancel", "rejected"): "The provider refused the cancellation. Nothing was cancelled.",
     ("reschedule", "rejected"): "The provider refused the change. Nothing was moved.",
-    ("reschedule", "slot_conflict"): (
-        "That time was just taken, so the booking was not moved. Nothing was moved."
-    ),
+    ("reschedule", "slot_conflict"): ("That time was just taken, so nothing was moved."),
     ("cancel", "in_progress"): "A change to that booking is already in progress.",
     ("reschedule", "in_progress"): "A change to that booking is already in progress.",
 }
@@ -57,4 +55,11 @@ def render_failed(result: ChangeFailed) -> tuple[RunOutcome, list[MessageBody]]:
     text = _FAILED_TEXT.get(
         (result.action, result.reason), "That change did not go through. Nothing was changed."
     )
-    return RunOutcome.ACTION_FAILED, [OutcomeNotice(outcome=RunOutcome.ACTION_FAILED, text=text)]
+    alternatives = [
+        SlotOption(ref=a.ref, start=a.start, end=a.end, label=a.label) for a in result.alternatives
+    ]
+    if alternatives:
+        text += " Here are the other free times that day."
+    return RunOutcome.ACTION_FAILED, [
+        OutcomeNotice(outcome=RunOutcome.ACTION_FAILED, text=text, alternatives=alternatives)
+    ]

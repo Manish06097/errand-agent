@@ -312,8 +312,10 @@ class Changed(_Result):
 
 
 class SlotAlternative(_Result):
+    ref: str  # the handle a select_slot click names (S1, ...)
     label: str  # "Sat 14 Nov, 10:00-11:00"
     start: str  # ISO 8601 with +05:30
+    end: str
 
 
 class ChangeFailed(_Result):

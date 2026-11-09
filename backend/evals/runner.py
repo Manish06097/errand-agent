@@ -62,6 +62,7 @@ from evals.dsl import (
     ExpectBrief,
     ExpectCancel,
     ExpectCard,
+    ExpectMove,
     ExpectNoCard,
     ExpectNoSideEffects,
     ExpectNotice,
@@ -554,6 +555,16 @@ def describe(step: Step, mode: Dedupe = "on") -> str | None:
         key = "one key" if c.same_key else "any keys"
         status = f", booking {c.booking_status}" if c.booking_status else ""
         return f"{c.calls} world cancel calls, {key}{status}"
+    if isinstance(step, ExpectMove):
+        m = step.expect_move
+        bits = [f"{m.calls} world reschedule calls"]
+        if m.applied is not None:
+            bits.append(f"{m.applied} applied")
+        if m.weekday is not None:
+            bits.append(f"booking on ISO weekday {m.weekday}")
+        if m.unchanged:
+            bits.append("booking not moved")
+        return ", ".join(bits)
     if isinstance(step, ExpectCard):
         spec = step.expect_card.model_dump(exclude_none=True)
         return "card " + ", ".join(f"{k}={v}" for k, v in spec.items())
@@ -935,6 +946,17 @@ class Runner:
         if spec.slot_hour is not None:
             start = datetime.fromisoformat(str(action.get("slot_start")))
             self.expect(start.hour == spec.slot_hour, f"card slot starts {start}")
+        if spec.slot_not_before_hour is not None:
+            start = datetime.fromisoformat(str(action.get("slot_start")))
+            self.expect(
+                start.hour >= spec.slot_not_before_hour,
+                f"card slot starts {start}, before {spec.slot_not_before_hour}:00",
+            )
+        shown = " | ".join(
+            f"{ln.get('label')}: {ln.get('value')}" for ln in action.get("lines", [])
+        )
+        for needle in spec.lines_include:
+            self.expect(needle.lower() in shown.lower(), f"card lines {shown!r} lack {needle!r}")
         if spec.nearby is not None:
             self.expect(
                 len(action.get("nearby", [])) == spec.nearby, f"card nearby {action.get('nearby')}"
@@ -962,6 +984,38 @@ class Runner:
                 self.expect(
                     by_id.get(target) == spec.booking_status,
                     f"{target}: world status {by_id.get(target)}, want {spec.booking_status}",
+                )
+
+    async def _expect_move(self, step: ExpectMove) -> None:
+        spec = step.expect_move
+        ops = [r for r in await self.h.op_log() if r["op"] == "reschedule"]
+        self.expect(
+            len(ops) == spec.calls, f"world reschedule calls: {len(ops)}, want {spec.calls}"
+        )
+        if spec.applied is not None:
+            ok = sum(1 for r in ops if r["outcome"] == "ok")
+            self.expect(ok == spec.applied, f"world applied {ok} reschedules, want {spec.applied}")
+        if spec.same_key:
+            keys = {json.loads(r["args_json"]).get("idempotency_key") for r in ops}
+            self.expect(len(keys) <= 1, f"reschedule calls used {len(keys)} keys: {keys}")
+        targets = {json.loads(r["args_json"]).get("booking_id") for r in ops}
+        by_id = {b.booking_id: b for b in await self.h.inspector.bookings()}
+        for target in targets:
+            row = by_id.get(target)
+            self.expect(row is not None, f"the world has no booking {target}")
+            if row is None:
+                continue
+            day = from_ms(row.slot_start).isoweekday()
+            if spec.weekday is not None:
+                self.expect(day == spec.weekday, f"{target} sits on ISO weekday {day}")
+            if spec.unchanged:
+                seeded = {
+                    (b.provider, int(b.slot.timestamp() * 1000))
+                    for b in self.scenario.world_config().user.bookings
+                }
+                self.expect(
+                    (row.provider_id, row.slot_start) in seeded,
+                    f"{target} moved to {from_ms(row.slot_start)}",
                 )
 
     async def _expect_transcript(self, step: ExpectTranscript) -> None:
@@ -1098,6 +1152,8 @@ class Runner:
             await self._expect_card(step)
         elif isinstance(step, ExpectCancel):
             await self._expect_cancel(step)
+        elif isinstance(step, ExpectMove):
+            await self._expect_move(step)
         elif isinstance(step, ExpectTranscript):
             await self._expect_transcript(step)
         elif isinstance(step, ExpectBooking):

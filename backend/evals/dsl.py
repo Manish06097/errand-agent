@@ -231,6 +231,24 @@ class ExpectCancel(_Strict):
     expect_cancel: CancelSpec
 
 
+class MoveSpec(_Strict):
+    # world reschedule ops (every call), and how many of them the world applied
+    calls: int
+    applied: int | None = None
+    # the booking's ISO weekday in the world's own store afterwards (1 = Monday), or
+    # `unchanged` for "still where the scenario seeded it"
+    weekday: int | None = None
+    unchanged: bool = False
+    # every call carried the same idempotency key
+    same_key: bool = True
+
+
+class ExpectMove(_Strict):
+    """What the world saw of the reschedule, and where the booking ended up."""
+
+    expect_move: MoveSpec
+
+
 class ClickAction(_Strict):
     """Press a button of the last run's notice, the way the web client does for a quick
     reply: its label is sent as the user's message. `kind` is the NoticeAction kind."""
@@ -251,6 +269,10 @@ class CardSpec(_Strict):
     typed_grant_ok: bool | None = None
     price_delta_inr: int | None = None
     slot_hour: int | None = None
+    # the card's slot starts at or after this local hour ("not before 10")
+    slot_not_before_hour: int | None = None
+    # text (case-insensitive) every one of which some line of the card must contain
+    lines_include: list[str] = Field(default_factory=list)
     nearby: int | None = None
     # the price on the card is the held quote the world gave for its hold
     price_is_held_quote: bool | None = None
@@ -493,6 +515,7 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "reconciler_tick": ReconcilerTick,
     "check_now": CheckNow,
     "expect_cancel": ExpectCancel,
+    "expect_move": ExpectMove,
     "expect_card": ExpectCard,
     "expect_transcript": ExpectTranscript,
     "expect_booking": ExpectBooking,
@@ -537,6 +560,7 @@ Step = (
     | ReconcilerTick
     | CheckNow
     | ExpectCancel
+    | ExpectMove
     | ExpectCard
     | ExpectTranscript
     | ExpectBooking

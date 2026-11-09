@@ -1,0 +1,18 @@
+id: S07_move_my_ac_servicing_to_saturday
+title: Example 2, "Move my AC servicing to Saturday"; the target is the seeded A2 booking found through list_bookings, the card is bound to that booking and a Saturday slot of its own provider closest to the original time, and the move is verified through list_bookings
+category: [reschedule, history]
+seed: 7
+user:
+  persona: cooperative
+  goal: {}
+steps:
+  - say: "Move my AC servicing to Saturday."
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending, typed_grant_ok: true}
+  - expect_world: {reschedule: 0, hold_slot: 0}
+  - approve: {}
+  - expect_outcome: RESCHEDULED_VERIFIED
+  - expect_move: {calls: 1, applied: 1, weekday: 6}
+  - expect_transcript: {last_includes: ["Sat"]}
+expect:
+  invariants: [default]

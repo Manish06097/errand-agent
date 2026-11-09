@@ -112,6 +112,8 @@ def test_the_tools_are_the_read_brief_and_propose_tools_in_order() -> None:
         "update_brief",
         "ask_user",
         "propose_booking",
+        "propose_cancel",
+        "propose_reschedule",
     )
     assert not set(PLANNER_TOOL_NAMES) & CONSEQUENTIAL_TOOLS
 
@@ -134,10 +136,10 @@ def test_the_tool_list_fits_its_context_section() -> None:
     """S2 is 3,800 tokens with the 400-token tools preamble inside it (gate 2, 13.1).
 
     Rendered the way the gateway sends it (with `strict`), not as the Python literals.
-    Measured in M8: 2,318 estimated tokens, 2,718 with the preamble, so 1,082 are left
-    for M9's two tools and M11's three. The design projects about 1,170 for those at
-    today's description length, so they have to be about 90 tokens tighter. `update_brief`
-    is 1,281 of the list (984 before `not_before` / `not_after` and `not_covered`).
+    Measured in M8: 2,318 estimated tokens, 2,718 with the preamble. N1 adds
+    `propose_cancel` and `propose_reschedule` (328 together) and `update_brief`'s
+    `provider_pref` (98, with its evidence entry): 2,744, or 3,144 with the preamble, so
+    656 are left for M11's three memory tools. `update_brief` is 1,379 of the list.
     """
     tracer = Tracer(run_id="r_t", thread_id="c_t", sinks=[NullSink()])
     gateway = LLMGateway(

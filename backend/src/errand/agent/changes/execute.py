@@ -29,6 +29,7 @@ import json
 from datetime import datetime
 from typing import Any
 
+from errand.agent.changes.prepare import conflict_key, shortlist_of
 from errand.agent.deps import RunDeps
 from errand.agent.records import emit_swept
 from errand.agent.state import ThreadState
@@ -45,8 +46,11 @@ from errand.domain.outcomes import (
     Changed,
     ChangeFailed,
     PendingCheck,
+    SlotAlternative,
     StepResult,
 )
+from errand.domain.slots import Exclusion
+from errand.domain.windows import slot_label
 from errand.execution import changes as drafts
 from errand.execution.executor import ConsequentialClient
 from errand.faults import fault_point
@@ -59,12 +63,14 @@ from errand.world.contracts import (
     BookingItem,
     CancelError,
     CancelOut,
+    GetProviderOut,
     ListBookingsOut,
     RescheduleError,
     RescheduleOut,
     Slot,
 )
 
+NEXT_FREE_SLOTS = 3
 CANCEL_CALLS = 3
 CANCEL_BACKOFF_S = (1.0, 2.0)
 TERMINAL = frozenset({"succeeded", "failed"})
@@ -365,10 +371,12 @@ class _ExecuteChange:
                 "intent.resolved", intent_id=intent.intent_id, state="failed", error=answer.error
             )
             self._move(Phase.COMPARING, answer.error)
+            conflict = answer.error == "slot_conflict" and isinstance(approved, RescheduleMaterial)
             return ChangeFailed(
                 action=approved.action,
                 approval_id=self.approval_id,
                 reason="slot_conflict" if answer.error == "slot_conflict" else "rejected",
+                alternatives=await self._alternatives(approved) if conflict else [],
             )
         async with deps.db.transaction() as repos:
             await repos.intents.move_attempt(
@@ -389,6 +397,60 @@ class _ExecuteChange:
             answer="confirmed" if answer is not None else "unknown",
             booking_id=approved.booking_id,
         )
+
+    async def _alternatives(self, approved: Material) -> list[SlotAlternative]:
+        """After `slot_conflict` (definitive: the approval is spent, nothing is retried on
+        its own): the next free slots that day, as handles the user can click. The slot the
+        provider refused is remembered so it is never offered again, and the errand keeps
+        the handles (a `select_slot` click resolves against them)."""
+        assert isinstance(approved, RescheduleMaterial)
+        deps = self.deps
+        refused_start = datetime.fromisoformat(approved.to_start)
+        try:
+            found = await deps.tools.call(
+                Caller.PROPOSER, "get_provider", {"provider_id": approved.provider_id}
+            )
+        except ToolError:
+            return []
+        if not isinstance(found, GetProviderOut):
+            return []
+        day = refused_start.astimezone(deps.tz).date()
+        old = self.errand.shortlist
+        refused = [
+            *(e for e in (old.excluded if old else []) if e.reason == "slot_conflict"),
+            Exclusion(
+                provider_id=conflict_key(approved.provider_id, refused_start),
+                name=found.name,
+                reason="slot_conflict",
+            ),
+        ]
+        banned = {e.provider_id for e in refused}
+        now = deps.clock.now()
+        free = sorted(
+            (
+                s
+                for s in found.available_slots
+                if s.start > now
+                and s.start.astimezone(deps.tz).date() == day
+                and s.start != datetime.fromisoformat(approved.from_start)
+                and conflict_key(approved.provider_id, s.start) not in banned
+            ),
+            key=lambda s: abs(s.start - refused_start),
+        )[:NEXT_FREE_SLOTS]
+        free.sort(key=lambda s: s.start)
+        window = self.errand.brief.window
+        label = window.value.label if window is not None else ""
+        shortlist = shortlist_of(found, free, self.errand, label, refused)
+        self.errand = self.errand.model_copy(update={"shortlist": shortlist, "approval_id": None})
+        return [
+            SlotAlternative(
+                ref=h.ref,
+                label=slot_label(h.slot, deps.tz),
+                start=h.slot.start.isoformat(),
+                end=h.slot.end.isoformat(),
+            )
+            for h in shortlist.candidates[0].slots
+        ]
 
     async def _reentry(self, intent: IntentRow) -> StepResult:
         deps = self.deps

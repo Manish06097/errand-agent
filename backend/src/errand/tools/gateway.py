@@ -86,7 +86,9 @@ CONSEQUENTIAL_TOOLS: frozenset[ToolName] = frozenset(
 SIDE_EFFECT_TOOLS: frozenset[ToolName] = frozenset({"book", "cancel", "reschedule"})
 ALLOWED: Mapping[Caller, frozenset[ToolName]] = {
     Caller.PLANNER: READ_TOOLS,
-    Caller.PROPOSER: frozenset({"hold_slot", "list_bookings"}),
+    # get_provider: a reschedule's candidates come from the booked provider's own slots
+    # (9.5, N1); only the slots are read, no review text is used.
+    Caller.PROPOSER: frozenset({"hold_slot", "list_bookings", "get_provider"}),
     Caller.EXECUTOR: frozenset({"hold_slot", "list_bookings", "get_booking_status"}),
     Caller.VERIFIER: frozenset({"get_booking_status", "list_bookings"}),
     Caller.RECONCILER: frozenset({"get_booking_status", "list_bookings"}),
