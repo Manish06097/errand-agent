@@ -212,8 +212,15 @@ class _Followup:
         )
         if interval is None:
             return _Out(ctx.model_copy(update={"variant": "nothing_fits", "ready": False}))
+        async with deps.db.session() as repos:
+            rows = await repos.memories.for_user(deps.user_id)
         brief = fbrief.replacement_brief(
-            known, interval=interval, tz=deps.tz, approved_price=await self._approved_price(known)
+            known,
+            interval=interval,
+            tz=deps.tz,
+            now=self.now,
+            approved_price=await self._approved_price(known),
+            rows=rows,
         )
         errand = Errand(
             errand_id=errand_id_for(deps.run_id),

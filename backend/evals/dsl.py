@@ -548,6 +548,14 @@ class WatcherTick(_Strict):
     watcher_tick: dict[str, Any] = Field(default_factory=dict)
 
 
+class UserActive(_Strict):
+    """N3 (Gate 3 decision 7): the user does something - any request ends a deferral. The
+    step reads the conversation list like a client opening the app, then waits for the
+    follow-up runs that request released."""
+
+    user_active: dict[str, Any] = Field(default_factory=dict)
+
+
 class NotificationSpec(_Strict):
     count: int
     urgency: Literal["normal", "urgent"] | None = None
@@ -628,6 +636,7 @@ STEP_TYPES: dict[str, type[BaseModel]] = {
     "expect_approvals": ExpectApprovals,
     "world_event": WorldEvent,
     "watcher_tick": WatcherTick,
+    "user_active": UserActive,
     "expect_notification": ExpectNotification,
     "open_followup": OpenFollowup,
     "click_followup": ClickFollowup,
@@ -681,12 +690,14 @@ Step = (
     | ExpectOptions
     | ExpectApprovals
     | memory_steps.ForgetMemory
+    | memory_steps.CorrectMemory
     | memory_steps.MemoryAction
     | memory_steps.ExpectChip
     | memory_steps.ExpectMemory
     | memory_steps.ExpectContext
     | WorldEvent
     | WatcherTick
+    | UserActive
     | ExpectNotification
     | OpenFollowup
     | ClickFollowup

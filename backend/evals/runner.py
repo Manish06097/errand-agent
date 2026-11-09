@@ -105,6 +105,7 @@ from evals.dsl import (
     Twin,
     TypeConfirm,
     Until,
+    UserActive,
     WatcherTick,
     WorldEvent,
 )
@@ -1381,6 +1382,8 @@ class Runner:
             await self._world_event(step)
         elif isinstance(step, WatcherTick):
             await self._watcher_tick()
+        elif isinstance(step, UserActive):
+            await self._user_active()
         elif isinstance(step, ExpectNotification):
             await self._expect_notification(step)
         elif isinstance(step, OpenFollowup):
@@ -1427,7 +1430,20 @@ class Runner:
         result = await self.h.app.state.watcher.tick()
         await self.h.manager.wait_idle()
         self.watch = result
-        for job_id in [*result.delivered, *result.lapsed]:
+        await self._collect_followup_runs([*result.delivered, *result.lapsed])
+
+    async def _user_active(self) -> None:
+        """The user does something: a client reads the bell. Any request ends a deferral, so
+        the follow-up runs it released are finished and collected before the step returns."""
+        response = await self.h.client.get("/api/notifications")
+        response.raise_for_status()
+        settle = getattr(self.h.app.state.watcher, "settle", None)
+        released: list[str] = await settle() if settle is not None else []
+        await self.h.manager.wait_idle()
+        await self._collect_followup_runs(released)
+
+    async def _collect_followup_runs(self, job_ids: list[str]) -> None:
+        for job_id in job_ids:
             conversation_id = f"cf_{job_id}"
             run_id = self._latest_run_of(conversation_id)
             if run_id is None:
@@ -1503,6 +1519,29 @@ class Runner:
                 if m["body"].get("type") == "proactive" and spec["origin_line"] in m["body"]["text"]
             ]
             self.expect(bool(lines), f"no proactive line with {spec['origin_line']!r}")
+        if "window" in spec or "ceiling" in spec or "area" in spec:
+            state = (await self.h.conversation())["state"] or {}
+            brief = (state.get("errand") or {}).get("brief") or {}
+            if "window" in spec:
+                value = (brief.get("window") or {}).get("value") or {}
+                want = spec["window"]
+                days = (str(value.get("start", ""))[:10], str(value.get("end", ""))[:10])
+                self.expect(
+                    days == (want["start"], want["end"]),
+                    f"follow-up window {days}, want {(want['start'], want['end'])}",
+                )
+            if "ceiling" in spec:
+                got_ceiling = (brief.get("budget_max_inr") or {}).get("value")
+                self.expect(
+                    got_ceiling == spec["ceiling"],
+                    f"follow-up price ceiling {got_ceiling!r}, want {spec['ceiling']!r}",
+                )
+            if "area" in spec:
+                got_area = (brief.get("area") or {}).get("value")
+                self.expect(
+                    str(got_area) == str(spec["area"]),
+                    f"follow-up area {got_area!r}, want {spec['area']!r}",
+                )
         if "delivered" in spec:
             got = 0 if watch is None else len(watch.delivered)
             self.expect(got == spec["delivered"], f"delivered {got}, want {spec['delivered']}")

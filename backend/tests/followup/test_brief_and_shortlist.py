@@ -60,7 +60,9 @@ INTERVAL = Interval(datetime(2026, 11, 9, 10, tzinfo=IST), datetime(2026, 11, 13
 
 
 def test_the_origin_brief_is_cloned_with_the_new_window_and_the_day_part_kept() -> None:
-    b = replacement_brief(known(original()), interval=INTERVAL, tz=IST, approved_price=300)
+    b = replacement_brief(
+        known(original()), interval=INTERVAL, tz=IST, now=INTERVAL.start, approved_price=300
+    )
     assert b.service is not None and b.service.prov.source == "user_msg"  # stated, kept
     assert b.window is not None and b.window.value.start == INTERVAL.start
     assert (b.window.value.daily_from, b.window.value.daily_to) == (time(7), time(12))
@@ -69,14 +71,20 @@ def test_the_origin_brief_is_cloned_with_the_new_window_and_the_day_part_kept() 
 
 
 def test_a_budget_of_none_falls_through_to_the_approved_price() -> None:
-    b = replacement_brief(known(original()), interval=INTERVAL, tz=IST, approved_price=300)
+    b = replacement_brief(
+        known(original()), interval=INTERVAL, tz=IST, now=INTERVAL.start, approved_price=300
+    )
     assert b.budget_max_inr is not None and b.budget_max_inr.value == 300
-    none = replacement_brief(known(original()), interval=INTERVAL, tz=IST, approved_price=None)
+    none = replacement_brief(
+        known(original()), interval=INTERVAL, tz=IST, now=INTERVAL.start, approved_price=None
+    )
     assert none.budget_max_inr is None
 
 
 def test_a_booking_with_no_origin_brief_is_built_from_the_booking_alone() -> None:
-    b = replacement_brief(known(None), interval=INTERVAL, tz=IST, approved_price=None)
+    b = replacement_brief(
+        known(None), interval=INTERVAL, tz=IST, now=INTERVAL.start, approved_price=None
+    )
     assert b.service is not None and b.service.value == "plumber"
     assert b.service.prov.source == "followup"
     assert b.area is None  # no area known: the notice asks where to look
@@ -84,7 +92,9 @@ def test_a_booking_with_no_origin_brief_is_built_from_the_booking_alone() -> Non
 
 
 def test_each_widening_changes_one_field_and_bumps_the_version() -> None:
-    b = replacement_brief(known(original()), interval=INTERVAL, tz=IST, approved_price=300)
+    b = replacement_brief(
+        known(original()), interval=INTERVAL, tz=IST, now=INTERVAL.start, approved_price=300
+    )
     days = widened(b, "days", None, tz=IST, booking_id="B-1")
     assert days.window is not None and b.window is not None
     assert (days.window.value.end - b.window.value.end).days == 7
