@@ -552,7 +552,8 @@ def test_inv04_a_status_confirmed_booking_names_its_provider(s01: Records) -> No
     booked = doctored.world_names[made["provider_id"]].split()[0]
     last = [m for m in doctored.messages if m["role"] == "assistant"][-1]
     for name, exempt in ((booked, True), ("Ramesh", False)):
-        last["body"]["text"] = f"If you want, I can get {name} booked for Saturday."
+        # "the electrician" makes an unnamed claim checkable: the booking is a plumber's.
+        last["body"]["text"] = f"If you want, I can get {name} the electrician booked."
         flagged = any("unbacked success claim" in v for v in fails("INV-04", doctored))
         assert flagged is not exempt, name
 

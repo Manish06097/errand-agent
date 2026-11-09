@@ -22,6 +22,7 @@ grant decision.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import json
 import re
@@ -617,15 +618,48 @@ _OBJ_WORD = (
     r"anything|everything|something|bookings?|appointments?|slots?|plumber|electrician|job|"
     r"visit|errand|request|order|service)"
 )
-_NAME_WORD = r"(?!I\b|I')[A-Z][\w']*"
-_MODAL_REACHES = re.compile(
-    r"(?:(?i:\b(?:will|would|can|could|should|shall|may|might)\b)|(?i:'ll\b))\s*(?i:also\b)?\s*"
-    rf"(?:$|(?i:\b(?:be|have|get)\b)(?:\s+(?:{_OBJ_WORD}|{_NAME_WORD}))*\s*$)"
-)
-_APPROVAL_GAP = re.compile(
-    rf"(?:\s*(?:(?i:approve|approval|confirm|button|yes|ok|okay|go|ahead|goahead)\b|{_OBJ_WORD}\b|"
-    rf"(?i:{_FILLER})\b|{_NAME_WORD}))*\s*$"
-)
+# A subject pronoun and a be-form: "you're all set", "we are booked" (a present claim under
+# a present-tense approval). "it's" is already filler.
+_SUBJECT_BE = r"(?i:(?:you|we|they)(?:'re|\s+are)|it\s+is)\b"
+
+
+def _name_alt(names: frozenset[str]) -> str:
+    """A regex alternation of the provider names the records show: each whole name and its
+    first word (3 letters or more), longest first. It matches nothing when there are none,
+    so with no records no word bridges as a name."""
+    alts: set[str] = set()
+    for name in names:
+        name = name.strip()
+        if not name:
+            continue
+        alts.add(re.escape(name))
+        first = re.match(r"[A-Za-z]{3,}", name)
+        if first:
+            alts.add(re.escape(first.group(0)))
+    return "|".join(sorted(alts, key=len, reverse=True)) or r"(?!)"
+
+
+@functools.cache
+def _modal_reaches(names: frozenset[str]) -> re.Pattern[str]:
+    """A modal exempts a claim only when nothing but "also", then be/have/get and object
+    words or a provider name from the records stand between it and the claim verb: "I can
+    have it booked", "I can get Sharma booked", never "you'll see it's booked" and never a
+    capitalised word that no record names ("I can get Saturday booked")."""
+    return re.compile(
+        r"(?:(?i:\b(?:will|would|can|could|should|shall|may|might)\b)|(?i:'ll\b))\s*(?i:also\b)?\s*"
+        rf"(?:$|(?i:\b(?:be|have|get)\b)(?:\s+(?:{_OBJ_WORD}|(?i:\b(?:{_name_alt(names)})(?![\w']))))*\s*$)"
+    )
+
+
+@functools.cache
+def _approval_gap(names: frozenset[str]) -> re.Pattern[str]:
+    return re.compile(
+        rf"(?:\s*(?:(?i:approve|approval|confirm|button|yes|ok|okay|go|ahead|goahead|gets)\b|"
+        rf"{_OBJ_WORD}\b|{_SUBJECT_BE}|(?i:{_FILLER})\b|"
+        rf"(?i:\b(?:{_name_alt(names)})(?![\w']))))*\s*$"
+    )
+
+
 _INVERSION = re.compile(rf"\bnever\s+{_AUX}\s+(?:i|we|you|they|he|she)\b")
 _NOT_IDIOMS = re.compile(
     r"\b(?:no worries|no problem|no doubt|no need|no hurry|nothing else|not to worry|"
@@ -644,7 +678,7 @@ def _present(tail: str) -> bool:
     )
 
 
-def _condition_exempt(before: str, claim_word: str, raw: str) -> bool:
+def _condition_exempt(before: str, claim_word: str, raw: str, names: frozenset[str]) -> bool:
     """A condition exempts only the claim in its own clause, or in the main clause its
     one closing comma opens ("Once you approve, it is booked")."""
     parts = _BREAKS.split(before)  # text, separator, text, separator, ...
@@ -668,17 +702,17 @@ def _condition_exempt(before: str, claim_word: str, raw: str) -> bool:
         claim_side, cond_side, raw_side = texts[last], texts[k], raws[last]
     else:
         return False
-    if _MODAL_REACHES.search(raw_side) or claim_word in ("will", "'ll"):
+    if _modal_reaches(names).search(raw_side) or claim_word in ("will", "'ll"):
         return True
     approval = _APPROVAL_NOW.search(cond_side)
     if not approval or not _present(claim_side):
         return False
     # Only the claim's subject may sit between the approval and the claim verb.
     gap = raw_side[approval.end() :] if k == last else raw_side
-    return bool(_APPROVAL_GAP.fullmatch(gap))
+    return bool(_approval_gap(names).fullmatch(gap))
 
 
-def _exempt(sentence: str, claim: re.Match[str]) -> bool:
+def _exempt(sentence: str, claim: re.Match[str], names: frozenset[str]) -> bool:
     """Not a claim: the claim word is sorted-by wording, or a negation scopes over it."""
     if claim.group(0).lower() == "sorted" and re.match(
         r"\s+(?:by|in|from|on|using)\b", sentence[claim.end() :], re.I
@@ -691,7 +725,7 @@ def _exempt(sentence: str, claim: re.Match[str]) -> bool:
         _NEGATED_TAIL.search(clause.strip()) and not _INVERSION.search(clause)
     ) or _FUTURE_BE.search(clause):
         return True
-    if _condition_exempt(before, claim.group(0).lower(), sentence[: claim.start()]):
+    if _condition_exempt(before, claim.group(0).lower(), sentence[: claim.start()], names):
         return True
     return bool(re.match(r"\s+(?:hai\s+|hua\s+)?(?:nahi|nahin)\b", sentence[claim.end() :], re.I))
 
@@ -741,14 +775,27 @@ def inv04_success_only_after_the_source_of_truth(rec: Records) -> Violations:
     services = {str(b["booking_id"]): str(b["service"]) for b in rec.world_bookings}
     phases = _final_phases(rec)
     claims = 0
+    # The provider names a modal may bridge (round 5), collected here from the records and
+    # never from the text being checked: the run's search results in the trace, and the
+    # providers of the user's bookings that a status check confirmed (their names come
+    # from the world's own rows). They grow as the runs go, so a sentence is read against
+    # what the records had shown by the end of its own run.
+    known: set[str] = set()
+    booked_by = {str(b["booking_id"]): str(b["provider_id"]) for b in rec.world_bookings}
     for run, records in rec.run_records():
         rid = run["run_id"]
         checked_here = False
         for record in records:
+            if record["type"] == "tool.call" and record.get("tool") == "search_providers":
+                found_in = (record.get("result") or {}).get("providers") or []
+                known.update(str(p["name"]) for p in found_in if p.get("name"))
             booking = _confirmed_by_world(rec, record)
             if booking is not None:
                 confirmed.add(booking)
                 checked_here = True
+                name = rec.world_names.get(booked_by.get(booking, ""))
+                if name:
+                    known.add(name)
             verified = record["type"] == "run.end" and record.get("outcome") in _VERIFIED
             if verified and not checked_here:
                 out.append(f"{rid}: {record['outcome']} with no confirming status check before it")
@@ -760,7 +807,11 @@ def inv04_success_only_after_the_source_of_truth(rec: Records) -> Violations:
                 if not isinstance(text, str):
                     continue
                 for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
-                    found = [m for m in _CLAIM.finditer(sentence) if not _exempt(sentence, m)]
+                    found = [
+                        m
+                        for m in _CLAIM.finditer(sentence)
+                        if not _exempt(sentence, m, frozenset(known))
+                    ]
                     if not found:
                         continue
                     claims += 1
