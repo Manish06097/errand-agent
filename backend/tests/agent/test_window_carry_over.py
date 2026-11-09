@@ -142,4 +142,36 @@ def test_a_carried_bound_that_empties_the_window_is_refused_not_guessed() -> Non
         now=NOW,
         tz=IST,
     )
-    assert not out.applied and "empty" in out.errors[0]
+    assert not out.applied
+    # the conflict is the kept 15:00 bound, so the planner must ask about hours, not days
+    assert "morning cannot fit not before 15:00 kept from earlier" in out.errors[0]
+    assert "ask whether they want morning or not before 15:00" in out.errors[0]
+    assert "days" not in out.errors[0]
+
+
+def test_any_time_drops_the_bounds_kept_from_earlier() -> None:
+    first = say(
+        Brief(),
+        "Thursday, not before 10 a.m.",
+        TimeWindowExpr(phrase="Thursday", not_before=time(10)),
+        "Thursday, not before 10 a.m.",
+        1,
+    )
+    assert label(first) == "Thu 12 Nov, from 10:00"
+    wide = say(
+        first,
+        "any time Thursday",
+        TimeWindowExpr(phrase="Thursday", part_of_day="any"),
+        "any time Thursday",
+        2,
+    )
+    assert label(wide) == "Thu 12 Nov"
+    # a bound set in the same patch still applies
+    bounded = say(
+        first,
+        "any time Thursday, but not after 4 pm",
+        TimeWindowExpr(phrase="Thursday", part_of_day="any", not_after=time(16)),
+        "any time Thursday, but not after 4 pm",
+        2,
+    )
+    assert label(bounded) == "Thu 12 Nov, until 16:00"

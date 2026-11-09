@@ -215,11 +215,15 @@ def carry_over(new: TimeWindowExpr, old: TimeWindowExpr | None) -> TimeWindowExp
 
     "Actually Thursday or Friday" after "mornings only" names days and nothing else, so
     the day part and time bounds the user already gave still hold (7.3, 10.5). Only a
-    sub-field the patch leaves null is filled; "any" is the explicit way to widen the
-    day part, and it needs its own evidence (10.7). The merged expression is what the
-    brief stores, so a chain of corrections keeps carrying.
+    sub-field the patch leaves null is filled. "any" is the explicit way to widen: it drops
+    the carried day part and the carried time bounds, and it needs its own evidence (10.7).
+    The merged expression is what the brief stores, so a chain of corrections keeps carrying.
     """
     if old is None:
+        return new
+    if new.part_of_day == "any":
+        # "any time" widens: the bounds kept from earlier go too. Bounds this patch sets
+        # itself still apply.
         return new
     return new.model_copy(
         update={
@@ -227,6 +231,25 @@ def carry_over(new: TimeWindowExpr, old: TimeWindowExpr | None) -> TimeWindowExp
             "not_before": new.not_before if new.not_before is not None else old.not_before,
             "not_after": new.not_after if new.not_after is not None else old.not_after,
         }
+    )
+
+
+def _empty_window_error(said: TimeWindowExpr, kept: TimeWindowExpr) -> str:
+    """The daily window is empty: name the conflict, which is hours and not days."""
+    carried = [
+        f"{label} {bound:%H:%M}"
+        for label, bound, own in (
+            ("not before", kept.not_before, said.not_before),
+            ("not after", kept.not_after, said.not_after),
+        )
+        if bound is not None and own is None
+    ]
+    if not carried:
+        return "window: the daily window is empty; ask the user which hours they want"
+    part = said.part_of_day or kept.part_of_day
+    return (
+        f"window: {part or 'the day part'} cannot fit {' and '.join(carried)} kept from "
+        f"earlier; ask whether they want {part or 'that day part'} or {' and '.join(carried)}"
     )
 
 
@@ -257,6 +280,8 @@ def _fact(
         expr = carry_over(v, current_window.expr if current_window else None)
         resolved = timewin.resolve(expr, now, tz)
         if isinstance(resolved, timewin.Unresolved):
+            if resolved.empty_daily:
+                return None, _empty_window_error(v, expr)
             return None, f"window: {resolved.reason}; ask the user for the days they want"
         return WindowFact(value=resolved, expr=expr, prov=prov, set_at_turn=turn), None
     return None, f"{item.name.value}: value of the wrong type"
