@@ -340,3 +340,58 @@ Two things were needed to make parallel runs safe. Tests that run a scenario wro
 **Open doubts.** The 2,000 ms tolerance is a guess at real clock skew over a network hop; it is a setting. INV-04 treats every name in the run's search results as known, the guard only the shortlist, so INV-04 is the weaker net there on purpose.
 
 **Lead rulings, review round 1.** The slow step on three xdist workers with `--dist loadfile` instead of serial: accepted, and it replaces the "own serial step" in GATE-02's "What gets built next". The serial rule was there to keep tests that write repo paths from racing; I checked what the slow step writes while it runs, and apart from per-test temp directories it only touches `web/next-env.d.ts` (one test, the `make dev` repro) and the pytest cache of the evals subprocess, so nothing two workers share. Serial cannot meet the 120 s goal, and the goal is what the brief was for. `-n 4 --dist loadscope` for the fast step, the port formula, the 2,000 ms tolerance and the private eval trace directory: accepted. Manjunath for the S62 probes: accepted, the brief asked for the name that is really on the shortlist, and that is the one carded. The timing table in the journal commit body rather than the tiering commits: accepted, history is not rewritten for it. INV-04 reading names from every search result while the guard reads the shortlist: accepted as the weaker net, stated in 8.7.
+
+## M5: booking failure paths
+
+**Goal.** M4 made the happy path honest; M5 makes the bad days honest. A timeout, a lost request, a lapsed hold, a slot gone, a provider that books the wrong price: the user still hears only what `get_booking_status` says, and one approval still makes at most one booking.
+
+**What was built.**
+- `agent/nodes/booking.py` (new): the steps `execute` and `verify` share, namely the re-hold, the one-re-hold-per-approval check read from agent.sqlite, the send of a `book` whose `in_flight` move is already committed, the settle of its answer, and the closing of a failed intent.
+- `execute.py`: the preflight re-hold with the fingerprint compare (`approval.hold_rebound`, `price_changed`, `slot_changed`), `slot_taken` as a one-replan SystemNote, and `hold_expired` on the first send as a re-hold and attempt 2 under a new key.
+- `verify.py`: a status pass of 4 checks with the 0.5, 1, 2, 4 s waits, the same-key retry (one transaction, then the call, then a status pass again), the lapsed-hold settle, the wait rule, `cancelled_by_provider` with its `followup_jobs` row, and the mismatch message.
+- `BookingSettings` (`max_same_key_retries`, `provider_dedupes_keys`) right after `LimitSettings`; `FollowupsRepo`; `service.rebind_hold` and `service.token_for_consumed`; `Requote`, `PendingCheck`, `Booked` and `ActionFailed` grew fields (additive); `PendingFacts` on `OutcomeNotice` (additive, for M7's card); new sentences in `agent/templates.py` as functions; `VERIFYING -> COMPARING` in `ALLOWED`.
+- World: `EventConfig.booking: "created:N"` with `fire_at` relative to that booking's creation, armed in `_book`, contract-tested on both transports.
+- Evals: the dedupe matrix (`dedupe:`, `dedupe_reason`, `if_dedupe`; ids and rows end in `[dedupe=on|off]`), `expect_book_calls` and `expect_rows`, INV-03 and INV-18, SWEEP (`evals/sweep.py`, `test_sweep.py`, folded into one row by the report plugin), and S19, S20, S22, S22b, S23, S24, S25, S50, S65, S68, S69, S71.
+- `errand-trace export --thread` and the first draft of `docs/traces/timeout_after_success.jsonl` (65 records, 2 runs).
+- Architecture 9.8 (the rulings), the design note's idempotency section (99 of 100 words), BUG-M5-1.
+
+**Decisions.** Recorded in architecture 9.8. The ones a reviewer should look at first: a changed quote after `hold_expired` on the first send writes no `approval.invalidated` (the approval is consumed); a provider cancellation ends `NOTIFIED`, not `BOOKED_VERIFIED`; `INV-01` accepts a booking that differs from the approval only when the agent caught it; the status pass waits before each check, the first one included.
+
+**Deviations.**
+- The lead's sentence "it can't end up booked twice" is stripped by the claim guard and read as a claim by INV-04 (both sentences are in the commit that added the templates). I did not touch the guard; the text says "it can't end up as two bookings". Any sentence with "cancelled" or "moved" is stripped the same way, so the cancellation message says "pulled out" and the slot message says "changed the slot". Please say if you want the guard's lists changed instead.
+- Templates are not run through `guard()` at runtime (M4 does not either); a parametrized test runs every new sentence through the guard and INV-04, which is where the three clashes above were found.
+- `plan` accepts a run that was not started by a message (a replan after `slot_taken`) and uses the user's last message as the request.
+- INV-18 is wired here, as ruled, so `invariants.DEFAULT` now has 13 members.
+- `docs/EVAL_TABLE.md` rows for a booking scenario carry `[dedupe=on]` or `[dedupe=off]`, so a row count is not a scenario count: 66 scenario items from 45 files, plus SWEEP.
+
+**Verified.** All on ports 9150, 9151, 9152, after merging main (M4F).
+- `make check`: green, 743 passed and 3 skipped in the fast step, 236 passed and 1 skipped in the slow step, 1 m 17 s wall (the target was under 2 minutes).
+- `make evals`: 266 items, 67 rows, all pass, 44 to 53 s; two runs differ only in the Generated header. SWEEP 200/200 (199 BOOKED_VERIFIED, 1 PENDING_VERIFICATION, 28 seeds needed a second approval after `slot_taken`). SWEEP adds about 34 s to `make evals` (it was 10 s before M5), under the 60 s limit, so nothing about how evals run was changed.
+- `pytest evals -k dedupe`: 46 items (24 `on`, 22 `off`). The M5 set on its own: 220 passed.
+- `ERRAND_BOOKING_MAX_SAME_KEY_RETRIES=0 make evals`: S23 and S68 fail their own expectations (PENDING_VERIFICATION where BOOKED_VERIFIED was expected, one book where two), every invariant green in all 266 items. Table reverted with `git checkout`.
+- Mutations, each turned something red: retry without the status check after it (S23, INV-03 "outcome shown before a status check"); retry on an expired hold (`test_not_found_after_the_hold_lapsed...`, 2 books instead of 1); a second key on the same hold (S23, INV-03); retry with dedupe off (S69, INV-03 "2 book calls with dedupe off"); no write-ahead commit before the retry (S23 and the write-ahead test); trusting book's `confirmed` without status (S01, INV-03); a re-hold that skips the fingerprint compare (S19, INV-01). Separately, the new `hold_expired` test found a mistake in my own code before it was committed: the branch read the approval row from before the consume, so a preflight re-hold did not count as the approval's one re-hold.
+- Manual run on `make dev` (9150/9151/9152, system clock, HTTP world): `POST /dev/scenario` with `book.forced: [timeout_not_booked]`, a message, one click on the card: `BOOKED_VERIFIED` in 9 s real time, `GET /dev/op_log` shows `book` (timeout_not_booked), `get_booking_status` (not_found), `book` (success), `get_booking_status` (confirmed): 2 book calls, 1 key, 1 world booking. With `ERRAND_BOOKING_MAX_SAME_KEY_RETRIES=0`: `PENDING_VERIFICATION`, 1 book, "I'll know for sure by 08:10, when the hold lapses" (hold taken at 08:00, 600 s TTL, IST).
+- `errand-trace export --thread c_0001` writes `docs/traces/timeout_after_success.jsonl`; `errand-trace show` reads it with an empty stderr.
+
+**What broke.** BUG-M5-1 (a replan that answers in words ended INTERNAL_ERROR; repro c74bfee, fix 41a3134). The baseline `make check` was red on `test_a_client_on_its_own_clock_gets_an_ordinary_message` because the test depended on the date; I fixed it (edce59b) and then found M4F had logged and fixed the same thing as BUG-M4F-1, so the merge took main's version and I dropped my row.
+
+**Open doubts.**
+- Attempt 2 after `hold_expired` is reachable only through a test double: the preflight margin (38 s) is larger than any latency the in-process world can produce. It is tested (new key, new hold, one `hold_rebound`, and the changed-quote and already-re-held variants), but no scenario file reaches it.
+- The wait rule's lapse time is the attempt's `hold_expires_at`; with a world clock that jumps (the HTTP world in `system_offset` mode) the user's "by 08:10" is world time. That is what the lead's wording asks for.
+- S24, S68 and S69 stop at PENDING_VERIFICATION; the reconciler halves are M6's, in the same files.
+- The docs trace has real `wall_ts` values, so a re-export differs line by line; only the structure is deterministic.
+- The "Never mind" clause of INV-03 is vacuous until M6 and the table notes say so on every row.
+
+**Next.** M6: the reconciler turns `unknown` attempts into answers when the hold lapses, sends a `prepared` attempt once, and adds "Check now" and "Never mind" (the retry condition already reads the errand's phase).
+
+## M5, review round 2
+
+**Done.** The blocker: a `list_bookings` failure during verify is `check_incomplete` (no `mismatch`, `check_incomplete: true` on the status.check, needs_attention, "I couldn't finish checking the booking with the provider"), and a real mismatch names the recorded slot and provider (BUG-M5-3, repro 333126f, fix 9e0f0e6). Minors: the same-key retry only after an ambiguous `book` (a clean confirmed then not_found escalates); `booking_id` in the applied-mismatch intent's result_json; `rehold_used` compares `bound_hold_id` with the hold the card was issued on (first as a column, replaced in round 3 by `ActionCard.hold_id`; no migration); INV-03 reports "could not check" and defaults a missing budget to 1, with two new table notes. Rulings in architecture 9.8, round 2.
+
+**Surprise.** The claim guard strips "cancelled" even in "recorded the booking as cancelled", so the odd-status phrase is "no longer active".
+
+**Open doubts.** A clean `confirmed` then `not_found` reuses `check_incomplete` (its sentence is honest but generic); a dedicated reason is a one-line change if the lead wants one.
+
+## M5, landing
+
+**What review caught, in one place.** Round 1: a `list_bookings` blip during verify was reported to the user as a mismatch (BUG-M5-3, reproduced end to end before the fix), and a clean `confirmed` then `not_found` was retried on the same key when it should escalate. Round 2: my migration 0004 for the issued hold clashed with the memory work's 0004, so two version-4 files would have stopped the app starting; the hold now rides on the stored card (`ActionCard.hold_id`) and the migration is gone. Accepted deviations stand as in architecture 9.8: the softer template wording the claim guard forces ("two bookings", "pulled out", "no longer active"), `check_incomplete` reused for the confirmed then not_found case, and the reconciler halves of S24, S68 and S69 left to N1.

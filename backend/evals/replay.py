@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 from errand.config import ModelSettings
 from evals import invariants
-from evals.dsl import ReplaySpec, Scenario, find_scenarios, load_scenario
+from evals.dsl import Dedupe, ReplaySpec, Scenario, find_scenarios, load_scenario
 
 EVALS = Path(__file__).resolve().parent
 CASSETTES = EVALS / "cassettes"
@@ -38,20 +38,27 @@ def cassette_path(name: str) -> Path:
 
 @dataclass(frozen=True)
 class Case:
-    """One row of the eval table: a scenario, scripted or on a cassette."""
+    """One row of the eval table: a scenario in one dedupe mode, scripted or on a
+    cassette."""
 
     scenario: Scenario
     replay: ReplaySpec | None = None
+    mode: Dedupe | None = None
 
     @property
     def id(self) -> str:
-        return f"{self.scenario.id}[replay]" if self.replay else self.scenario.id
+        if self.replay:
+            return f"{self.scenario.id}[replay]"
+        return self.scenario.label(self.mode or self.scenario.modes()[0])
 
 
 def cases_of(scenario: Scenario) -> list[Case]:
-    found = [Case(scenario)]
+    """A scripted case per dedupe mode (M5), plus one replay case (M7). The replay case
+    runs in the scenario's first mode only: the cassette was recorded in that world, and
+    the dedupe matrix is the scripted rows' job."""
+    found = [Case(scenario, mode=mode) for mode in scenario.modes()]
     if scenario.replay is not None:
-        found.append(Case(scenario, scenario.replay))
+        found.append(Case(scenario, scenario.replay, scenario.modes()[0]))
     return found
 
 

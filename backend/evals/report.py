@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,11 +29,47 @@ REPORT_DIR_ENV = "ERRAND_EVAL_REPORT_DIR"
 COLUMNS = ("scenario", "category", "model_mode", "world", "expected", "actual", "pass", "notes")
 _results: list[ScenarioResult] = []
 _seeds: dict[str, int] = {}
+# SWEEP items, folded into one row at the end: seed -> (passed, outcome, rounds)
+_sweep: dict[int, tuple[bool, str | None, int]] = {}
+SWEEP = "SWEEP"
 
 
 def record(result: ScenarioResult, seed: int) -> None:
     _results.append(result)
     _seeds[result.scenario] = seed
+
+
+def record_sweep(seed: int, passed: bool, outcome: str | None, rounds: int) -> None:
+    _sweep[seed] = (passed, outcome, rounds)
+
+
+def sweep_row() -> ScenarioResult | None:
+    """The one table row for every SWEEP item: `n_pass/N`."""
+    if not _sweep:
+        return None
+    n = len(_sweep)
+    ok = sum(1 for passed, _, _ in _sweep.values() if passed)
+    ends = Counter(o for _, o, _ in _sweep.values())
+    failed = sorted(s for s, (passed, _, _) in _sweep.items() if not passed)
+    redrawn = sum(1 for _, _, rounds in _sweep.values() if rounds > 1)
+    return ScenarioResult(
+        scenario=SWEEP,
+        category="booking_correctness",
+        model_mode="scripted:reference + reader:keyword",
+        world="default (70/15/7.5/7.5)",
+        expected=(
+            f"reference policy over seeds {min(_sweep)} to {max(_sweep)}: every invariant "
+            "holds on every seed, each ends BOOKED_VERIFIED or PENDING_VERIFICATION"
+        ),
+        actual=(
+            f"{ok}/{n} pass; BOOKED_VERIFIED={ends['BOOKED_VERIFIED']}, "
+            f"PENDING_VERIFICATION={ends['PENDING_VERIFICATION']}; "
+            f"{redrawn} seeds needed a second approval after slot_taken"
+            + (f"; failed seeds {failed}" if failed else "")
+        ),
+        passed=ok == n,
+        notes=f"seeds={min(_sweep)}-{max(_sweep)}; {ok}/{n}",
+    )
 
 
 def _git_sha(repo: Path) -> str:
@@ -58,6 +95,10 @@ def _cell(value: object) -> str:
 def write_report(
     out_dir: Path, results: list[ScenarioResult], seeds: dict[str, int], now: datetime
 ) -> None:
+    folded = sweep_row()
+    if folded is not None:
+        results = [*results, folded]
+        seeds = {**seeds, SWEEP: min(_sweep), f"{SWEEP}-max": max(_sweep)}
     rows = sorted((r.row() for r in results), key=lambda r: str(r["scenario"]))
     sha = _git_sha(out_dir)
     seed_values = sorted(set(seeds.values()))
@@ -101,20 +142,25 @@ def refusal(results: list[ScenarioResult], collected: list[str]) -> str | None:
     """Why the table must not be written, or None. An empty table, or one missing a
     scenario that was collected (it crashed before recording a row), would replace the
     committed ledger with something that looks green and proves less."""
-    if not results:
+    if not results and not _sweep:
         return "no scenario produced a row (empty or broken catalogue)"
-    missing = sorted(set(collected) - {r.scenario for r in results})
+    missing = sorted(
+        set(collected) - {r.scenario for r in results} - ({SWEEP} if _sweep else set())
+    )
     if missing:
         return "no row for " + ", ".join(missing)
     return None
 
 
 def _collected_scenarios(session: pytest.Session) -> list[str]:
-    ids = []
+    ids: list[str] = []
     for item in session.items:
         callspec = getattr(item, "callspec", None)
-        if getattr(item, "originalname", None) == "test_scenario" and callspec is not None:
+        name = getattr(item, "originalname", None)
+        if name == "test_scenario" and callspec is not None:
             ids.append(str(callspec.id))
+        elif name == "test_sweep" and SWEEP not in ids:
+            ids.append(SWEEP)
     return ids
 
 

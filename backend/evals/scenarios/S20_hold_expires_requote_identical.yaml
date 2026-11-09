@@ -1,0 +1,27 @@
+id: S20_hold_expires_requote_identical
+title: The hold lapses before the approval is acted on and the re-hold quotes the same; the approval moves to the new hold with no second card, and books once
+category: [non_material_change]
+seed: 20
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - expect_outcome: AWAITING_APPROVAL
+  - advance: 11m
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_trace: {approval.hold_rebound: 1, approval.invalidated: 0, approval.requested: 0, approval.consumed: 1}
+  - expect_card: {kind: outcome}
+  - expect_world: {hold_slot: 2, book: 1, get_booking_status: 1}
+  - expect_booking: {count: 1, price_is_held_quote: true}
+expect:
+  invariants: [default]

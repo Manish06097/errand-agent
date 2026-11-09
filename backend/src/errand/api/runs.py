@@ -50,7 +50,13 @@ from errand.api.sse import Broadcaster, RunStream
 from errand.approvals import service
 from errand.approvals.typed_grant import Decision, VisibleCard, decide
 from errand.clock import Clock, to_ms
-from errand.config import ApprovalSettings, LimitSettings, ModelSettings, ReaderSettings
+from errand.config import (
+    ApprovalSettings,
+    BookingSettings,
+    LimitSettings,
+    ModelSettings,
+    ReaderSettings,
+)
 from errand.domain.counters import RunCounters
 from errand.domain.inbound import (
     ApprovalDeclined,
@@ -158,6 +164,7 @@ class RunManager:
         model_factory: ModelFactory,
         broadcaster: Broadcaster | None = None,
         approval_settings: ApprovalSettings | None = None,
+        booking_settings: BookingSettings | None = None,
         consequential: ConsequentialLocks | None = None,
         reader_factory: ModelFactory | None = None,
         reader_settings: ReaderSettings | None = None,
@@ -189,6 +196,7 @@ class RunManager:
         self._admissions = 0
         self._closing = False
         self.approval_settings = approval_settings or ApprovalSettings()
+        self.booking_settings = booking_settings or BookingSettings()
         self.consequential: ConsequentialLocks = consequential or UserLocks(db, self._holder)
 
     @property
@@ -681,6 +689,7 @@ class RunManager:
             reader=reader,
             on_token=run.stream.publish_token,
             approval_settings=self.approval_settings,
+            booking_settings=self.booking_settings,
             consequential=self.consequential,
         )
 

@@ -68,6 +68,20 @@ class LimitSettings(BaseSettings):
     live_run_deadline_s: float = Field(default=43.0, gt=0)
 
 
+class BookingSettings(BaseSettings):
+    """How the agent recovers from an ambiguous `book` (architecture 9.4 steps 6 and 7)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_BOOKING_", extra="ignore")
+
+    # A same-key retry per approval after `not_found` on a live hold. 0 gives the pure
+    # wait rule (the hold-lapse fallback), and the tests build both.
+    max_same_key_retries: int = Field(default=1, ge=0)
+    # Declared, never guessed: whether the provider treats a repeated key as the same
+    # request. With false there is never a second `book` on a hold. The eval harness
+    # derives it from the scenario's `world.enforce_idempotency`.
+    provider_dedupes_keys: bool = True
+
+
 class ReaderSettings(BaseSettings):
     """The quarantined review reader (architecture 10.1, 11, 15.1)."""
 

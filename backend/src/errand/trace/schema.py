@@ -209,6 +209,8 @@ class ApprovalRecord(Envelope):
     new_fp: str | None = None
     intent_id: str | None = None
     hold_id: str | None = None
+    # approval.hold_rebound: the hold the approval was bound to before the re-hold.
+    old_hold_id: str | None = None
     # approval.requested: when the card lapses (agent clock), and what it replaced.
     expires_at: str | None = None
     superseded: list[str] | None = None
@@ -237,7 +239,12 @@ class StatusCheck(Envelope):
     hold_live: bool | None = None
     decision: (
         Literal[
-            "same_key_retry", "report_success", "report_not_applied", "wait_for_lapse", "escalate"
+            "same_key_retry",
+            "report_success",
+            "report_provider_cancelled",
+            "report_not_applied",
+            "wait_for_lapse",
+            "escalate",
         ]
         | None
     ) = None
@@ -245,6 +252,8 @@ class StatusCheck(Envelope):
     # because the book answer that carried the price never arrived (a timeout).
     price_unverified: bool | None = None
     mismatch: list[str] | None = None
+    # The comparison could not be finished (list_bookings unavailable). Never a mismatch.
+    check_incomplete: bool | None = None
 
 
 class BudgetRecord(Envelope):

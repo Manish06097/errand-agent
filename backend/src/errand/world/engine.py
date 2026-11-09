@@ -716,6 +716,7 @@ class World:
             created_at=now,
         )
         self.store.insert_booking(booking)
+        events.arm_created(self.store, booking.booking_id, now)
         self.store.set_hold_status(hold.hold_id, "consumed")
         self._occupy(hold.provider_id, hold.slot_start, hold.slot_end)
         body = BookOut(

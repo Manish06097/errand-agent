@@ -7,7 +7,8 @@ invariant fail instead of vouching for itself. `tests/evals/test_invariants.py` 
 each one failing on a doctored copy of a real scenario's records.
 
 Wired in M3: INV-07, INV-08, INV-10, INV-11, INV-13; M10 hardens INV-10. M4: INV-01,
-INV-02, INV-04, INV-12, INV-15, INV-16.
+INV-02, INV-04, INV-12, INV-15, INV-16. M5: INV-03 and INV-18 (the lead's ruling brings
+INV-18 forward from M6, because M5 is the first milestone that leaves attempts unknown).
 
 The M4 ones must not vouch for the code they check either. INV-01 rebuilds each booking's
 material from the world's own rows (the hold the `book` named, the provider's service,
@@ -32,6 +33,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +70,11 @@ class Records:
     world_services: dict[str, str] = field(default_factory=dict)
     world_names: dict[str, str] = field(default_factory=dict)  # provider_id -> name
     world_user: str = "u_demo"
+    # M5: agent.sqlite intent_attempts, whether the world dedupes keys (world.sqlite), and
+    # the agent's retry budget (the harness sets it; it is configuration, not a record).
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+    world_dedupes: bool = True
+    booking: dict[str, Any] | None = None
 
     def run_records(self) -> Iterable[tuple[dict[str, Any], list[dict[str, Any]]]]:
         for run in self.runs:
@@ -92,12 +99,15 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
             dict(r) for r in conn.execute("SELECT * FROM approvals ORDER BY requested_at, rowid")
         ]
         intents = [dict(r) for r in conn.execute("SELECT * FROM action_intents ORDER BY rowid")]
+        attempts = [
+            dict(r) for r in conn.execute("SELECT * FROM intent_attempts ORDER BY intent_id, n")
+        ]
     finally:
         conn.close()
     traces: dict[str, list[dict[str, Any]]] = {}
     for path in sorted((root / "traces").glob("*/*.jsonl")):
         traces[path.stem] = read_trace(path).records
-    bookings, holds, services, user = _world_rows(root / "world.sqlite")
+    bookings, holds, services, user, dedupes = _world_rows(root / "world.sqlite")
     return Records(
         traces=traces,
         runs=runs,
@@ -111,12 +121,14 @@ def load_records(root: Path, op_log: list[dict[str, Any]]) -> Records:
         world_services=services,
         world_names=_provider_names(root / "world.sqlite"),
         world_user=user,
+        attempts=attempts,
+        world_dedupes=dedupes,
     )
 
 
 def _world_rows(
     world_db: Path,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, str], str]:
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, str], str, bool]:
     conn = sqlite3.connect(f"file:{world_db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
@@ -127,10 +139,12 @@ def _world_rows(
             for r in conn.execute("SELECT provider_id, service FROM providers")
         }
         row = conn.execute("SELECT value FROM meta WHERE key = 'scenario_json'").fetchone()
-        user = json.loads(row[0]).get("user", {}).get("user_id", "u_demo") if row else "u_demo"
+        scenario = json.loads(row[0]) if row else {}
+        user = scenario.get("user", {}).get("user_id", "u_demo")
+        dedupes = bool(scenario.get("world", {}).get("enforce_idempotency", True))
     finally:
         conn.close()
-    return bookings, holds, services, str(user)
+    return bookings, holds, services, str(user), dedupes
 
 
 def _provider_names(world_db: Path) -> dict[str, str]:
@@ -464,6 +478,17 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
     the world's own records, and the booking it made is exactly that material."""
     out: Violations = []
     consumed, intent_of_key = _consumptions(rec)
+    # A booking that differs from the approved material is the world's doing, not the
+    # agent's, when the agent caught it: its status check recorded the mismatch and the
+    # intent is left for a person (S65). Without both, the difference is a violation.
+    open_intents = {i["intent_id"] for i in rec.intents if i["state"] == "needs_attention"}
+    caught = {
+        str(r["idempotency_key"])
+        for r in rec.all_records()
+        if r["type"] == "status.check"
+        and r.get("mismatch")
+        and intent_of_key.get(str(r["idempotency_key"])) in open_intents
+    }
     checked = 0
     for row in rec.op_log:
         if row["op"] not in ("book", "cancel", "reschedule"):
@@ -492,6 +517,8 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
         for b in rec.world_bookings:
             if b["created_by_key"] != key:
                 continue
+            if key in caught:
+                continue  # the provider booked something else and the agent said so (M5)
             same = (
                 b["provider_id"] == material.provider_id
                 and ist_seconds(from_ms(int(b["slot_start"]))) == material.slot_start
@@ -998,6 +1025,227 @@ def inv16_no_granted_approval_left(rec: Records) -> Violations:
     ]
 
 
+# ---------------------------------------------------------------- INV-03 (M5)
+
+
+@dataclass
+class _Call:
+    """One agent tool call, from a `tool.call` trace record, in global trace order."""
+
+    idx: int
+    run_id: str
+    thread: str
+    tool: str
+    key: str | None
+    hold: str | None
+    error: str | None
+    result: dict[str, Any]
+    world_seq: int | None
+
+    @property
+    def status(self) -> str | None:
+        status = self.result.get("status") if isinstance(self.result, dict) else None
+        return str(status) if status else None
+
+    @property
+    def refused(self) -> bool:
+        """A `book` the world answered with an error (`slot_taken`, `hold_expired`, ...)."""
+        return self.error is None and isinstance(self.result, dict) and "error" in self.result
+
+
+def _calls(rec: Records) -> tuple[list[_Call], list[tuple[int, str, dict[str, Any]]]]:
+    calls: list[_Call] = []
+    marks: list[tuple[int, str, dict[str, Any]]] = []  # (idx, record type, record)
+    idx = 0
+    for run, records in rec.run_records():
+        for record in records:
+            idx += 1
+            marks.append((idx, str(record["type"]), record))
+            if record["type"] != "tool.call":
+                continue
+            args = record.get("args") or {}
+            calls.append(
+                _Call(
+                    idx=idx,
+                    run_id=run["run_id"],
+                    thread=str(record["thread_id"]),
+                    tool=str(record["tool"]),
+                    key=args.get("idempotency_key") or record.get("idempotency_key"),
+                    hold=args.get("hold_id"),
+                    error=record.get("error"),
+                    result=dict(record["result"]) if isinstance(record.get("result"), dict) else {},
+                    world_seq=record.get("world_seq"),
+                )
+            )
+    return calls, marks
+
+
+def _key_of(row: dict[str, Any]) -> str | None:
+    try:
+        key = json.loads(row["args_json"]).get("idempotency_key")
+    except (ValueError, AttributeError):
+        return None
+    return str(key) if key else None
+
+
+def inv03_a_resend_follows_the_status_first_rule(rec: Records) -> Violations:
+    """After a `book` timeout, 5xx or malformed answer the next world op on that key is
+    `get_booking_status`; every later `book` on that hold uses the same key, follows a
+    `not_found` for that key while the hold was live, and is followed by a status check
+    before any outcome is shown; `book` calls per key are at most 1 + max_same_key_retries
+    with dedupe on and exactly 1 with dedupe off; no `book` after "Never mind"; each key
+    produces at most one world booking. Read from the trace and the world op_log, both."""
+    out: Violations = []
+    calls, marks = _calls(rec)
+    books = [c for c in calls if c.tool == "book"]
+    statuses = [c for c in calls if c.tool == "get_booking_status"]
+    rows = {int(r["seq"]): r for r in rec.op_log}
+
+    # 1. After an ambiguous book the next op on that key is a status check, in the agent's
+    # own calls and in the world's op_log.
+    keyed = [c for c in calls if c.key]
+    for call in books:
+        row = rows.get(call.world_seq) if call.world_seq is not None else None
+        ambiguous = call.error is not None
+        if row is not None:
+            ambiguous = (
+                ambiguous
+                or row["outcome"] in ("timeout_booked", "timeout_not_booked")
+                or (row.get("http_status") or 0) >= 500
+            )
+        if not ambiguous:
+            continue
+        after = [c for c in keyed if c.key == call.key and c.idx > call.idx]
+        if after and after[0].tool != "get_booking_status":
+            out.append(f"{call.key}: after an ambiguous book the agent called {after[0].tool}")
+        if call.world_seq is not None:
+            later = [
+                r for r in rec.op_log if int(r["seq"]) > call.world_seq and _key_of(r) == call.key
+            ]
+            if later and later[0]["op"] != "get_booking_status":
+                out.append(
+                    f"{call.key}: the world's next op on the key after an ambiguous book "
+                    f"is {later[0]['op']}, not get_booking_status"
+                )
+
+    # 2. One key per hold; every re-send follows a not_found while the hold was live.
+    liveness_checked = unreadable = 0
+    by_hold: dict[str, list[_Call]] = defaultdict(list)
+    for call in books:
+        by_hold[str(call.hold)].append(call)
+    for hold, group in by_hold.items():
+        keys = sorted({str(c.key) for c in group})
+        if len(keys) > 1:
+            out.append(f"hold {hold} was booked under {len(keys)} keys: {keys}")
+        for prev, nxt in pairwise(group):
+            between = [s for s in statuses if s.key == nxt.key and prev.idx < s.idx < nxt.idx]
+            if not between or between[-1].status != "not_found":
+                found = between[-1].status if between else "no status check"
+                out.append(f"{nxt.key}: re-sent on {hold} after {found}, not a not_found")
+                continue
+            seen = rows.get(between[-1].world_seq) if between[-1].world_seq else None
+            expires = rec.world_holds.get(hold, {}).get("expires_at")
+            at = None if seen is None else seen.get("done_ts") or seen.get("sim_ts")
+            if expires is None or at is None:
+                # An invariant that cannot check says so; it never passes quietly.
+                unreadable += 1
+                out.append(
+                    f"{nxt.key}: re-sent on {hold}, but could not check that the hold was "
+                    f"live (status call {'unseen' if seen is None else 'seen'} by the world, "
+                    f"hold {'missing' if expires is None else 'present'} in world_holds)"
+                )
+            else:
+                liveness_checked += 1
+                if int(at) >= int(expires):
+                    out.append(f"{nxt.key}: re-sent on {hold} after the hold had lapsed")
+
+    # 3. A book that was not refused is followed by a status check on its key before any
+    # card or the end of the run: the user hears only what get_booking_status says.
+    for call in books:
+        if call.refused:
+            continue
+        for _, kind, record in (m for m in marks if m[0] > call.idx):
+            args = record.get("args") or {}
+            if (
+                kind == "tool.call"
+                and record.get("tool") == "get_booking_status"
+                and args.get("idempotency_key") == call.key
+            ):
+                break
+            if kind in ("card", "run.end") and record.get("run_id") == call.run_id:
+                out.append(f"{call.key}: an outcome was shown before a status check")
+                break
+
+    # 4. The count bound per mode, and one world booking per key.
+    per_key: dict[str, int] = defaultdict(int)
+    for call in books:
+        per_key[str(call.key)] += 1
+    # A record that lacks the budget is held to the default (1), not excused from the bound.
+    recorded = (rec.booking or {}).get("max_same_key_retries")
+    budget = int(recorded) if recorded is not None else 1
+    for key, n in sorted(per_key.items()):
+        if not rec.world_dedupes and n != 1:
+            out.append(f"{key}: {n} book calls with dedupe off, exactly 1 allowed")
+        elif rec.world_dedupes and n > 1 + budget:
+            out.append(f"{key}: {n} book calls, at most {1 + budget} allowed")
+    made: dict[str, list[str]] = defaultdict(list)
+    for b in rec.world_bookings:
+        if b["created_by_key"]:
+            made[str(b["created_by_key"])].append(str(b["booking_id"]))
+    out += [f"{k}: {len(v)} world bookings for one key: {v}" for k, v in made.items() if len(v) > 1]
+
+    # 5. No book after "Never mind" (the action is M6's; the check is ready for it).
+    gone = {
+        str(r["thread_id"]): i
+        for i, kind, r in marks
+        if kind == "state.transition" and r.get("to") == Phase.ABANDONED.value
+    }
+    for call in books:
+        if call.thread in gone and call.idx > gone[call.thread]:
+            out.append(f"{call.key}: a book after the errand was abandoned")
+    rec.notes["inv03_books_checked"] = len(books)
+    rec.notes["inv03_resends_checked"] = sum(max(0, len(g) - 1) for g in by_hold.values())
+    rec.notes["inv03_abandoned_threads"] = len(gone)
+    rec.notes["inv03_liveness_checked"] = liveness_checked
+    rec.notes["inv03_liveness_unreadable"] = unreadable
+    rec.notes["inv03_count_bounds_checked"] = len(per_key)
+    rec.notes["inv03_budget_defaulted"] = recorded is None
+    return out
+
+
+# ---------------------------------------------------------------- INV-18 (M5)
+
+
+def inv18_no_attempt_left_unsettled(rec: Records) -> Violations:
+    """No attempt is left `prepared`, `in_flight` or `unknown` at the end unless its intent
+    is `needs_attention` and the user saw PENDING_VERIFICATION."""
+    out: Violations = []
+    intents = {i["intent_id"]: i for i in rec.intents}
+    pending_seen = {
+        m["conversation_id"]
+        for m in rec.messages
+        if m["role"] == "assistant" and m["body"].get("outcome") == "PENDING_VERIFICATION"
+    }
+    ended_pending = {
+        r["conversation_id"] for r in rec.runs if r.get("outcome") == "PENDING_VERIFICATION"
+    }
+    unsettled = [a for a in rec.attempts if a["state"] in ("prepared", "in_flight", "unknown")]
+    for a in unsettled:
+        intent = intents.get(a["intent_id"])
+        where = f"attempt {a['attempt_id']} ({a['state']})"
+        if intent is None:
+            out.append(f"{where}: no intent row")
+        elif intent["state"] != "needs_attention":
+            out.append(f"{where}: its intent is {intent['state']}, not needs_attention")
+        elif not (
+            intent["conversation_id"] in pending_seen and intent["conversation_id"] in ended_pending
+        ):
+            out.append(f"{where}: the user never saw PENDING_VERIFICATION")
+    rec.notes["attempts_checked"] = len(rec.attempts)
+    rec.notes["attempts_unsettled"] = len(unsettled)
+    return out
+
+
 INVARIANTS: dict[str, Callable[[Records], Violations]] = {
     "INV-01": inv01_side_effects_match_a_consumed_approval,
     "INV-02": inv02_one_side_effect_per_approval,
@@ -1010,6 +1258,8 @@ INVARIANTS: dict[str, Callable[[Records], Violations]] = {
     "INV-13": inv13_no_ask_for_filled_or_asked,
     "INV-15": inv15_parked_on_every_live_card,
     "INV-16": inv16_no_granted_approval_left,
+    "INV-03": inv03_a_resend_follows_the_status_first_rule,
+    "INV-18": inv18_no_attempt_left_unsettled,
 }
 DEFAULT = tuple(INVARIANTS)
 
