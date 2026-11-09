@@ -329,12 +329,23 @@ class LLMGateway:
         """The planner call timeout, capped by the run time left (15.1), and whether the
         cap is the deadline's."""
         timeout = self.limits.planner_timeout_s
-        if self.clock is None:
+        if self.clock is None or self._real_call_on_simulated_time():
             return timeout, False
         left = self.counters.time_left_s(self.clock.now())
         if left is None or left >= timeout:
             return timeout, False
         return max(left, 0.0), True
+
+    def _real_call_on_simulated_time(self) -> bool:
+        """A live or recording model call takes real seconds, which a SimClock never
+        counts, so the simulated time left is no cap on it. Scripted and replayed calls
+        take no real time and keep the cap, which is how the offline suite exercises it."""
+        if self.settings.model_mode not in ("record", "live"):
+            return False
+        try:
+            return getattr(self.clock, "mode", None) == "sim"
+        except RuntimeError:  # a TrackingClock that has not synced yet
+            return False
 
     async def _stream(
         self,
