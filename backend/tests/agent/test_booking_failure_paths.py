@@ -9,6 +9,7 @@ and the wording of every new sentence against the claim guard and INV-04.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from errand.agent.claim_guard import guard
 from errand.agent.nodes import verify as verify_node
 from errand.clock import IST
 from errand.config import BookingSettings
+from errand.domain.messages import ActionCard
 from errand.domain.outcomes import PendingCheck
 from errand.execution import executor
 from errand.world.contracts import BookError
@@ -250,7 +252,9 @@ async def test_the_one_re_hold_per_approval_is_read_from_the_database(tmp_path: 
             row = await repos.approvals.get(card["approval_id"])
         assert row is not None
         path = BookingPath(deps=_DepsWithDb(h.manager.db), errand=None)  # type: ignore[arg-type]
-        assert row.issued_hold_id == row.bound_hold_id is not None
+        assert (
+            ActionCard.model_validate_json(row.card_json).hold_id == row.bound_hold_id is not None
+        )
         assert await path.rehold_used(row) is False
         async with h.manager.db.transaction() as repos:
             old = await repos.holds.get_by_hold_id(row.bound_hold_id or "")
@@ -279,6 +283,16 @@ async def test_the_one_re_hold_per_approval_is_read_from_the_database(tmp_path: 
             )
             same_expiry = await repos.approvals.get(row.approval_id)
         assert same_expiry is not None and await path.rehold_used(same_expiry) is True
+        # A card without the field (a pre-M5 row) counts as already re-held: fail safe.
+        legacy = json.loads(row.card_json)
+        del legacy["hold_id"]
+        async with h.manager.db.transaction() as repos:
+            await repos.conn.execute(
+                "UPDATE approvals SET card_json = ?, bound_hold_id = ? WHERE approval_id = ?",
+                (json.dumps(legacy), row.bound_hold_id, row.approval_id),
+            )
+            old_card = await repos.approvals.get(row.approval_id)
+        assert old_card is not None and await path.rehold_used(old_card) is True
 
 
 async def test_a_clean_confirmed_followed_by_not_found_is_a_contradiction_not_a_retry(

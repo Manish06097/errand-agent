@@ -328,7 +328,7 @@ Two things were needed to make parallel runs safe. Tests that run a scenario wro
 
 ## M5, review round 2
 
-**Done.** The blocker: a `list_bookings` failure during verify is `check_incomplete` (no `mismatch`, `check_incomplete: true` on the status.check, needs_attention, "I couldn't finish checking the booking with the provider"), and a real mismatch names the recorded slot and provider (BUG-M5-3, repro 333126f, fix 9e0f0e6). Minors: the same-key retry only after an ambiguous `book` (a clean confirmed then not_found escalates); `booking_id` in the applied-mismatch intent's result_json; `rehold_used` compares `approvals.issued_hold_id` with `bound_hold_id` (schema 4); INV-03 reports "could not check" and defaults a missing budget to 1, with two new table notes. Rulings in architecture 9.8, round 2.
+**Done.** The blocker: a `list_bookings` failure during verify is `check_incomplete` (no `mismatch`, `check_incomplete: true` on the status.check, needs_attention, "I couldn't finish checking the booking with the provider"), and a real mismatch names the recorded slot and provider (BUG-M5-3, repro 333126f, fix 9e0f0e6). Minors: the same-key retry only after an ambiguous `book` (a clean confirmed then not_found escalates); `booking_id` in the applied-mismatch intent's result_json; `rehold_used` compares `bound_hold_id` with the hold the card was issued on (first as a column, replaced in round 3 by `ActionCard.hold_id`; no migration); INV-03 reports "could not check" and defaults a missing budget to 1, with two new table notes. Rulings in architecture 9.8, round 2.
 
 **Surprise.** The claim guard strips "cancelled" even in "recorded the booking as cancelled", so the odd-status phrase is "no longer active".
 
