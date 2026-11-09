@@ -80,6 +80,7 @@ from errand.domain.messages import MessageBody
 from errand.ids import IdFactory, SequentialIds, Uuid7Ids
 from errand.llm.scripted import Policy, ScriptedChatModel
 from errand.memory.hmac_key import load_or_create
+from errand.memory.scrub import scrub_brief
 from errand.memory.service import MemoryService
 from errand.store.agent_db import AgentDB
 from errand.store.repos.users import User
@@ -419,6 +420,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 for a in await repos.approvals.list_for_conversation(conversation_id)
             }
         snapshot = await manager.graph.aget_state(run_config(conversation_id))
+        async with manager.db.session() as repos:
+            eligible = await repos.memories.eligible_ids(conversation.user_id)
         return {
             "conversation_id": conversation_id,
             "messages": [_message_view(m, approvals) for m in messages],
@@ -427,7 +430,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 for r in runs
             ],
             "active_run_id": manager.active_run(conversation_id),
-            "state": _state_view(snapshot.values, snapshot.next, bool(snapshot.interrupts)),
+            "state": _state_view(
+                snapshot.values, snapshot.next, bool(snapshot.interrupts), eligible
+            ),
             "clock": reading_of(manager.clock).__dict__,
         }
 
@@ -581,11 +586,17 @@ def _parse_last_id(value: str | None) -> int:
         return 0
 
 
-def _state_view(values: dict[str, Any], next_nodes: tuple[str, ...], interrupted: bool) -> Any:
+def _state_view(
+    values: dict[str, Any], next_nodes: tuple[str, ...], interrupted: bool, eligible: frozenset[str]
+) -> Any:
     if not values:
         return None
     state = ThreadState.model_validate(values)
     errand = state.errand
+    if errand is not None:
+        # A field sourced from a memory that is no longer eligible is not shown (decision 10).
+        brief, _ = scrub_brief(errand.brief, eligible)
+        errand = errand.model_copy(update={"brief": brief})
     return {
         "run_id": state.run_id,
         "outcome": state.outcome,

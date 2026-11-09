@@ -206,3 +206,20 @@ async def test_a_forget_leaves_other_values_of_other_keys_alone(env: Env) -> Non
     await env.service.forget(user_id=USER, memory_id="m-02", client_action_id="f1")
     assert (await env.body(keep))["text"] == "I always want Hindi replies"
     assert (await env.row("m-01")).status == "active"
+
+
+async def test_a_stale_brief_cannot_write_a_forgotten_value_back_into_a_booking(env: Env) -> None:
+    """Decision 10: verify.py hands the checkpoint's brief to the repo, which scrubs it."""
+    await env.remember("home_area", "global", "indiranagar", "I live in Indiranagar")
+    await env.service.forget(user_id=USER, memory_id="m-01", client_action_id="f1")
+    stale = _brief("m-01")  # the open errand's checkpoint still carries the field
+    async with env.db.transaction() as repos:
+        await repos.known_bookings.upsert(
+            KnownBooking("B2", USER, "P1", "plumber", 1, 2, "confirmed", 3, CHAT, stale, None)
+        )
+    async with env.db.session() as repos:
+        (booking,) = await repos.known_bookings.for_user(USER)
+    assert booking.origin_brief_json is not None
+    stored = json.loads(booking.origin_brief_json)
+    assert stored["area"] is None and stored["budget_max_inr"]["value"] == 800
+    assert "I live in Indiranagar" not in booking.origin_brief_json  # the field's own evidence

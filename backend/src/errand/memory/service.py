@@ -21,6 +21,7 @@ from typing import Any
 import aiosqlite
 
 from errand.memory import inference, mask, redaction
+from errand.memory.briefjson import clear_fields
 from errand.memory.evidence import Checked, EvidenceRefused, ValueCheck, check_explicit
 from errand.memory.evidence import value_in_quote as default_value_check
 from errand.memory.hmac_key import hmac_hex
@@ -33,7 +34,6 @@ from errand.memory.registry import (
     render_value,
     surface_forms,
 )
-from errand.memory.scrub import clear_fields
 from errand.store.agent_db import AgentDB, Repos
 from errand.store.repos.memories import MemoriesRepo, MemoryRow, Redaction, dumps
 
