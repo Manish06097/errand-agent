@@ -30,3 +30,7 @@ web/out/
 
 # os
 .DS_Store
+
+# Playwright
+web/playwright-report/
+web/test-results/
