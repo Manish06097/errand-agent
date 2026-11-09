@@ -25,7 +25,7 @@ Everything dynamic goes in the one user turn, never in the system block.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from importlib import resources
@@ -38,6 +38,7 @@ from errand.config import ContextCaps
 from errand.domain.errand import Errand
 from errand.domain.inbound import UserMessage
 from errand.domain.messages import (
+    MEMORY_BODY_TYPES,
     ActionCard,
     CardReminder,
     ClarifyCard,
@@ -48,6 +49,7 @@ from errand.domain.messages import (
 )
 from errand.domain.windows import fmt_day, slot_label
 from errand.llm.tokens import TOOLS_PREAMBLE_TOKENS, est_tokens
+from errand.memory.redaction import apply_model_view
 from errand.store.repos.messages import Message
 
 # The gate 2 split lives in config.ContextCaps (it validates the sum against the 12,000
@@ -57,6 +59,8 @@ CAPS: dict[str, int] = {
     "rules": _CAPS.rules,
     "tools": _CAPS.tools,
     "state": _CAPS.state,
+    "memory": _CAPS.memory,
+    "ledger": _CAPS.ledger,
     "recent": _CAPS.recent,
     "current": _CAPS.current,
 }
@@ -79,6 +83,34 @@ class StateExtras:
     last_booking: str | None = None
     approval_card: str | None = None
     notes: tuple[str, ...] = ()
+    # Upcoming bookings for the errand's service, newest sub-cap applied by the caller, and
+    # the count of the others (13.1: S3's sub-caps).
+    upcoming: tuple[str, ...] = ()
+    other_upcoming: int = 0
+
+
+# A mask applied to model-written and user-written history text: (text) -> (text, count).
+Mask = Callable[[str], tuple[str, int]]
+
+
+@dataclass(frozen=True)
+class MemoryInputs:
+    """What S4, S5 and the S6 redactions need, read by the caller (13.1, 13.4).
+
+    The builder stays a pure function of these: no store, no clock, no service.
+    """
+
+    epoch: int = 0
+    memory_text: str = ""  # S4, "" when no row is chosen
+    included: tuple[Mapping[str, Any], ...] = ()  # {"id", "score", "prefill"}
+    excluded: Mapping[str, str] = field(default_factory=dict)
+    ledger_text: str = ""  # S5
+    ledger_lines: int = 0
+    redactions: Mapping[str, Sequence[tuple[int, int, str]]] = field(default_factory=dict)
+    mask: Mask | None = None
+    shed: tuple[str, ...] = ()
+    compacted: bool = False
+    builder: str = "context.builder"
 
 
 @dataclass(frozen=True)
@@ -106,6 +138,8 @@ def build_context(
     tz: tzinfo,
     tools: Sequence[dict[str, Any]],
     extras: StateExtras | None = None,
+    memory: MemoryInputs | None = None,
+    tool_results: Sequence[str] = (),
 ) -> BuiltContext:
     system = system_blocks()
     rules_est = est_tokens(system[0]["text"])
@@ -113,23 +147,40 @@ def build_context(
         json.dumps(list(tools), ensure_ascii=False, separators=(",", ":"))
     )
     state = "<errand_state>\n" + render_state(errand, now, tz, extras) + "\n</errand_state>"
-    recent_text, included, dropped = _render_recent(history, current.message_id)
+    mem = memory or MemoryInputs()
+    latest_only = "recent" in mem.shed
+    recent_text, included, dropped, masked = _render_recent(
+        history, current.message_id, mem, latest_only=latest_only
+    )
     recent = "<recent_turns>\n" + (recent_text or "(none)") + "\n</recent_turns>"
     current_text = "<current_message>\n" + current.text + "\n</current_message>"
     sections = {
         "rules": rules_est,
         "tools": tools_est,
         "state": est_tokens(state),
+        "memory": est_tokens(mem.memory_text) if mem.memory_text else 0,
+        "ledger": est_tokens(mem.ledger_text) if mem.ledger_text else 0,
         "recent": est_tokens(recent),
         "current": est_tokens(current_text),
     }
+    results_text = ""
+    if tool_results:
+        results_text = "<run_so_far>\n" + "\n".join(tool_results) + "\n</run_so_far>"
+        sections["loop"] = est_tokens(results_text)
     manifest: dict[str, Any] = {
-        "builder": "context.builder",
+        "builder": mem.builder,
         "sections": sections,
         "caps": dict(CAPS),
         "messages_included": included,
         "turns_dropped": dropped,
         "current_message_id": current.message_id,
+        "memory_epoch": mem.epoch,
+        "memory_included": [dict(i) for i in mem.included],
+        "memory_excluded": dict(mem.excluded),
+        "ledger_lines": mem.ledger_lines,
+        "masked": masked,
+        "compacted": mem.compacted,
+        "shed": list(mem.shed),
     }
     over = next(
         (
@@ -139,7 +190,14 @@ def build_context(
         ),
         None,
     )
-    blocks = [state, recent, current_text]
+    blocks = [state]
+    if mem.memory_text:
+        blocks.append(mem.memory_text)
+    if mem.ledger_text:
+        blocks.append(mem.ledger_text)
+    blocks += [recent, current_text]
+    if results_text:
+        blocks.append(results_text)
     content: list[str | dict[str, Any]] = [{"type": "text", "text": b} for b in blocks]
     return BuiltContext(
         system=system,
@@ -177,6 +235,11 @@ def render_state(
     if extras is not None:
         if extras.last_booking:
             lines.append("Last booking in this chat: " + extras.last_booking)
+        if extras.upcoming:
+            lines.append("Upcoming bookings:")
+            lines += [f"- {u}" for u in extras.upcoming]
+            if extras.other_upcoming:
+                lines.append(f"- and {extras.other_upcoming} more upcoming bookings")
         if extras.approval_card:
             lines.append("Approval card: " + extras.approval_card)
         for note in extras.notes:
@@ -230,11 +293,27 @@ def render_body(body: dict[str, Any]) -> str:
         return CardReminder.model_validate(body).text
     if kind == "outcome":
         return OutcomeCard.model_validate(body).text
+    if kind in MEMORY_BODY_TYPES:
+        return "[memory chip]"
     return ""
 
 
-def _render_recent(history: Sequence[Message], current_id: str) -> tuple[str, list[str], int]:
-    """Whole turns, newest first, until S6's cap; returned oldest first."""
+_CODE_RENDERED = frozenset({"action", "outcome", "notice", "reminder"})
+
+
+def _render_recent(
+    history: Sequence[Message],
+    current_id: str,
+    mem: MemoryInputs,
+    *,
+    latest_only: bool = False,
+) -> tuple[str, list[str], int, int]:
+    """Whole turns, newest first, until S6's cap; returned oldest first.
+
+    Superseded evidence spans read "[updated preference]" and the n-gram mask covers what
+    the user and the model wrote (never code-rendered material), then the cap is applied
+    to the text as the model will see it.
+    """
     turns: list[list[Message]] = []
     for m in history:
         if m.message_id == current_id:
@@ -243,21 +322,32 @@ def _render_recent(history: Sequence[Message], current_id: str) -> tuple[str, li
             turns.append([m])
         else:
             turns[-1].append(m)
-    turns = turns[-RECENT_TURNS:]
+    turns = turns[-(1 if latest_only else RECENT_TURNS) :]
+    masked = 0
+
+    def line(m: Message) -> str:
+        nonlocal masked
+        body = m.body
+        rows = mem.redactions.get(m.message_id)
+        if rows and m.role == "user" and isinstance(body.get("text"), str):
+            body = {**body, "text": apply_model_view(body["text"], rows)}
+        text = render_body(body)
+        if mem.mask is not None and body.get("type") not in _CODE_RENDERED:
+            text, count = mem.mask(text)
+            masked += count
+        return f"{'user' if m.role == 'user' else 'assistant'}: {text}"
+
+    rendered = {id(m): line(m) for turn in turns for m in turn}
     kept: list[list[Message]] = []
     used = est_tokens("<recent_turns>\n\n</recent_turns>")
     for turn in reversed(turns):
-        cost = sum(est_tokens(_line(m)) for m in turn)
+        cost = sum(est_tokens(rendered[id(m)]) for m in turn)
         if used + cost > CAPS["recent"]:
             break
         kept.append(turn)
         used += cost
     kept.reverse()
-    lines = [_line(m) for turn in kept for m in turn]
+    lines = [rendered[id(m)] for turn in kept for m in turn]
     ids = [m.message_id for turn in kept for m in turn]
-    return "\n".join(lines), ids, len(turns) - len(kept)
-
-
-def _line(m: Message) -> str:
-    who = "user" if m.role == "user" else "assistant"
-    return f"{who}: {render_body(m.body)}"
+    dropped_all = len(turns) - len(kept)
+    return "\n".join(lines), ids, dropped_all, masked

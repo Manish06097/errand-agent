@@ -1226,12 +1226,13 @@ def _request_strings(record: dict[str, Any]) -> list[str]:
 
 def _block(strings: list[str], tag: str) -> str:
     """The text of one tagged block of the user turn (S3 `errand_state`, S4 `memory`)."""
+    found: list[str] = []
     for text in strings:
         start = text.find(f"<{tag}>")
         if start >= 0:
             end = text.find(f"</{tag}>", start)
-            return text[start : end if end >= 0 else len(text)]
-    return ""
+            found.append(text[start : end if end >= 0 else len(text)])
+    return "\n".join(found)
 
 
 def inv05_no_forgotten_value_in_requests(rec: Records) -> Violations:

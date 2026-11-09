@@ -660,7 +660,7 @@ export interface components {
              * Body
              * @default null
              */
-            body: (components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["OutcomeCard"]) | null;
+            body: (components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["OutcomeCard"] | components["schemas"]["MemorySavedChip"] | components["schemas"]["MemorySuggestionChip"] | components["schemas"]["MemoryOfferChip"] | components["schemas"]["MemoryUpdateChip"] | components["schemas"]["MemoryForgetChip"] | components["schemas"]["MemoryListCard"]) | null;
             /**
              * Errand Id
              * @default null
@@ -887,13 +887,112 @@ export interface components {
             /** Client Action Id */
             client_action_id: string;
         };
+        /**
+         * MemoryForgetChip
+         * @description What `propose_forget` renders. The forget is the user's click, never the model's.
+         */
+        MemoryForgetChip: {
+            /** Memory Id */
+            memory_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_forget";
+        };
+        /**
+         * MemoryListCard
+         * @description What `list_memories` renders: references only, resolved with their status at read time.
+         */
+        MemoryListCard: {
+            /** Memory Ids */
+            memory_ids?: string[];
+            /** Suggestion Ids */
+            suggestion_ids?: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_list";
+        };
+        /**
+         * MemoryOfferChip
+         * @description "Remember this for next time?" It stores no value, only where the user said it: a
+         *     click re-reads the span out of the user's message, so a forgotten value has no copy.
+         */
+        MemoryOfferChip: {
+            /** End */
+            end: number;
+            /** Key */
+            key: string;
+            /** Scope */
+            scope: string;
+            /** Source Message Id */
+            source_message_id: string;
+            /** Start */
+            start: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_offer";
+        };
+        /**
+         * MemorySavedChip
+         * @description "Saved: home area" with Undo. References the row; the value is resolved at read time.
+         */
+        MemorySavedChip: {
+            /** Memory Id */
+            memory_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_saved";
+        };
+        /**
+         * MemorySuggestionChip
+         * @description One per errand that produced a suggestion: Keep and Dismiss.
+         */
+        MemorySuggestionChip: {
+            /** Memory Id */
+            memory_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_suggestion";
+        };
+        /**
+         * MemoryUpdateChip
+         * @description "Update your saved home area? [Update] [Just this time]" with the same no-value rule.
+         */
+        MemoryUpdateChip: {
+            /** End */
+            end: number;
+            /** Key */
+            key: string;
+            /** Memory Id */
+            memory_id: string;
+            /** Scope */
+            scope: string;
+            /** Source Message Id */
+            source_message_id: string;
+            /** Start */
+            start: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "memory_update";
+        };
         /** MessageOut */
         MessageOut: {
             approval?: components["schemas"]["ApprovalStatusOut"] | null;
             /** Approval Id */
             approval_id?: string | null;
             /** Body */
-            body: components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["OutcomeCard"];
+            body: components["schemas"]["TextBody"] | components["schemas"]["ClarifyCard"] | components["schemas"]["ShortlistCard"] | components["schemas"]["OutcomeNotice"] | components["schemas"]["ActionCard"] | components["schemas"]["CardReminder"] | components["schemas"]["OutcomeCard"] | components["schemas"]["MemorySavedChip"] | components["schemas"]["MemorySuggestionChip"] | components["schemas"]["MemoryOfferChip"] | components["schemas"]["MemoryUpdateChip"] | components["schemas"]["MemoryForgetChip"] | components["schemas"]["MemoryListCard"];
             /** Created At */
             created_at: number;
             /** Kind */

@@ -130,6 +130,16 @@ class TooLarge(_Result):
     cap: int
 
 
+class Exhausted(_Result):
+    """The context cannot fit even after compaction and shedding (13.1): CONTEXT_EXHAUSTED.
+    Distinct from TooLarge, which is the user's message over its own cap."""
+
+    kind: Literal["exhausted"] = "exhausted"
+    section: str
+    estimated: int
+    cap: int
+
+
 class Failure(_Result):
     kind: Literal["failure"] = "failure"
     reason: str
@@ -144,6 +154,7 @@ PlanResult = Annotated[
     | Limit
     | ToolDown
     | TooLarge
+    | Exhausted
     | Failure
     | OutOfCoverage
     | NoFit

@@ -143,6 +143,11 @@ class MemoryService:
         self._key = hmac_key
         self._value_check = value_check
 
+    @property
+    def mask_key(self) -> bytes:
+        """The install key, for the n-gram mask (context building reads, never writes)."""
+        return self._key
+
     def hash_value(self, value: Any) -> str:
         """HMAC-SHA256 of the canonical value under the install key.
 

@@ -35,10 +35,10 @@ def test_the_event_models_are_components() -> None:
         "token",
         "error",
     }
-    # A card event carries a typed message body (the seven card models), not a loose dict.
+    # A card event carries a typed message body (the thirteen body models), not a loose dict.
     body = schemas["CardRecordData"]["properties"]["body"]
     union = next(option for option in body["anyOf"] if "oneOf" in option)
-    assert len(union["oneOf"]) == 7
+    assert len(union["oneOf"]) == 13
     assert union["discriminator"]["propertyName"] == "type"
 
 

@@ -54,6 +54,7 @@ from errand.llm.anthropic import (
 from errand.llm.cassette import CassetteRecorder, CassetteReplayModel, render_request
 from errand.llm.errors import (
     ContextOverBudget,
+    ContextStale,
     LoopPrefixViolation,
     MissingUsage,
     ModelCallLimit,
@@ -67,6 +68,9 @@ from errand.trace.tracer import Tracer
 from errand.usage import Usage
 
 TokenCallback = Callable[[str], Awaitable[None] | None]
+# Reads the user's current memory epoch; the planner passes it so this package imports
+# nothing from memory or the store.
+EpochProbe = Callable[[], Awaitable[int]]
 
 
 @dataclass(frozen=True)
@@ -227,11 +231,17 @@ class LLMGateway:
         appended: Sequence[BaseMessage],
         on_token: TokenCallback | None = None,
         manifest: Mapping[str, Any] | None = None,
+        epoch_probe: EpochProbe | None = None,
     ) -> ModelTurn:
         """Budget check, one streamed call, trace. Use LoopSession.call, not this."""
         cap = self.limits.model_calls_per_run
         if self.counters.model_calls >= cap:
             raise ModelCallLimit(cap)
+        built_epoch = (manifest or {}).get("memory_epoch")
+        if epoch_probe is not None and built_epoch is not None:
+            current = await epoch_probe()
+            if current != built_epoch:
+                raise ContextStale(built=int(built_epoch), current=current)
         sha = request_sha256(canonical)
         tools = canonical.get("tools")
         est = est_request(
@@ -373,7 +383,9 @@ class LoopSession:
             self._messages.append(m)
             self._appended.append(m)
 
-    async def call(self, *, on_token: TokenCallback | None = None) -> ModelTurn:
+    async def call(
+        self, *, on_token: TokenCallback | None = None, epoch_probe: EpochProbe | None = None
+    ) -> ModelTurn:
         if self._pending_tool_ids:
             raise ValueError(f"unanswered tool calls: {sorted(self._pending_tool_ids)}")
         if not isinstance(self._messages[-1], HumanMessage | ToolMessage):
@@ -387,6 +399,7 @@ class LoopSession:
             appended=self._appended,
             on_token=on_token,
             manifest={**self._manifest, "loop_messages": len(self._messages) - 2},
+            epoch_probe=epoch_probe,
         )
         self._calls += 1
         self._messages.append(turn.message)

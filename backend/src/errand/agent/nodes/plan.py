@@ -43,6 +43,7 @@ SystemNote replan is a new invocation of this node, rebuilt from state (spike C2
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -54,6 +55,7 @@ from pydantic import ValidationError
 from errand.agent import ask_guard, brief_ops, invalidation, pinned, steering, timewin
 from errand.agent.changes.validate import check_change_proposal
 from errand.agent.deps import RunDeps
+from errand.agent.memory_fill import apply_memory
 from errand.agent.memory_tools import MEMORY_TOOL_NAMES, MemoryTools
 from errand.agent.planner_tools import (
     ASK_OPTION_MAX_CHARS,
@@ -75,7 +77,13 @@ from errand.agent.templates import recommendation_line, so_far
 from errand.agent.templates_conversation import covered_labels, no_fit_result
 from errand.agent.transitions import transition
 from errand.agent.validation import Rejected, check_book_proposal
-from errand.context.builder import build_context
+from errand.context.builder import BuiltContext
+from errand.context.rebuild import (
+    build_with,
+    gather,
+    request_estimate,
+)
+from errand.context.rebuild import compacted as compacted_context
 from errand.domain import aliases
 from errand.domain.booking_refs import BOOKING_REF, assign
 from errand.domain.brief import AskRecord, BriefField, TimeWindowExpr
@@ -84,6 +92,7 @@ from errand.domain.inbound import UserMessage
 from errand.domain.outcomes import (
     Ask,
     AskExhausted,
+    Exhausted,
     Failure,
     Limit,
     LimitName,
@@ -97,7 +106,7 @@ from errand.domain.outcomes import (
     ToolDown,
 )
 from errand.domain.slots import Shortlist
-from errand.llm.errors import ContextOverBudget, ModelCallLimit
+from errand.llm.errors import ContextOverBudget, ContextStale, ModelCallLimit
 from errand.tools import views
 from errand.tools.errors import (
     PlannerToolRejected,
@@ -119,6 +128,7 @@ from errand.world.contracts import (
 )
 
 REPROMPTS_PER_RUN = 1
+REBUILD_RESERVE = 60  # estimate slack for a rebuilt request, in tokens
 
 
 @dataclass
@@ -187,6 +197,8 @@ class PlannerLoop:
         # proposal names a booking, and valid for this run only.
         self.booking_refs: dict[str, BookingItem] = {}
         self.card_changes: list[CardChange] = []
+        # (tool, rendered result) of this run, for a rebuild or a compaction.
+        self.results: list[tuple[str, str]] = []
         self.memory_tools = MemoryTools(self)
 
     def reject(self, tool: str, reason: str, **detail: Any) -> None:
@@ -205,34 +217,57 @@ class PlannerLoop:
         async with deps.db.session() as repos:
             history = await repos.messages.list_for_conversation(deps.conversation_id)
         extras = await state_extras(deps, [n.text for n in self.notes])
-        built = build_context(
-            errand=self.errand,
-            history=history,
-            current=self.inbound,
-            now=deps.clock.now(),
-            tz=deps.tz,
-            tools=PLANNER_TOOLS,
-            extras=extras,
-        )
+        built = await self._build(history, extras)
         if built.over_cap is not None:
             over = built.over_cap
             deps.tracer.emit(
                 "context.built",
                 manifest={**built.manifest, "sent": False, "over_cap": over.section},
             )
-            return TooLarge(section=over.section, estimated=over.estimated, cap=over.cap)
+            if over.section == "current":
+                return TooLarge(section=over.section, estimated=over.estimated, cap=over.cap)
+            return Exhausted(section=over.section, estimated=over.estimated, cap=over.cap)
         session = deps.llm.session(
             system=built.system, messages=built.messages, manifest=built.manifest
         )
-        for _ in range(deps.limits.loop_iterations):
+        compacted = False
+        iterations = 0
+        probe = self._epoch_probe if deps.memory is not None else None
+        while iterations < deps.limits.loop_iterations:
             if self._past_deadline():
                 return Limit(limit="deadline")
             try:
-                turn = await session.call(on_token=deps.on_token)
+                turn = await session.call(on_token=deps.on_token, epoch_probe=probe)
             except ModelCallLimit:
                 return Limit(limit="model_calls")
+            except ContextStale as stale:
+                deps.tracer.emit(
+                    "guard.context_stale", detail={"built": stale.built, "current": stale.current}
+                )
+                rebuilt = await self._rebuild(compact=False)
+                if rebuilt is None:
+                    return Exhausted(
+                        section="request", estimated=0, cap=deps.limits.context_budget_tokens
+                    )
+                session = deps.llm.session(
+                    system=rebuilt.system, messages=rebuilt.messages, manifest=rebuilt.manifest
+                )
+                continue
             except ContextOverBudget as exc:
-                return TooLarge(section="request", estimated=exc.needed, cap=exc.budget)
+                if not self.results and not compacted:
+                    # the first request of the run is over the budget on its own
+                    return TooLarge(section="request", estimated=exc.needed, cap=exc.budget)
+                if compacted:
+                    return Exhausted(section="request", estimated=exc.needed, cap=exc.budget)
+                rebuilt = await self._rebuild(compact=True)
+                if rebuilt is None:
+                    return Exhausted(section="request", estimated=exc.needed, cap=exc.budget)
+                compacted = True
+                session = deps.llm.session(
+                    system=rebuilt.system, messages=rebuilt.messages, manifest=rebuilt.manifest
+                )
+                continue
+            iterations += 1
             if turn.stop_reason == "end_turn":
                 text = answer_text(turn.message)
                 if self._points_at_a_selection(text):
@@ -271,6 +306,7 @@ class PlannerLoop:
                         self._not_executed(calls[i + 1 :])
                     return handled.result
                 content, is_error = handled
+                self.results.append((name, content))
                 replies.append(
                     ToolMessage(
                         content=content,
@@ -280,6 +316,94 @@ class PlannerLoop:
                 )
             session.append(*replies)
         return Limit(limit="iterations")
+
+    # ------------------------------------------------------------------ context
+
+    async def _epoch_probe(self) -> int:
+        assert self.deps.memory is not None
+        return await self.deps.memory.epoch(self.deps.user_id)
+
+    async def _build(
+        self,
+        history: list[Any],
+        extras: Any,
+        *,
+        shed: tuple[str, ...] = (),
+        tool_results: tuple[str, ...] = (),
+        compacted: bool = False,
+    ) -> BuiltContext:
+        deps = self.deps
+        gathered = await gather(
+            deps.db,
+            user_id=deps.user_id,
+            errand=self.errand,
+            history=history,
+            now=deps.clock.now(),
+            tz=deps.tz,
+            mask_key=deps.memory.mask_key if deps.memory is not None else None,
+        )
+        return build_with(
+            gathered,
+            errand=self.errand,
+            history=history,
+            current=self.inbound,
+            now=deps.clock.now(),
+            tz=deps.tz,
+            tools=PLANNER_TOOLS,
+            extras=extras,
+            shed=shed,
+            tool_results=tool_results,
+            compacted=compacted,
+        )
+
+    async def _rebuild(self, *, compact: bool) -> BuiltContext | None:
+        """A fresh request from state: after a memory change (stale epoch) or because the
+        next call would not fit (compaction). The result is a new session's first request;
+        the old session is dropped, never edited (its prefix check would refuse)."""
+        deps = self.deps
+        # A field whose memory is gone is cleared before anything renders it (decision 10).
+        self.errand = await apply_memory(deps, self.errand, fresh=False, turn=self.inbound.turn_no)
+        async with deps.db.session() as repos:
+            history = await repos.messages.list_for_conversation(deps.conversation_id)
+        extras = await state_extras(deps, [n.text for n in self.notes])
+        rendered = tuple(f"[{name}] {content}" for name, content in self.results)
+        gathered = await gather(
+            deps.db,
+            user_id=deps.user_id,
+            errand=self.errand,
+            history=history,
+            now=deps.clock.now(),
+            tz=deps.tz,
+            mask_key=deps.memory.mask_key if deps.memory is not None else None,
+        )
+        tools_json = json.dumps(
+            deps.llm.canonical([HumanMessage(content="x")]).get("tools"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        budget = deps.limits.context_budget_tokens
+        kwargs: dict[str, Any] = {
+            "errand": self.errand,
+            "history": history,
+            "current": self.inbound,
+            "now": deps.clock.now(),
+            "tz": deps.tz,
+            "tools": PLANNER_TOOLS,
+            "extras": extras,
+            "tool_results": rendered,
+        }
+        built: BuiltContext | None = None
+        if not compact:
+            built = build_with(gathered, **kwargs)
+            if request_estimate(built, tools_json) > budget - REBUILD_RESERVE:
+                built = None
+        if built is None:
+            built = compacted_context(
+                gathered, tools_json=tools_json, budget=budget, reserve=REBUILD_RESERVE, **kwargs
+            )
+        if built is None or built.over_cap is not None:
+            return None
+        return built
 
     def _not_executed(self, calls: list[Any]) -> None:
         # The loop ends on a valid proposal, so nothing after it in the response runs

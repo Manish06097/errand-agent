@@ -33,6 +33,7 @@ from errand.domain.messages import (
 from errand.domain.outcomes import (
     Ask,
     AskExhausted,
+    Exhausted,
     Failure,
     Limit,
     NoFit,
@@ -231,6 +232,15 @@ def render(
             outcome=RunOutcome.TOOL_UNAVAILABLE,
             text=f"{what} is down right now. Nothing was booked; try again in a moment.",
             actions=[NoticeAction(kind="retry", label="Retry")],
+        )
+    if isinstance(result, Exhausted):
+        return RunOutcome.CONTEXT_EXHAUSTED, OutcomeNotice(
+            outcome=RunOutcome.CONTEXT_EXHAUSTED,
+            text=(
+                "There is too much in this conversation for me to work with in one go, so I "
+                "stopped without changing anything. Start a new request and I will pick up "
+                "from your saved preferences."
+            ),
         )
     if isinstance(result, TooLarge):
         return RunOutcome.CONTEXT_TOO_LARGE, OutcomeNotice(
