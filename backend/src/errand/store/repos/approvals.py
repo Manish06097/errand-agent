@@ -23,7 +23,7 @@ LIVE: tuple[ApprovalStatus, ...] = ("pending", "granted")
 _COLUMNS = (
     "approval_id, conversation_id, errand_id, proposal_id, action, fingerprint, material_json, "
     "card_json, bound_hold_id, status, granted_via, granted_message_id, invalidated_reason, "
-    "consumed_by_intent, requested_at, granted_at, consumed_at, expires_at"
+    "consumed_by_intent, requested_at, granted_at, consumed_at, expires_at, issued_hold_id"
 )
 
 
@@ -47,6 +47,8 @@ class ApprovalRow:
     granted_at: int | None
     consumed_at: int | None
     expires_at: int
+    # The hold the card was issued on; `bound_hold_id` moves on the one automatic re-hold.
+    issued_hold_id: str | None = None
 
     @property
     def card(self) -> dict[str, Any]:
@@ -64,7 +66,7 @@ class ApprovalRow:
 
 
 def _row(row: Any) -> ApprovalRow:
-    return ApprovalRow(*(row[i] for i in range(18)))
+    return ApprovalRow(*(row[i] for i in range(19)))
 
 
 @dataclass(frozen=True)
@@ -113,7 +115,7 @@ class ApprovalsRepo:
 
     async def insert(self, row: ApprovalRow) -> None:
         await self._conn.execute(
-            f"INSERT INTO approvals ({_COLUMNS}) VALUES ({', '.join('?' * 18)})",
+            f"INSERT INTO approvals ({_COLUMNS}) VALUES ({', '.join('?' * 19)})",
             (
                 row.approval_id,
                 row.conversation_id,
@@ -133,6 +135,7 @@ class ApprovalsRepo:
                 row.granted_at,
                 row.consumed_at,
                 row.expires_at,
+                row.issued_hold_id,
             ),
         )
 

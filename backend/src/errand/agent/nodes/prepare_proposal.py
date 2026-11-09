@@ -293,6 +293,7 @@ class _Preparer:
             granted_at=None,
             consumed_at=None,
             expires_at=to_ms(expires),
+            issued_hold_id=hold.hold_id,
         )
         created = await service.create(deps.db, row, deps.approval_policy)
         emit_swept(deps.tracer, created.swept)
