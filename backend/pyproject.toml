@@ -110,7 +110,7 @@ addopts = "-ra --strict-markers"
 empty_parameter_set_mark = "fail_at_collect"
 markers = [
   "live: calls the real Claude API; skipped unless ERRAND_LIVE=1",
-  "slow: starts a subprocess or a real server, or shells out to make or git; runs serially in the second pytest step of make check",
+  "slow: starts a subprocess or a real server, or shells out to make or git; runs in the second pytest step of make check, on its own xdist workers",
 ]
 
 [tool.importlinter]

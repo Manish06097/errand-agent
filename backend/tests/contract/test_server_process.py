@@ -28,7 +28,7 @@ from errand.world.scenario import (
 from tests.contract.helpers import rows
 from tests.contract.world_process import start_world, world_env
 
-pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+pytestmark = pytest.mark.slow  # subprocesses or real servers: second step of make check
 
 
 def test_refuses_more_than_one_worker(tmp_path: Path) -> None:

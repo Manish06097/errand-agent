@@ -14,7 +14,7 @@ import pytest
 from tests.hygiene.repo import CLEAN_DESIGN_NOTE, HookedRepo
 from tests.hygiene.test_design_note import skeleton
 
-pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+pytestmark = pytest.mark.slow  # subprocesses or real servers: second step of make check
 
 EM_DASH = chr(0x2014)
 ROBOT = chr(0x1F916)

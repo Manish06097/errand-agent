@@ -15,7 +15,7 @@ from errand.trace.sinks.jsonl import JsonlSink
 from errand.trace.tracer import Tracer
 from errand.usage import Usage
 
-pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+pytestmark = pytest.mark.slow  # subprocesses or real servers: second step of make check
 
 SCRIPT = Path(sys.executable).parent / "errand-trace"
 

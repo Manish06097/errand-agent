@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+pytestmark = pytest.mark.slow  # subprocesses or real servers: second step of make check
 
 ROOT_CONFTEST = Path(__file__).resolve().parents[2] / "conftest.py"
 

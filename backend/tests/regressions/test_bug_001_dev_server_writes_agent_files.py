@@ -23,7 +23,7 @@ import pytest
 from tests.conftest import worker_port
 from tests.hygiene.repo import REPO_ROOT
 
-pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+pytestmark = pytest.mark.slow  # subprocesses or real servers: second step of make check
 
 WEB = REPO_ROOT / "web"
 AGENT_FILES = ("AGENTS.md", "CLAUDE.md")

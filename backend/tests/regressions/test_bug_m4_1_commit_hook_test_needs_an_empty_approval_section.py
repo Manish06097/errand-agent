@@ -20,7 +20,7 @@ from tests.hygiene import test_commit_hooks
 from tests.hygiene.conftest import _hooked_template, _pre_commit_home, hooked_repo  # noqa: F401
 from tests.hygiene.repo import CLEAN_DESIGN_NOTE, HookedRepo
 
-pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+pytestmark = pytest.mark.slow  # subprocesses or real servers: second step of make check
 
 
 def _with_approval_filled(note: str) -> str:
