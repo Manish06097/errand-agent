@@ -12,7 +12,6 @@ from errand.agent.templates_conversation import (
     no_fit_result,
     raised_budget,
 )
-from errand.agent.timewin import resolve
 from errand.clock import IST
 from errand.domain.brief import (
     AreaFact,
@@ -25,6 +24,7 @@ from errand.domain.brief import (
 )
 from errand.domain.errand import Errand, Phase
 from errand.domain.slots import Candidate, Exclusion, Shortlist, SlotHandle
+from errand.domain.timewin import resolve
 from errand.world.contracts import Area, Service, Slot
 
 NOW = datetime(2026, 11, 9, 8, 0, tzinfo=IST)

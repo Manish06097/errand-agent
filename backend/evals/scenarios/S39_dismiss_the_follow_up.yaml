@@ -21,7 +21,7 @@ steps:
   - expect_approvals: ["consumed", "invalidated:followup_dismissed"]
   - expect_transcript: {last_includes: ["stopped looking"]}
   - expect_rows:
-      - {table: followup_jobs, where: {state: done}, count: 1}
+      - {table: followup_jobs, where: {state: done, done_reason: dismissed}, count: 1}
   - expect_notification: {count: 1}
   # nothing was booked on the dismissed card
   - expect_world: {book: 1}

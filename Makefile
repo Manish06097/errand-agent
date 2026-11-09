@@ -25,7 +25,7 @@ export NEXT_TELEMETRY_DISABLED := 1
 #      the 120 s goal.
 # -n is not in addopts, so make evals and any other pytest call run as before.
 
-.PHONY: help setup dev check evals e2e record langfuse-up langfuse-down
+.PHONY: help setup dev check evals e2e record smoke langfuse-up langfuse-down
 
 help:
 	@echo "make setup        install backend and web dependencies and the git hooks"
@@ -38,6 +38,8 @@ help:
 	@echo "make e2e          Playwright: brings up its own stack (scripted planner, fresh data"
 	@echo "                  dir, ERRAND_DEV=1), runs web/e2e and tears it down"
 	@echo "make record SCENARIO=S01   record the scenario's cassette with the real key (prints cost)"
+	@echo "make smoke        live smoke: S01, S07, S14, S22 and S39 on the real models, invariants"
+	@echo "                  only, cost per scenario printed, total under 1.50 USD (needs the key)"
 
 setup:
 	uv sync --locked --project backend
@@ -80,6 +82,11 @@ record:
 	@test -n "$(SCENARIO)" || { echo "usage: make record SCENARIO=S01" >&2; exit 2; }
 	uv sync --locked --project backend
 	$(UV) python scripts/record_cassette.py $(SCENARIO)
+
+# The live smoke is never part of `make check` or `make evals`: it spends real money.
+smoke:
+	uv sync --locked --project backend
+	cd backend && ERRAND_LIVE=1 uv run --frozen pytest tests/llm/test_live_scenario_smoke.py -m live -s -p no:xdist
 
 langfuse-up:
 	$(UV) python scripts/langfuse_stack.py up

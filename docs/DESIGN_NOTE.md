@@ -30,7 +30,7 @@ Each run writes `data/traces/{thread}/{run}.jsonl`, the trace of record. One Tra
 
 ## Trade-offs
 <!-- budget: 80 words -->
-Most evals run on a planner I scripted, with two real-model replay cassettes (S01, S22) and a few live runs instead of an LLM judge: exact and offline, and I say so in the table. SQLite with one writer, not Postgres: one file, simple recovery. LangGraph with one interrupt and the tool loop inside one node, so recovery reads my tables, not graph state. Holds are placed before the click: free, temporary, expiring. Traces are masked on read, never rewritten.
+Most evals run on a scripted planner, with five real-model replay cassettes and a live smoke over the same five instead of an LLM judge: exact and offline, and the table says so. SQLite with one writer, not Postgres: one file, simple recovery. LangGraph with one interrupt and the tool loop inside one node, so recovery reads my tables, not graph state. Holds are placed before the click: free, temporary, expiring. Traces are masked on read, never rewritten.
 
 ## Trace excerpt
 <!-- budget: 40 words -->
@@ -38,14 +38,14 @@ Most evals run on a planner I scripted, with two real-model replay cassettes (S0
 A live run, `book` forced to time out after the world committed it (dev drawer). I clicked, the intent was written first, and one status check by the same key found the booking. No second `book`.
 
 ```
-{"seq":6,"type":"model.call","run_id":"r_01a1bf696a2d..","model":"claude-opus-5-5","effort":"medium","usage":{"input_uncached":1107,"cache_read":2733,"cache_write_5m":0,"cache_write_1h":0,"output":189,"reasoning":109},"cost_usd":0.0088,"latency_ms":4295.3683,"stop_reason":"tool_use"}
+{"seq":6,"type":"model.call","run_id":"r_01a1bfdc2300..","model":"claude-opus-5-5","effort":"medium","usage":{"input_uncached":1130,"cache_read":3116,"cache_write_5m":0,"cache_write_1h":0,"output":124,"reasoning":44},"cost_usd":0.0076,"latency_ms":2950.5893,"stop_reason":"tool_use"}
 ...
-{"seq":3,"type":"approval.granted","approval_id":"ap_r_01a1bf696..","fingerprint":"fp1_350ce38c3c..","via":"button"}
-{"seq":8,"type":"approval.consumed","approval_id":"ap_r_01a1bf696..","intent_id":"in_ap_r_01a1bf.."}
-{"seq":10,"type":"intent.written","intent_id":"in_ap_r_01a1bf..","attempt":1,"idempotency_key":"bo_2a16c1ecf37..","hold_id":"H-6649"}
-{"seq":13,"type":"tool.call","tool":"book","args":{"hold_id":"H-6649","idempotency_key":"bo_2a16c1ecf37.."},"error":"ToolTimeout","latency_ms":8000.857}
+{"seq":3,"type":"approval.granted","approval_id":"ap_r_01a1bfdc2..","fingerprint":"fp1_4c1a27f733..","via":"button"}
+{"seq":8,"type":"approval.consumed","approval_id":"ap_r_01a1bfdc2..","intent_id":"in_ap_r_01a1bf.."}
+{"seq":10,"type":"intent.written","intent_id":"in_ap_r_01a1bf..","attempt":1,"idempotency_key":"bo_14d8dc392bd..","hold_id":"H-5378"}
+{"seq":13,"type":"tool.call","tool":"book","args":{"hold_id":"H-5378","idempotency_key":"bo_14d8dc392bd.."},"error":"ToolTimeout","latency_ms":8003.2056}
 {"seq":17,"type":"state.transition","from":"executing","to":"verifying","reason":"book_unknown"}
-{"seq":18,"type":"tool.call","tool":"get_booking_status","args":{"idempotency_key":"bo_2a16c1ecf37.."},"result":{"status":"confirmed","booking_id":"B-8863"}}
-{"seq":21,"type":"intent.resolved","intent_id":"in_ap_r_01a1bf..","state":"succeeded","booking_id":"B-8863","book_calls":1}
+{"seq":18,"type":"tool.call","tool":"get_booking_status","args":{"idempotency_key":"bo_14d8dc392bd.."},"result":{"status":"confirmed","booking_id":"B-5713"}}
+{"seq":21,"type":"intent.resolved","intent_id":"in_ap_r_01a1bf..","state":"succeeded","booking_id":"B-5713","book_calls":1}
 {"seq":27,"type":"run.end","outcome":"BOOKED_VERIFIED","totals":{"model_calls":0,"tool_calls":4,"cost_usd":0.0}}
 ```

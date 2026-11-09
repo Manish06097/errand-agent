@@ -1,0 +1,33 @@
+id: S39_preference_changed_since_booking
+title: Two saved preferences change after the booking and before the provider cancels it (the electrician earliest time 10:00 to 15:00, the electrician budget 1500 to 1400); the replacement follows the new values, not the ones the original errand ran with
+category: [followup, memory]
+seed: 39
+memory_seed: memory_demo
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal: {service: electrician, window: tomorrow}
+dedupe: [on]
+dedupe_reason: the scenario ends at the Rebook card, so only the first booking reaches `book`
+steps:
+  # 09:30, inside the saved contact window
+  - advance: 90m
+  - say: "Book an electrician for my switchboard tomorrow."
+    gives: [service, issue, window]
+  - until: approval_card
+  - expect_brief: {values: {area: indiranagar, budget_max_inr: 1500}}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_booking: {count: 1}
+  # the user changes two rows afterwards, through the memory page's route
+  - correct_memory: {key: earliest_time, scope: "service:electrician", value: "15:00"}
+  - correct_memory: {key: budget_ceiling, scope: "service:electrician", value: 1400}
+  - world_event: {type: provider_cancelled, booking: last_booked}
+  - watcher_tick: {}
+  - expect_outcome: NOTIFIED
+  - open_followup: {}
+  - expect_followup: {area: indiranagar, ceiling: 1400}
+  - expect_card: {kind: action, status: pending, slot_not_before_hour: 15}
+expect:
+  invariants: [default]

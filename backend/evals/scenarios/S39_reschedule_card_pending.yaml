@@ -1,0 +1,26 @@
+id: S39_reschedule_card_pending
+title: The user is moving the seeded AC servicing to Saturday when the provider cancels it; the reschedule card dies with booking_no_longer_active and the replacement is searched in the window the booking was moving to (Saturday plus or minus two days), not around the cancelled Thursday
+category: [followup, memory]
+seed: 39
+memory_seed: memory_demo
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: a reschedule never reaches `book`, so the provider's key dedupe does not apply
+steps:
+  - advance: 90m
+  - say: "Move my AC servicing to Saturday."
+  - expect_outcome: AWAITING_APPROVAL
+  - expect_card: {kind: action, status: pending}
+  - world_event: {type: provider_cancelled, booking: "seeded:1"}
+  - watcher_tick: {}
+  - expect_outcome: NOTIFIED
+  - expect_approvals: ["invalidated:booking_no_longer_active", "pending"]
+  - open_followup: {}
+  # Saturday 14 Nov, plus or minus two days: Thursday 12 to Monday 16 (end exclusive)
+  - expect_followup: {area: indiranagar, window: {start: "2026-11-12", end: "2026-11-17"}}
+  - expect_card: {kind: action, status: pending}
+  - expect_world: {reschedule: 0, book: 0}
+expect:
+  invariants: [default]

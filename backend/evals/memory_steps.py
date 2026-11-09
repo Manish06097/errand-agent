@@ -47,6 +47,17 @@ class ForgetMemory(_Strict):
     forget_memory: ForgetSpec
 
 
+class CorrectSpec(MemoryRef):
+    """A correction through the real `PATCH /api/memory/{id}`: the row becomes `value`."""
+
+    value: Any
+    expect_status: int = 200
+
+
+class CorrectMemory(_Strict):
+    correct_memory: CorrectSpec
+
+
 class ActionSpec(_Strict):
     kind: Literal["keep_memory", "confirm_forget", "update_memory", "save_memory", "dismiss"]
     # which chip: the type of the latest chip of that kind in the conversation
@@ -114,12 +125,13 @@ class ExpectContext(_Strict):
 
 MEMORY_STEP_TYPES: dict[str, type[BaseModel]] = {
     "forget_memory": ForgetMemory,
+    "correct_memory": CorrectMemory,
     "memory_action": MemoryAction,
     "expect_chip": ExpectChip,
     "expect_memory": ExpectMemory,
     "expect_context": ExpectContext,
 }
-MEMORY_STEPS = (ForgetMemory, MemoryAction, ExpectChip, ExpectMemory, ExpectContext)
+MEMORY_STEPS = (ForgetMemory, CorrectMemory, MemoryAction, ExpectChip, ExpectMemory, ExpectContext)
 
 
 class CallHook(_Strict):
@@ -137,6 +149,8 @@ Hook = Callable[[int], Awaitable[None]]
 def describe(step: Any) -> str | None:
     if isinstance(step, ForgetMemory):
         return f"forget {step.forget_memory.key or step.forget_memory.id}"
+    if isinstance(step, CorrectMemory):
+        return f"correct {step.correct_memory.key or step.correct_memory.id}"
     if isinstance(step, MemoryAction):
         return f"chip action {step.memory_action.kind}"
     if isinstance(step, ExpectChip):
@@ -200,6 +214,18 @@ async def forget(runner: Runner, spec: ForgetSpec) -> None:
             second.status_code == 409, f"forget {memory_id} twice: {second.status_code}, not 409"
         )
     runner.forgets.append(len(runner.runs))
+
+
+async def correct(runner: Runner, spec: CorrectSpec) -> None:
+    memory_id = find_memory_id(runner.h.root, spec)
+    action = runner.h.next_action_id()
+    response = await runner.h.client.patch(
+        f"/api/memory/{memory_id}", json={"value": spec.value, "client_action_id": action}
+    )
+    runner.expect(
+        response.status_code == spec.expect_status,
+        f"correct {memory_id}: {response.status_code} {response.text[:200]}",
+    )
 
 
 async def _chips(runner: Runner, type_: str) -> list[dict[str, Any]]:
@@ -408,6 +434,8 @@ async def expect_context(runner: Runner, spec: ContextSpec) -> None:
 async def run(runner: Runner, step: Any) -> None:
     if isinstance(step, ForgetMemory):
         await forget(runner, step.forget_memory)
+    elif isinstance(step, CorrectMemory):
+        await correct(runner, step.correct_memory)
     elif isinstance(step, MemoryAction):
         await memory_action(runner, step.memory_action)
     elif isinstance(step, ExpectChip):

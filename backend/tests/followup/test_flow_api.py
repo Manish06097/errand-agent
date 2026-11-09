@@ -277,3 +277,68 @@ async def test_a_reschedule_card_in_flight_moves_the_search_window_to_where_it_w
         assert "Where should I look?" in json.dumps(convo["messages"])
         window = convo["state"]["errand"]["brief"]["window"]["value"]
         assert window["start"].startswith("2026-11-12") and window["end"].startswith("2026-11-17")
+
+
+# ---------------------------------------------------------------- the contact window (decision 7)
+
+
+async def defer_the_seeded_cancel(h: Harness) -> str:
+    """With the memory_demo contact window (09:00 to 19:00) and the clock at 08:00, the
+    seeded AC servicing is cancelled by its provider and one tick defers the notice."""
+    seeded = [b for b in await h.inspector.bookings() if b.created_by_key is None]
+    await h.inspector.fire_provider_cancel(seeded[1].booking_id)
+    result = await h.app.state.watcher.tick()
+    await h.manager.wait_idle()
+    assert result.deferred and not result.delivered
+    return result.deferred[0]
+
+
+async def job_state(h: Harness, job_id: str) -> tuple[str, int | None]:
+    async with h.manager.db.session() as repos:
+        job = await repos.followups.get(job_id)
+    assert job is not None
+    return job.state, job.deliver_at
+
+
+async def test_the_event_stream_connecting_ends_a_deferral_and_a_health_probe_does_not(
+    tmp_path: Path,
+) -> None:
+    async with harness(
+        tmp_path, ScenarioConfig(id="deferral", seed=39), memory_seed="memory_demo"
+    ) as h:
+        job_id = await defer_the_seeded_cancel(h)
+        state, deliver_at = await job_state(h, job_id)
+        assert state == "deferred" and deliver_at is not None
+        assert deliver_at == to_ms(
+            h.manager.clock.now().replace(hour=9, minute=0, second=0, microsecond=0)
+        )
+
+        # the health probe is not the user doing something
+        assert (await h.client.get("/api/health")).status_code == 200
+        assert await h.app.state.watcher.settle() == []
+        assert (await job_state(h, job_id))[0] == "deferred"
+
+        # the user's stream connecting is
+        async with h.client.stream("GET", "/api/users/me/events?once=true") as response:
+            assert response.status_code == 200
+        assert await h.app.state.watcher.settle() == [job_id]
+        await h.manager.wait_idle()
+        assert (await job_state(h, job_id))[0] == "notified"
+        bell = (await h.client.get("/api/notifications")).json()
+        assert [n["quiet"] for n in bell["notifications"]] == [False]
+
+
+async def test_the_reconciler_pass_resumes_a_deferred_job_only_once_its_opening_has_passed(
+    tmp_path: Path,
+) -> None:
+    async with harness(
+        tmp_path, ScenarioConfig(id="deferral", seed=39), memory_seed="memory_demo"
+    ) as h:
+        job_id = await defer_the_seeded_cancel(h)
+        # still 08:00: the pass leaves it alone and reads no provider
+        again = await h.app.state.reconciler.tick(wait=True)
+        assert again.recovery_runs == [] and (await job_state(h, job_id))[0] == "deferred"
+        await h.tick(3700)  # 09:01
+        await h.app.state.reconciler.tick(wait=True)
+        await h.manager.wait_idle()
+        assert (await job_state(h, job_id))[0] == "notified"

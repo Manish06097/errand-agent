@@ -3,9 +3,10 @@
 It reads the records and nothing else (no product code), and each clause has a negative
 test on doctored records (tests/evals/test_invariants_followup.py):
 
-1. every follow-up job ends `notified`, `ignored` or `done`; a job still `detected` at the end
-   of a scenario was never delivered (a `deferred` job, once N2's contact_window lands, is
-   fine only with `deliver_at` after the scenario clock: TODO N2);
+1. every follow-up job ends `notified`, `ignored` or `done`, or is `deferred` with `deliver_at`
+   after the scenario clock (the latest moment any record carries); a job still `detected` at
+   the end of a scenario was never delivered, and a deferred one whose opening has passed
+   was never woken. A `done` job names why it ended (replaced, dismissed or lapsed);
 2. no `model.call` and no `reader.call` record exists in a follow-up conversation before its
    first user message: nothing is spent on the user's behalf until they reply;
 3. no `book` in a follow-up conversation is preceded by anything but a grant made after the
@@ -25,11 +26,32 @@ if TYPE_CHECKING:
 ENDED = frozenset({"notified", "ignored", "done"})
 
 
+def scenario_clock_ms(rec: Records) -> int:
+    """The latest moment any record of the scenario carries: where its clock had got to."""
+    stamps = [0]
+    stamps += [j["updated_at"] for j in rec.followup_jobs]
+    stamps += [n["created_at"] for n in rec.notifications]
+    stamps += [m["created_at"] for m in rec.messages]
+    stamps += [r["ended_at"] or r["started_at"] for r in rec.runs]
+    return max(stamps)
+
+
 def inv17_follow_up_acts_only_on_a_grant(rec: Records) -> Violations:
     out: Violations = []
+    clock = scenario_clock_ms(rec)
     for job in rec.followup_jobs:
-        if job["state"] not in ENDED:
-            out.append(f"job {job['job_id']} ended {job['state']}, not notified, ignored or done")
+        if job["state"] == "deferred":
+            if job["deliver_at"] is None or job["deliver_at"] <= clock:
+                out.append(
+                    f"job {job['job_id']} is deferred with deliver_at {job['deliver_at']} "
+                    f"not after the scenario clock {clock}"
+                )
+        elif job["state"] not in ENDED:
+            out.append(
+                f"job {job['job_id']} ended {job['state']}, not notified, ignored, done or deferred"
+            )
+        elif job["state"] == "done" and job.get("done_reason") is None:
+            out.append(f"job {job['job_id']} is done with no reason")
     ids = [n["event_id"] for n in rec.notifications]
     for event_id in sorted({i for i in ids if ids.count(i) > 1}):
         out.append(f"{ids.count(event_id)} notifications for job {event_id}")

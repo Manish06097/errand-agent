@@ -1,0 +1,30 @@
+id: S39b_activity_ends_the_deferral
+title: A cancel deferred to 09:00 is delivered the moment the user is active (any request), still as one notification; when the window later opens nothing is sent again
+category: [followup, memory]
+seed: 39
+memory_seed: memory_demo
+user:
+  persona: cooperative
+  goal: {}
+dedupe: [on]
+dedupe_reason: the scenario ends at the Rebook card, so nothing reaches `book`
+steps:
+  - world_event: {type: provider_cancelled, booking: "seeded:1"}
+  - watcher_tick: {}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: deferred}, count: 1}
+      - {table: notifications, where: {kind: followup}, count: 0}
+  # the user opens the app at 08:01: a request, so the deferral ends now
+  - user_active: {}
+  - expect_outcome: NOTIFIED
+  - expect_rows:
+      - {table: followup_jobs, where: {state: notified}, count: 1}
+      - {table: notifications, where: {kind: followup}, count: 1}
+  - expect_world: {search_providers: 1, hold_slot: 1}
+  - advance: 70m
+  - watcher_tick: {}
+  - expect_followup: {quiet_tick: true}
+  - expect_notification: {count: 1}
+  - expect_world: {search_providers: 1, hold_slot: 1}
+expect:
+  invariants: [default]

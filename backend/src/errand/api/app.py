@@ -309,6 +309,10 @@ def card_invalidating_keys() -> frozenset[str]:
     )
 
 
+# Requests that are not the user doing something: the health probe and the dev drawer.
+_NOT_ACTIVITY = ("/api/health", "/api/dev")
+
+
 def create_app(config: AppConfig | None = None) -> FastAPI:
     config = config or AppConfig()
 
@@ -430,6 +434,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         """`X-Agent-Clock: <mode>; now_ms=...; offset_ms=...` on every /api response, the
         clock a client syncs to for `client_composed_at` (17.3), mirroring X-World-Clock."""
         response = await call_next(request)
+        path = request.url.path
+        watcher = getattr(request.app.state, "watcher", None)
+        if watcher is not None and path.startswith("/api/") and not path.startswith(_NOT_ACTIVITY):
+            # Any request from the user ends a follow-up deferral (Gate 3 decision 7).
+            watcher.note_activity(request.app.state.user_id)
         manager = getattr(request.app.state, "manager", None)
         if manager is not None:
             reading = reading_of(manager.clock)

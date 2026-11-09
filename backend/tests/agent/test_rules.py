@@ -8,10 +8,11 @@ from typing import Any
 
 import pytest
 
-from errand.agent import ask_guard, timewin
+from errand.agent import ask_guard
 from errand.agent.brief_ops import FieldValue, apply_patch, check_evidence, missing
 from errand.agent.transitions import ALLOWED, IllegalTransition, transition
 from errand.clock import IST
+from errand.domain import timewin
 from errand.domain.brief import AskRecord, Brief, BriefField, ErrandKind, TimeWindowExpr
 from errand.domain.errand import Errand, Phase
 from errand.tools.views import provider_view

@@ -59,6 +59,7 @@ class TickResult:
     detected: list[str] = field(default_factory=list)
     delivered: list[str] = field(default_factory=list)
     ignored: list[str] = field(default_factory=list)
+    deferred: list[str] = field(default_factory=list)
     lapsed: list[str] = field(default_factory=list)
     failed_users: list[str] = field(default_factory=list)
     trace: Path | None = None
@@ -66,7 +67,12 @@ class TickResult:
     @property
     def changed(self) -> bool:
         return bool(
-            self.detected or self.delivered or self.ignored or self.lapsed or self.failed_users
+            self.detected
+            or self.delivered
+            or self.ignored
+            or self.deferred
+            or self.lapsed
+            or self.failed_users
         )
 
 
@@ -93,6 +99,9 @@ class Watcher:
         self._ticks = 0
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
+        # Releases started by user activity (decision 7), and the jobs they delivered.
+        self._releases: set[asyncio.Task[None]] = set()
+        self._released: list[str] = []
 
     @property
     def clock(self) -> Clock:
@@ -121,14 +130,42 @@ class Watcher:
 
     # ------------------------------------------------------------------ one tick
 
-    async def tick(self, *, poll: bool = True) -> TickResult:
+    async def tick(self, *, poll: bool = True, active_user: str | None = None) -> TickResult:
         """One tick. `poll=False` skips the provider reads and only delivers and lapses what
         the records already hold: that is the reconciler's pass (9.7), which resumes a job a
-        crash left `detected` without touching the world."""
+        crash left `detected` without touching the world. `active_user` ends that user's
+        deferrals (they are active now)."""
         async with self._lock:
-            return await self._tick(poll)
+            return await self._tick(poll, active_user)
 
-    async def _tick(self, poll: bool) -> TickResult:
+    # ------------------------------------------------------------------ user activity
+
+    def note_activity(self, user_id: str) -> None:
+        """The user made a request or opened the stream: deliver what was deferred for them.
+        Off the request path - a task, never awaited by the caller."""
+        task = asyncio.create_task(self._release(user_id), name="followup release")
+        self._releases.add(task)
+        task.add_done_callback(self._releases.discard)
+
+    async def _release(self, user_id: str) -> None:
+        try:
+            async with self.db.session() as repos:
+                if not await repos.followups.in_state("deferred"):
+                    return
+            result = await self.tick(poll=False, active_user=user_id)
+            self._released.extend(result.delivered)
+        except Exception:
+            log.exception("releasing deferred follow-ups failed")
+
+    async def settle(self) -> list[str]:
+        """Wait for the releases in flight; the job ids they delivered since the last call.
+        Tests and the eval harness use it to know a release has finished."""
+        while self._releases:
+            await asyncio.gather(*list(self._releases), return_exceptions=True)
+        released, self._released = self._released, []
+        return released
+
+    async def _tick(self, poll: bool, active_user: str | None = None) -> TickResult:
         self._ticks += 1
         now = self.clock.now()
         run_id = f"w_{to_ms(now)}_{self._ticks}"
@@ -151,9 +188,15 @@ class Watcher:
             for user_id in users if poll else []:
                 await self._watch_user(user_id, tools, tracer, result)
             delivery = await service.deliver_pending(
-                self.db, start=self.start, now=self.clock.now, tz=self.tz, tracer=tracer
+                self.db,
+                start=self.start,
+                now=self.clock.now,
+                tz=self.tz,
+                tracer=tracer,
+                active_user=active_user,
             )
             result.delivered, result.ignored = delivery.started, delivery.ignored
+            result.deferred = delivery.deferred
             result.lapsed = await service.lapse_due(
                 self.db, start=self.start, now=self.clock.now, tz=self.tz, tracer=tracer
             )

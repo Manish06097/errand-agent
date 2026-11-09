@@ -19,11 +19,11 @@ from typing import Any, Protocol
 
 from langgraph.runtime import Runtime
 
-from errand.agent import timewin
 from errand.agent.state import ThreadState
 from errand.agent.transitions import transition
 from errand.approvals import service as approvals
 from errand.clock import from_ms
+from errand.domain import timewin
 from errand.domain.brief import ErrandKind
 from errand.domain.errand import Errand, Phase, RebookInfo
 from errand.domain.followup import AltSlot, FollowupCtx, WidenOption
@@ -186,6 +186,7 @@ class _Followup:
             job_id=job.job_id,
             booking_id=job.booking_id,
             urgent=urgent,
+            quiet=inbound.quiet,
             provider_name=provider_name,
             service=known.service,
             slot_label=self._label(known, urgent=urgent),
@@ -212,8 +213,15 @@ class _Followup:
         )
         if interval is None:
             return _Out(ctx.model_copy(update={"variant": "nothing_fits", "ready": False}))
+        async with deps.db.session() as repos:
+            rows = await repos.memories.for_user(deps.user_id)
         brief = fbrief.replacement_brief(
-            known, interval=interval, tz=deps.tz, approved_price=await self._approved_price(known)
+            known,
+            interval=interval,
+            tz=deps.tz,
+            now=self.now,
+            approved_price=await self._approved_price(known),
+            rows=rows,
         )
         errand = Errand(
             errand_id=errand_id_for(deps.run_id),

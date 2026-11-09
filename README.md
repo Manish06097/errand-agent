@@ -43,10 +43,10 @@ What the `model_mode` column means:
 
 - **scripted**: a reference planner I wrote, plus a keyword reader. Most rows are this. They prove the code around the model: the guards, the approval, recovery, the invariants. They do not prove the model behaves well.
 - **hostile**: a planner built to misbehave (re-ask a question, claim a booking that does not exist, propose a changed price). The invariants must hold anyway, which shows the enforcement lives in code.
-- **replay**: the real Opus and Haiku responses recorded once with `make record SCENARIO=S01` and replayed offline, byte-checked against the request. Today two scenarios have a cassette: S01 (the happy path) and S22 (the timeout after success). A replay row keeps the scripted row's steps and checks, so the real model may take a different valid path. A recorded request that no longer matches fails loudly instead of being served.
-- **live**: the real API, not part of `make evals`. `ERRAND_MODEL_MODE=live make dev` is how I ran the conversation in [docs/traces/timeout_after_success.md](docs/traces/timeout_after_success.md).
+- **replay**: the real Opus and Haiku responses recorded once with `make record SCENARIO=S01` and replayed offline, byte-checked against the request. Five scenarios have a cassette: S01 (the happy path), S07 (move an AC servicing to Saturday), S14 (an injected review, with the Haiku reader's calls), S22 (the timeout after success) and S39 (the first booking of the provider-cancel flow; the follow-up itself makes no model call). A replay row keeps the scripted row's steps and checks, so the real model may take a different valid path. A recorded request that no longer matches fails loudly instead of being served.
+- **live**: the real API, not part of `make check` or `make evals`. `make smoke` runs those same five scenarios on the real models and asserts only what must hold whatever the model does: the invariants, an outcome from the closed set on every run, and a total cost under $1.50 (about $0.12 on the last run). `ERRAND_MODEL_MODE=live make dev` is how I ran the conversation in [docs/traces/timeout_after_success.md](docs/traces/timeout_after_success.md).
 
-Say it plainly: the real-model evidence is two cassettes and a handful of live conversations, not a statistical result.
+Say it plainly: the real-model evidence is five cassettes, a five-scenario live smoke and a handful of live conversations, not a statistical result.
 
 ## Limits
 
@@ -64,21 +64,21 @@ Read from `backend/src/errand/config.py` (`LimitSettings`, `ERRAND_LIMIT_*`). Ev
 
 ## Cost and latency
 
-Measured with `errand-trace stats --data-dir data` over three real planning turns (one run per user message, Opus 5.5 at medium effort plus the Haiku reader) from the live dev conversations on 2026-11-09, running the product code at `30fa803` (no product code changed since). A sample of three is small; read it as an order of magnitude.
+Measured with `errand-trace stats` over seven real planning turns (one run per user message, Opus 5.5 at medium effort plus the Haiku reader): the five scenarios of the live smoke and the live timeout-after-success conversation, all on 2026-11-09 on the final code. A sample of seven is small; read it as an order of magnitude.
 
 | | p50 | p95 |
 |---|---|---|
-| Latency per planning turn | 10.1 s | 11.1 s |
-| Cost per planning turn | $0.021 | $0.024 |
+| Latency per planning turn | 9.3 s | 11.3 s |
+| Cost per planning turn | $0.024 | $0.029 |
 
-The whole timeout-after-success conversation (three runs, four planner calls, one reader call that missed the cache) cost $0.033; see `conversation.totals` in [docs/traces/timeout_after_success.jsonl](docs/traces/timeout_after_success.jsonl). Recording the S22 cassette cost $0.025.
+The live deadline of 43 s in the limits table is `ceil(2 x p95)` plus the reader's 20 s timeout, from this same measurement. The whole timeout-after-success conversation (three runs, four planner calls, four reader calls) cost $0.037; see `conversation.totals` in [docs/traces/timeout_after_success.jsonl](docs/traces/timeout_after_success.jsonl). The five cassettes cost $0.13 to record together, and one run of `make smoke` costs about $0.12.
 
 ## Known limitations
 
-- Most of the eval table runs on a planner I wrote. Real-model coverage is the S01 and S22 cassettes and manual live runs. There is no live-smoke suite and no cassette for the reschedule, injected-review or provider-cancel scenarios (S07, S14, S39) yet.
-- The scope trim cut, on purpose: fault points beyond the three restarts need, lease-epoch fencing, a periodic scan of expired-lease runs, resuming a granted approval, a choice card for an ambiguous "last electrician" (a plain question lists the matches), a second-model fallback on refusal, a per-run cost cap on the planner (it applies to the reader only), the pending-cancel-card rule, the race between a follow-up and a same-chat replacement, a crash in the middle of a follow-up, more Langfuse work, a cassette per brief category, a prompt-tuning pass, and 19 planned scenarios (the catalogue has 83 files against about 90 planned).
-- Open follow-ups from the proactive-follow-up work: the follow-up does not yet apply memory to the replacement search or use a budget ceiling from memory; there is no `deferred` follow-up state, so `contact_window` does not delay a notification; S39b and S39c and the matching INV-17 clause are not written; a recovered notification after a restart is missing.
-- Memory: the API and the forget path exist (`/api/memory`) and the planner pre-fills from memory, but the `/memory` page, the planner's memory tools and the memory variant of example 3 are not in this build; they are the next piece of work.
+- Most of the eval table runs on a planner I wrote. Real-model coverage is the five cassettes (S01, S07, S14, S22, S39), `make smoke` (the same five on the real models, invariants only) and manual live runs. The other categories (the memory variants, correction turns, the restart scenarios, the hostile planners) have no real-model run.
+- The scope trim cut, on purpose: fault points beyond the three restarts need, lease-epoch fencing, a periodic scan of expired-lease runs, resuming a granted approval, a choice card for an ambiguous "last electrician" (a plain question lists the matches), a second-model fallback on refusal, a per-run cost cap on the planner (it applies to the reader only), the pending-cancel-card rule, the race between a follow-up and a same-chat replacement, a crash in the middle of a follow-up, more Langfuse work, a cassette per brief category, a prompt-tuning pass, and 19 planned scenarios (the catalogue has 104 scenario files against about 90 planned).
+- Proactive follow-up, what is left: there is no "recovered" notification after a restart in the middle of a follow-up (S66), and the follow-up uses no reader, so its ranking has no review signal. A saved `contact_window` defers a normal notice to the window's opening, but any request you make, or the event stream connecting, ends the deferral at once, so with the web app open a notice rarely waits; an urgent one (the visit is within 24 hours) is never deferred and arrives as a badge with no toast or banner while the window is closed. Without a `contact_window` nothing is deferred.
+- Memory: the `/memory` page, the planner's three memory tools, the chat chips with Undo, the Context view and the memory variant of example 3 are in. `avoid_days` is stored and shown but no search applies it, a reschedule's candidate slots do not read the saved time bounds, and a corrected provider preference reaches an errand the next time its service is set.
 - Holds are placed when a card is proposed, before the click. They are free, expire in ten minutes and are not treated as consequential. There is no setting to ask first.
 - A re-posted approval for an already-consumed card answers 200 `already_approved`, not 409; nothing is booked twice.
 - The user event stream polls the database every 250 ms. A follow-up skips the review reader, so its ranking has no review signal.
@@ -100,7 +100,8 @@ Data retention: everything the app writes goes under `data/` (gitignored): `agen
 | `make check` | `uv sync --locked`, ruff, ruff format, mypy, import-linter, the em-dash, attribution and secret guards, the design-note budget, `pytest backend/tests` in two steps (fast tests under xdist, then the `slow` ones that start subprocesses or servers), web typecheck and lint, and the generated-types check. |
 | `make evals` | The offline eval suite, no key. Regenerates `docs/EVAL_TABLE.md` and `docs/eval_results.json`. It fails if no scenario is collected. |
 | `make e2e` | Playwright (`web/e2e`): starts its own stack (scripted planner, fresh data dir, `ERRAND_DEV=1`, your ports), runs the browser tests, stops it. Installs chromium first. |
-| `make record SCENARIO=S01` | Records the scenario's cassette (`backend/evals/cassettes`) with the real Opus and Haiku and the key in `.env`, and prints the cost. |
+| `make record SCENARIO=S01` | Records the scenario's cassette (`backend/evals/cassettes`) with the real Opus and Haiku and the key in `.env`, and prints the cost. S39 has many files, so give its full id: `S39_provider_cancels_and_user_rebooks`. |
+| `make smoke` | The live smoke: S01, S07, S14, S22 and S39 on the real models (needs the key; about $0.12), asserting the invariants, a closed-set outcome on every run and a total cost under $1.50. Never part of `make check` or `make evals`. |
 | `errand-trace show <run>`, `export --thread <id>`, `excerpt <file> --kind timeout`, `stats` | The trace tooling: a run's timeline, a conversation-level export with a header and totals record, the design note's excerpt, and latency and cost of live planning turns. Run as `uv run --frozen --project backend errand-trace ...`. |
 | `make langfuse-up`, `make langfuse-down` | Optional self-hosted Langfuse on 127.0.0.1:3100 (about 4 GiB of Docker memory). Nothing else needs it. |
 
@@ -128,4 +129,4 @@ Enforced by the pre-commit hooks and again by `make check` over every tracked fi
 | Timeout-after-success trace and its annotated excerpt | [docs/traces/timeout_after_success.jsonl](docs/traces/timeout_after_success.jsonl), [docs/traces/timeout_after_success.md](docs/traces/timeout_after_success.md) |
 | Demo script | [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) |
 | Architecture, ADRs, build journal | [docs/design/](docs/design/), [docs/adr/](docs/adr/), [docs/engineering/journal.md](docs/engineering/journal.md) |
-| AI-assistant session transcripts | `docs/ai-transcripts/` - placeholder: the author adds them before submission; the folder does not exist yet |
+| AI-assistant session transcripts | `docs/ai-transcripts/` - placeholder: I export them last, before submission (the raw session JSONL, subagent sessions included, plus a Markdown file per session and an index). The one edit is the Anthropic API key, replaced with `[REDACTED-KEY]`, and the key is rotated anyway. The exporter is not in this tree yet and the folder does not exist yet |
