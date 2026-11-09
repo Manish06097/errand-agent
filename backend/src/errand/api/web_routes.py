@@ -39,6 +39,9 @@ class ConversationSummary(BaseModel):
     created_at: int
     last_activity_at: int
     active_run_id: str | None = None
+    # A follow-up conversation (14.2) names the booking it is about.
+    kind: Literal["chat", "followup"] = "chat"
+    origin_booking_id: str | None = None
 
 
 class TraceOut(BaseModel):
@@ -74,6 +77,8 @@ async def list_conversations(request: Request) -> list[ConversationSummary]:
             created_at=c.created_at,
             last_activity_at=c.last_activity_at,
             active_run_id=manager.active_run(c.conversation_id),
+            kind=c.kind,
+            origin_booking_id=c.origin_booking_id,
         )
         for c, text in rows
     ]

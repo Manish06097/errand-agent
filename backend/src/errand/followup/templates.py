@@ -63,6 +63,28 @@ def already_have(existing_provider: str, existing_slot: str, existing_id: str) -
     )
 
 
+def ask_where(provider: str, service: str, slot: str, booking_id: str) -> str:
+    return (
+        f"{provider} cancelled your {service_word(service)} visit on {slot} ({booking_id}). "
+        f"{ask_area()}"
+    )
+
+
+def dismissed_line(booking_id: str) -> str:
+    return f"Okay, I've stopped looking for a replacement for {booking_id}. Ask me any time."
+
+
+def stale_line() -> str:
+    return "That follow-up has already been handled, so there is nothing more to do."
+
+
+def widened_notice(provider: str, booking_id: str, held_until: str | None) -> str:
+    held = f", held until {held_until}" if held_until else ""
+    return (
+        f"With the wider search, here is a replacement for {booking_id} ({provider}'s slot){held}:"
+    )
+
+
 def ask_area() -> str:
     return "Where should I look?"
 

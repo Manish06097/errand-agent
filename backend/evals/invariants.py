@@ -175,11 +175,28 @@ Violations = list[str]
 
 
 def inv07_one_end_per_run(rec: Records) -> Violations:
-    """Exactly one run.end per run.start, one outcome, a non-empty user message."""
+    """Exactly one run.end per run.start for every run. A conversation run also has one
+    outcome and a non-empty user message; a watch run (`kind: watch`, N3) has neither an
+    outcome nor a runs row."""
     out: Violations = []
     known = {r["run_id"] for r in rec.runs}
-    for run_id in sorted(set(rec.traces) - known):
+    watch = {
+        run_id
+        for run_id, records in rec.traces.items()
+        if any(r["type"] == "run.start" and r.get("kind") == "watch" for r in records)
+    }
+    for run_id in sorted(set(rec.traces) - known - watch):
         out.append(f"{run_id}: a trace with no runs row")
+    for run_id in sorted(watch):
+        records = rec.traces[run_id]
+        starts = [r for r in records if r["type"] == "run.start"]
+        ends = [r for r in records if r["type"] == "run.end"]
+        if run_id in known:
+            out.append(f"{run_id}: a watch run has a runs row")
+        if len(starts) != 1 or len(ends) != 1 or records[-1]["type"] != "run.end":
+            out.append(f"{run_id}: watch run has {len(starts)} run.start and {len(ends)} run.end")
+        elif ends[0].get("outcome") is not None:
+            out.append(f"{run_id}: a watch run has an outcome")
     for run, records in rec.run_records():
         rid = run["run_id"]
         starts = [r for r in records if r["type"] == "run.start"]
@@ -440,8 +457,12 @@ def _consumptions(rec: Records) -> tuple[dict[str, dict[str, Any]], dict[str, st
     return consumed, intent_of_key
 
 
-def _world_material(rec: Records, hold_id: str, book_seq_ts: int) -> BookMaterial | None:
-    """A book's material rebuilt from the world's rows only."""
+def _world_material(
+    rec: Records, hold_id: str, book_seq_ts: int, replaces: str | None = None
+) -> BookMaterial | None:
+    """A book's material rebuilt from the world's rows only. `replaces_booking_id` is not in
+    any world row (the world's op args do not carry it): the caller reads it from the
+    consumed approval's material."""
     hold = rec.world_holds.get(hold_id)
     if hold is None:
         return None
@@ -468,10 +489,21 @@ def _world_material(rec: Records, hold_id: str, book_seq_ts: int) -> BookMateria
         slot_end=ist_seconds(from_ms(int(hold["slot_end"]))),
         quoted_price_inr=int(hold["quoted_price_inr"]),
         same_service_nearby=nearby,
+        replaces_booking_id=replaces,
     )
 
 
 # ---------------------------------------------------------------- INV-01
+
+
+def _replaces_of(rec: Records, consumed: dict[str, Any]) -> str | None:
+    """The booking a consumed approval's material says it replaces (INV-01 reads it from
+    the approval, because the world's op args do not carry it)."""
+    for a in rec.approvals:
+        if a["approval_id"] == consumed.get("approval_id"):
+            value = json.loads(a["material_json"]).get("replaces_booking_id")
+            return str(value) if value else None
+    return None
 
 
 def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
@@ -505,7 +537,9 @@ def inv01_side_effects_match_a_consumed_approval(rec: Records) -> Violations:
             continue
         if row["op"] != "book":
             continue  # cancel and reschedule material lands with M9
-        material = _world_material(rec, str(args.get("hold_id")), int(row["sim_ts"]))
+        material = _world_material(
+            rec, str(args.get("hold_id")), int(row["sim_ts"]), _replaces_of(rec, record)
+        )
         if material is None:
             out.append(f"{where}: the world has no hold {args.get('hold_id')}")
             continue
@@ -851,7 +885,10 @@ def inv04_success_only_after_the_source_of_truth(rec: Records) -> Violations:
                     if not backed:
                         out.append(f"{rid}: unbacked success claim {sentence!r}")
         open_errand = phases.get(rid, INITIAL_PHASE.value) != Phase.COMPLETED.value
-        if mine and open_errand and not (mine[-1]["body"].get("status_line") or "").strip():
+        # A proactive line is written into a conversation the run does not own, below
+        # whatever that conversation shows; the run's own last message carries the line.
+        own = [m for m in mine if m.get("kind") != "proactive"]
+        if own and open_errand and not (own[-1]["body"].get("status_line") or "").strip():
             out.append(f"{rid}: the last message has no status line ({phases.get(rid)})")
     rec.notes["claims_checked"] = claims
     return out
@@ -949,11 +986,14 @@ def inv15_parked_on_every_live_card(rec: Records) -> Violations:
         if not pending and parked is not None:
             out.append(f"{rid}: parked on {parked}, which is not a live card")
         if pending:
+            # A `proactive` line is looked past (14, INV-15): it carries no approval and no
+            # question, and a run that does not own the conversation wrote it.
             shown = [
                 m
                 for m in rec.messages
                 if m["conversation_id"] == thread
                 and m["role"] == "assistant"
+                and m.get("kind") != "proactive"
                 and _run_index(rec, m["run_id"]) <= _run_index(rec, rid)
             ]
             last = shown[-1] if shown else None
@@ -997,6 +1037,7 @@ def _typed_grants(rec: Records) -> Violations:
             for m in rec.messages
             if m["conversation_id"] == user["conversation_id"]
             and m["role"] == "assistant"
+            and m.get("kind") != "proactive"
             and m["row_no"] < user["row_no"]
         ]
         latest = before[-1] if before else None

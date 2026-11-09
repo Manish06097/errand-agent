@@ -341,7 +341,9 @@ class _Verify:
                     job_id=f"fj_{booking_id}_provider_cancel",
                     booking_id=booking_id,
                     event_kind="provider_cancel",
-                    conversation_id=deps.conversation_id,
+                    # NULL: the column means the follow-up conversation, which delivery
+                    # creates; the origin conversation is on known_bookings (14.2).
+                    conversation_id=None,
                     now_ms=now_ms,
                 )
         deps.tracer.emit(

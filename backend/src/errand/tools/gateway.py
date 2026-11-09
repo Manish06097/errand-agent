@@ -91,7 +91,7 @@ ALLOWED: Mapping[Caller, frozenset[ToolName]] = {
     Caller.VERIFIER: frozenset({"get_booking_status", "list_bookings"}),
     Caller.RECONCILER: frozenset({"get_booking_status", "list_bookings"}),
     Caller.WATCHER: frozenset({"list_bookings"}),
-    Caller.FOLLOWUP: frozenset({"search_providers", "get_provider", "hold_slot"}),
+    Caller.FOLLOWUP: frozenset({"search_providers", "get_provider", "hold_slot", "list_bookings"}),
     # Code fetching the top candidates' reviews for the reader before ranking (10.6).
     Caller.RANKER: frozenset({"get_provider"}),
 }

@@ -2,7 +2,8 @@
 
 M4 wires the booking path:
 
-    START -> ingress -> plan | prepare_proposal | execute | respond
+    START -> ingress -> plan | prepare_proposal | execute | respond | followup
+    followup -> prepare_proposal (a replacement: the Rebook card) | respond (N3, no model)
     plan -> prepare_proposal (a validated proposal) | respond
     prepare_proposal -> respond | plan (one SystemNote replan per run)
     execute -> verify | prepare_proposal (a changed price or slot, a hold that could not be
@@ -44,6 +45,7 @@ from errand.agent.deps import RunDeps
 from errand.agent.node_guard import guard_node, route_guard
 from errand.agent.nodes.await_approval import await_approval
 from errand.agent.nodes.execute import execute, route_after_execute
+from errand.agent.nodes.followup import followup, route_after_followup
 from errand.agent.nodes.ingress import ingress, route_after_ingress
 from errand.agent.nodes.plan import plan, route_after_plan
 from errand.agent.nodes.prepare_proposal import prepare_proposal, route_after_prepare
@@ -67,6 +69,7 @@ def build_graph(checkpointer: BaseCheckpointSaver[Any]) -> Graph:
     )
     nodes: dict[str, Any] = {
         "ingress": ingress,
+        "followup": followup,
         "plan": plan,
         "prepare_proposal": prepare_proposal,
         "execute": execute,
@@ -80,7 +83,10 @@ def build_graph(checkpointer: BaseCheckpointSaver[Any]) -> Graph:
     g.add_conditional_edges(
         "ingress",
         route_guard(route_after_ingress),
-        ["plan", "prepare_proposal", "execute", "respond"],
+        ["plan", "prepare_proposal", "execute", "respond", "followup"],
+    )
+    g.add_conditional_edges(
+        "followup", route_guard(route_after_followup), ["prepare_proposal", "respond"]
     )
     g.add_conditional_edges("plan", route_guard(route_after_plan), ["prepare_proposal", "respond"])
     g.add_conditional_edges(

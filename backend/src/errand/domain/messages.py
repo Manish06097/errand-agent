@@ -125,12 +125,20 @@ class NoticeAction(_Body):
         "raise_budget",
         "options",
         "quick_reply",
+        "widen_followup",
+        "dismiss_followup",
+        "select_slot",
     ]
     label: str
     # For refresh_hold: the approval whose slot gets a fresh hold and a new card.
     approval_id: str | None = None
     # For quick_reply: the message the button sends as if the user had typed it.
     reply: str | None = None
+    # For select_slot (a follow-up's next candidates): the shortlist handle to hold.
+    slot_ref: str | None = None
+    # For widen_followup: which constraint one tap widens, and the rupee ceiling of "Up to".
+    field: Literal["days", "price", "time"] | None = None
+    value: str | None = None
 
 
 class PendingFacts(_Body):
@@ -211,6 +219,9 @@ class ActionCard(_Body):
     material: Material
     status_line: str | None = None
     brief: list[BriefChip] = Field(default_factory=list)
+    # A Rebook (14.5): "Replaces B-12, cancelled by Ravi Plumbing", and how its price
+    # compares with the cancelled booking's. Absent on a plain book.
+    header: str | None = None
 
 
 class CardReminder(_Body):
@@ -222,6 +233,18 @@ class CardReminder(_Body):
     decline_label: str = "Decline"
     typed_grant_ok: bool
     hint: str  # "Tap the button to confirm" when typed_grant_ok is false
+    status_line: str | None = None
+
+
+class ProactiveLine(_Body):
+    """One line the agent writes into a conversation its run does not own (14.2, INV-15): the
+    origin chat hears about a cancel and, later, a rebooking. It carries no approval and no
+    question; the typed-grant binding looks past it."""
+
+    type: Literal["proactive"] = "proactive"
+    text: str
+    followup_conversation_id: str
+    booking_id: str
     status_line: str | None = None
 
 
@@ -246,11 +269,13 @@ MessageBody = Annotated[
     | OutcomeNotice
     | ActionCard
     | CardReminder
+    | ProactiveLine
     | OutcomeCard,
     Field(discriminator="type"),
 ]
 
-KIND_OF: dict[str, Literal["text", "card", "notice"]] = {
+KIND_OF: dict[str, Literal["text", "card", "notice", "proactive"]] = {
+    "proactive": "proactive",
     "text": "text",
     "clarify": "card",
     "shortlist": "card",

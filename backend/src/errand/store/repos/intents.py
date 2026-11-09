@@ -146,6 +146,15 @@ class IntentsRepo:
         ) as cur:
             return [_intent(r) for r in await cur.fetchall()]
 
+    async def replacement_succeeded(self, booking_id: str) -> bool:
+        """Whether a replacement for this booking was booked (the one_replacement index)."""
+        async with self._conn.execute(
+            "SELECT 1 FROM action_intents WHERE replaces_booking_id = ? AND state = 'succeeded' "
+            "LIMIT 1",
+            (booking_id,),
+        ) as cur:
+            return await cur.fetchone() is not None
+
     async def attempts(self, intent_id: str) -> list[AttemptRow]:
         async with self._conn.execute(
             f"SELECT {_ATTEMPT} FROM intent_attempts WHERE intent_id = ? ORDER BY n",

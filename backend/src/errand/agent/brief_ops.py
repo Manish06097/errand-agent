@@ -40,7 +40,7 @@ REQUIRED: Mapping[ErrandKind, tuple[BriefField, ...]] = {
     ErrandKind.BOOK: (F.SERVICE, F.AREA, F.WINDOW, F.BUDGET),
     ErrandKind.RESCHEDULE: (F.TARGET_BOOKING, F.NEW_WINDOW),
     ErrandKind.CANCEL: (F.TARGET_BOOKING,),
-    ErrandKind.REBOOK: (F.TARGET_BOOKING, F.WINDOW),
+    ErrandKind.REBOOK: (F.TARGET_BOOKING, F.SERVICE, F.AREA, F.WINDOW),
 }
 # The fields update_brief can set in M3. Provider preference and booking targets come
 # from history and memory (M9, M11), never from a bare model patch.

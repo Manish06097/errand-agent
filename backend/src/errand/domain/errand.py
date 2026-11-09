@@ -27,6 +27,17 @@ class Phase(StrEnum):
     ABANDONED = "abandoned"
 
 
+class RebookInfo(BaseModel):
+    """The cancelled booking a Rebook replaces, for the card's header and price delta."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    booking_id: str
+    provider_name: str
+    slot_label: str
+    price_inr: int | None = None  # what the user approved for it, when we know
+
+
 class Errand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -40,3 +51,4 @@ class Errand(BaseModel):
     approval_id: str | None = None  # the approvals table is authoritative (M4)
     intent_id: str | None = None  # the action_intents table is authoritative (M5)
     replaces_booking_id: str | None = None
+    rebook: RebookInfo | None = None

@@ -360,7 +360,15 @@ class ExpectBookCalls(_Strict):
 
 class RowsSpec(_Strict):
     table: Literal[
-        "action_intents", "intent_attempts", "followup_jobs", "known_bookings", "approvals"
+        "action_intents",
+        "intent_attempts",
+        "followup_jobs",
+        "known_bookings",
+        "approvals",
+        "notifications",
+        "memories",
+        "memory_events",
+        "holds",
     ]
     where: dict[str, str | int] = Field(default_factory=dict)
     count: int
@@ -439,6 +447,59 @@ class ExpectApprovals(_Strict):
     expect_approvals: list[str]
 
 
+class WorldEventSpec(_Strict):
+    type: Literal["provider_cancelled"] = "provider_cancelled"
+    # Which booking: `created:N` (the N-th the agent booked), `last_booked`, or a seeded
+    # booking by its index in the world's seeded history.
+    booking: str = Field(pattern=r"^(created:\d+|last_booked|seeded:\d+)$")
+
+
+class WorldEvent(_Strict):
+    """N3: the world fires an event now (a provider cancels), outside any run."""
+
+    world_event: WorldEventSpec
+
+
+class WatcherTick(_Strict):
+    """N3: one watcher tick, as the lifespan task would run it. Any follow-up run it starts is
+    finished before the step returns; the client of that conversation then sees it."""
+
+    watcher_tick: dict[str, Any] = Field(default_factory=dict)
+
+
+class NotificationSpec(_Strict):
+    count: int
+    urgency: Literal["normal", "urgent"] | None = None
+    quiet: bool | None = None
+    unread: int | None = None
+
+
+class ExpectNotification(_Strict):
+    """N3: the bell, as `GET /api/notifications` serves it."""
+
+    expect_notification: NotificationSpec
+
+
+class OpenFollowup(_Strict):
+    """N3: the client opens the follow-up conversation the bell points to (the n-th)."""
+
+    open_followup: dict[str, Any] = Field(default_factory=dict)
+
+
+class ClickAction(_Strict):
+    """N3: a follow-up notice button. `widen` presses the named widening button, `dismiss`
+    is "I'll sort it myself"."""
+
+    click_action: Literal["widen", "dismiss"]
+    field: Literal["days", "price", "time"] | None = None
+
+
+class ExpectFollowup(_Strict):
+    """N3: facts about the latest follow-up run, from its records."""
+
+    expect_followup: dict[str, Any]
+
+
 STEP_TYPES: dict[str, type[_Strict]] = {
     "say": Say,
     "answer": Answer,
@@ -478,6 +539,12 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "expect_shortlist": ExpectShortlist,
     "expect_options": ExpectOptions,
     "expect_approvals": ExpectApprovals,
+    "world_event": WorldEvent,
+    "watcher_tick": WatcherTick,
+    "expect_notification": ExpectNotification,
+    "open_followup": OpenFollowup,
+    "click_action": ClickAction,
+    "expect_followup": ExpectFollowup,
 }
 
 Step = (
@@ -519,12 +586,18 @@ Step = (
     | ExpectShortlist
     | ExpectOptions
     | ExpectApprovals
+    | WorldEvent
+    | WatcherTick
+    | ExpectNotification
+    | OpenFollowup
+    | ClickAction
+    | ExpectFollowup
 )
 
 
 # A step that grants an approval can reach `book`; a scenario with one runs in both
 # dedupe modes unless it says otherwise.
-GRANTING = ("approve", "approve_concurrently", "type_confirm")
+GRANTING = ("approve", "approve_concurrently", "type_confirm", "world_event")
 
 
 def parse_step(raw: Any) -> Step:

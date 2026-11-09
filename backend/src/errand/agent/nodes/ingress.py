@@ -30,12 +30,19 @@ from errand.agent.state import ThreadState
 from errand.agent.transitions import INITIAL_PHASE, transition
 from errand.domain.brief import Brief, ErrandKind
 from errand.domain.errand import Errand, Phase
-from errand.domain.inbound import ApprovalDeclined, ApprovalGranted, UiAction, UserMessage
+from errand.domain.inbound import (
+    ApprovalDeclined,
+    ApprovalGranted,
+    SystemEvent,
+    UiAction,
+    UserMessage,
+)
 from errand.domain.outcomes import ConfirmHint, Declined, Failure
 from errand.ids import errand_id_for
 
 TERMINAL = frozenset({Phase.COMPLETED, Phase.FAILED, Phase.ABANDONED})
 M4_ACTIONS = frozenset({"select_slot", "refresh_hold"})
+FOLLOWUP_ACTIONS = frozenset({"widen_followup", "dismiss_followup"})
 
 
 async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
@@ -57,6 +64,7 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
             "park": None,
             "system_notes": [],
             "card_changes": [],
+            "followup": None,
         }
         live = await live_approval(deps)
         if errand.phase is Phase.AWAITING_APPROVAL and (
@@ -68,8 +76,10 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
             if inbound.confirm_hint and live is not None and live.status == "pending":
                 update["result"] = ConfirmHint(approval_id=live.approval_id)
         elif isinstance(inbound, UiAction):
-            if inbound.kind not in M4_ACTIONS:
+            if inbound.kind not in M4_ACTIONS | FOLLOWUP_ACTIONS:
                 update["plan_result"] = Failure(reason=f"ui action {inbound.kind} is not built yet")
+        elif isinstance(inbound, SystemEvent):
+            pass  # followup_start and followup_lapsed: the followup node reads the job
         elif isinstance(inbound, ApprovalGranted):
             async with deps.db.session() as repos:
                 row = await repos.approvals.get(inbound.approval_id)
@@ -113,7 +123,7 @@ async def _off_dead_card(deps: RunDeps, errand: Errand) -> Errand:
     return transition(errand, Phase.COMPARING, reason, deps.tracer)
 
 
-Route = Literal["plan", "prepare_proposal", "execute", "respond"]
+Route = Literal["plan", "prepare_proposal", "execute", "respond", "followup"]
 
 
 def route_after_ingress(state: ThreadState) -> Route:
@@ -122,6 +132,10 @@ def route_after_ingress(state: ThreadState) -> Route:
     inbound = state.inbound
     if isinstance(inbound, UserMessage):
         return "plan"
+    if isinstance(inbound, SystemEvent) or (
+        isinstance(inbound, UiAction) and inbound.kind in FOLLOWUP_ACTIONS
+    ):
+        return "followup"
     if isinstance(inbound, UiAction) and inbound.kind in M4_ACTIONS:
         return "prepare_proposal"
     if isinstance(inbound, ApprovalGranted):

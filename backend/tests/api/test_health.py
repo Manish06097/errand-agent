@@ -57,6 +57,10 @@ def test_api_has_exactly_the_m7_routes() -> None:
         "/api/approvals/{approval_id}/decision",
         "/api/messages/{message_id}/rendered",
         "/api/conversations/{conversation_id}/actions",
+        # N3: the bell and the user's event stream (api/followup_routes.py)
+        "/api/notifications",
+        "/api/notifications/{notification_id}/read",
+        "/api/users/me/events",
     }
 
 

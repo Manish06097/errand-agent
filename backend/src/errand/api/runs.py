@@ -63,6 +63,7 @@ from errand.domain.inbound import (
     ApprovalDeclined,
     ApprovalGranted,
     Inbound,
+    SystemEvent,
     UiAction,
     UserMessage,
 )
@@ -487,6 +488,31 @@ class RunManager:
             answer = Answer(202, {"run_id": admission.run_id, "routed_as": admission.routed_as})
             await self._remember(client_action_id, "actions", answer)
             return answer
+
+    async def submit_system(self, conversation_id: str, event: SystemEvent) -> Admission:
+        """Start a run the system asked for (a follow-up delivery or lapse, 14). Same
+        admission as any input: the thread lock and lease, so a busy conversation raises
+        `RunInProgress` and the caller tries again on its next tick."""
+        if self._closing:
+            raise ShuttingDown()
+        async with self._locks.get(conversation_id):
+            async with self.db.session() as repos:
+                conversation = await repos.conversations.get(conversation_id)
+            if conversation is None:
+                raise UnknownConversation(conversation_id)
+            lease = await self._take_lease(conversation_id)
+            try:
+                return await self._admit(
+                    self.ids.run_id(),
+                    conversation_id,
+                    conversation.user_id,
+                    event,
+                    lease,
+                    trigger=event.kind,
+                )
+            except BaseException:
+                await lease.release()
+                raise
 
     async def _stored(self, client_action_id: str, route: str) -> Answer | None:
         async with self.db.session() as repos:

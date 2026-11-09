@@ -255,6 +255,7 @@ class _Preparer:
             slot_end=ist_seconds(held_slot.end),
             quoted_price_inr=hold.quoted_price_inr,
             same_service_nearby=[b.booking_id for b in nearby],
+            replaces_booking_id=self.errand.replaces_booking_id,
         )
         fp = fingerprint(material)
         proposal_id, approval_id = ids_for(self.state.run_id, self.state.counters.replans)
@@ -274,6 +275,7 @@ class _Preparer:
             nearby=nearby,
             tz=deps.tz,
             brief=self.errand.brief,
+            rebook=self.errand.rebook if self.errand.replaces_booking_id else None,
         )
         row = ApprovalRow(
             approval_id=approval_id,

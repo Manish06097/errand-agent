@@ -37,7 +37,13 @@ import httpx
 from errand.api.app import AppConfig, create_app, scripted_factory
 from errand.api.runs import ModelFactory
 from errand.clock import AGENT_CLOCK_HEADER, IST, ClockMode, from_ms, parse_clock_header
-from errand.config import ApprovalSettings, BookingSettings, LimitSettings, ModelSettings
+from errand.config import (
+    ApprovalSettings,
+    BookingSettings,
+    FollowupSettings,
+    LimitSettings,
+    ModelSettings,
+)
 from errand.domain.brief import BriefField
 from errand.domain.messages import ClarifyCard
 from errand.ids import SequentialIds
@@ -52,6 +58,7 @@ from evals.dsl import (
     Answer,
     Approve,
     ApproveConcurrently,
+    ClickAction,
     ClickSlot,
     Decline,
     Dedupe,
@@ -60,10 +67,12 @@ from evals.dsl import (
     ExpectBooking,
     ExpectBrief,
     ExpectCard,
+    ExpectFollowup,
     ExpectLimit,
     ExpectNoCard,
     ExpectNoSideEffects,
     ExpectNotice,
+    ExpectNotification,
     ExpectNotInRequests,
     ExpectOptions,
     ExpectOutcome,
@@ -80,6 +89,7 @@ from evals.dsl import (
     ExpectTranscript,
     ExpectWorld,
     IfDedupe,
+    OpenFollowup,
     Post,
     RefreshHold,
     Say,
@@ -89,6 +99,8 @@ from evals.dsl import (
     Twin,
     TypeConfirm,
     Until,
+    WatcherTick,
+    WorldEvent,
 )
 from evals.policies import hostile, reference
 from evals.policies import limits as limits_policies
@@ -233,6 +245,7 @@ class Harness:
                 tz=IST,
                 approval_settings=ApprovalSettings(),
                 booking_settings=self.booking,
+                followup_settings=FollowupSettings(watch_interval_s=0),
                 consequential=self._consequential,
             )
         )
@@ -639,6 +652,7 @@ class Runner:
         # The conversation's input steps so far, for a twin to replay.
         self.inputs: list[Step] = []
         self.twin: TwinResult | None = None
+        self.watch: Any = None
 
     @property
     def client(self) -> ClientState:
@@ -1107,8 +1121,135 @@ class Runner:
             self.expect(got == step.expect_options, f"{self.last.run_id}: quick replies {got}")
         elif isinstance(step, ExpectApprovals):
             await self._expect_approvals(step)
+        elif isinstance(step, WorldEvent):
+            await self._world_event(step)
+        elif isinstance(step, WatcherTick):
+            await self._watcher_tick()
+        elif isinstance(step, ExpectNotification):
+            await self._expect_notification(step)
+        elif isinstance(step, OpenFollowup):
+            await self._open_followup()
+        elif isinstance(step, ClickAction):
+            await self._click_action(step)
+        elif isinstance(step, ExpectFollowup):
+            await self._expect_followup(step)
         else:  # pragma: no cover - the DSL admits nothing else
             raise AssertionError(f"no runner for {step!r}")
+
+    # ------------------------------------------------------------ N3 verbs (follow-up)
+
+    async def _world_event(self, step: WorldEvent) -> None:
+        bookings = await self.h.inspector.bookings()
+        made = [b for b in bookings if b.created_by_key is not None]
+        seeded = [b for b in bookings if b.created_by_key is None]
+        which = step.world_event.booking
+        kind, _, index = which.partition(":")
+        if kind == "last_booked":
+            target = made[-1] if made else None
+        elif kind == "created":
+            target = made[int(index)] if int(index) < len(made) else None
+        else:
+            target = seeded[int(index)] if int(index) < len(seeded) else None
+        if target is None:
+            raise AssertionError(f"world_event: no booking for {which}")
+        await self.h.inspector.fire_provider_cancel(target.booking_id)
+
+    def _latest_run_of(self, conversation_id: str) -> str | None:
+        conn = sqlite3.connect(f"file:{self.h.root / 'agent.sqlite'}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT run_id FROM runs WHERE conversation_id = ? "
+                "ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return str(row[0]) if row else None
+
+    async def _watcher_tick(self) -> None:
+        await self.h.tick(1.0)
+        result = await self.h.app.state.watcher.tick()
+        await self.h.manager.wait_idle()
+        self.watch = result
+        for job_id in [*result.delivered, *result.lapsed]:
+            conversation_id = f"cf_{job_id}"
+            run_id = self._latest_run_of(conversation_id)
+            if run_id is None:
+                continue
+            previous = self.h.conversation_id
+            self.h.conversation_id = conversation_id
+            try:
+                await self._view(run_id)
+            finally:
+                self.h.conversation_id = previous
+
+    async def _notifications(self) -> dict[str, Any]:
+        response = await self.h.client.get("/api/notifications")
+        response.raise_for_status()
+        data: dict[str, Any] = response.json()
+        return data
+
+    async def _expect_notification(self, step: ExpectNotification) -> None:
+        spec = step.expect_notification
+        data = await self._notifications()
+        rows = data["notifications"]
+        self.expect(len(rows) == spec.count, f"notifications: {len(rows)}, want {spec.count}")
+        if spec.urgency is not None:
+            got = [r["urgency"] for r in rows]
+            self.expect(all(u == spec.urgency for u in got), f"notification urgency {got}")
+        if spec.quiet is not None:
+            got_quiet = [r["quiet"] for r in rows]
+            self.expect(all(q is spec.quiet for q in got_quiet), f"notification quiet {got_quiet}")
+        if spec.unread is not None:
+            self.expect(
+                data["unread"] == spec.unread, f"unread {data['unread']}, want {spec.unread}"
+            )
+
+    async def _open_followup(self) -> None:
+        rows = (await self._notifications())["notifications"]
+        if not rows:
+            raise AssertionError("open_followup: the bell is empty")
+        conversation_id = rows[-1]["conversation_id"]
+        self.h.conversations["followup"] = conversation_id
+        await self.h.switch("followup")
+
+    async def _click_action(self, step: ClickAction) -> None:
+        if step.click_action == "dismiss":
+            await self._act("dismiss_followup", {})
+            return
+        convo = await self.h.conversation()
+        notices = [m for m in convo["messages"] if m["body"].get("type") == "notice"]
+        actions = [a for m in notices for a in m["body"].get("actions", [])]
+        wanted = [a for a in actions if a["kind"] == "widen_followup" and a["field"] == step.field]
+        if not wanted:
+            raise AssertionError(f"click_action: no widen button for {step.field}: {actions}")
+        payload = {"field": str(step.field)}
+        if wanted[-1].get("value"):
+            payload["value"] = str(wanted[-1]["value"])
+        await self._act("widen_followup", payload)
+
+    async def _expect_followup(self, step: ExpectFollowup) -> None:
+        spec = step.expect_followup
+        watch = getattr(self, "watch", None)
+        if "quiet_tick" in spec:
+            quiet = watch is not None and not watch.changed
+            self.expect(quiet is spec["quiet_tick"], f"watcher tick quiet={quiet}")
+        if "watch_trace" in spec:
+            self.expect(
+                (watch is not None and watch.trace is not None) is spec["watch_trace"],
+                f"watch trace {None if watch is None else watch.trace}",
+            )
+        if "origin_line" in spec:
+            origin = await self.h.client.get(f"/api/conversations/{self.h.conversations['main']}")
+            lines = [
+                m
+                for m in origin.json()["messages"]
+                if m["body"].get("type") == "proactive" and spec["origin_line"] in m["body"]["text"]
+            ]
+            self.expect(bool(lines), f"no proactive line with {spec['origin_line']!r}")
+        if "delivered" in spec:
+            got = 0 if watch is None else len(watch.delivered)
+            self.expect(got == spec["delivered"], f"delivered {got}, want {spec['delivered']}")
 
     # ------------------------------------------------------------ M10 verbs
 

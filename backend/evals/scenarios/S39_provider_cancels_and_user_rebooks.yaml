@@ -1,0 +1,56 @@
+id: S39_provider_cancels_and_user_rebooks
+title: The provider cancels a verified booking; the watcher notices on its own, one notification, a Rebook card in its own conversation, the old approval is dead, a fresh grant books once, the job ends done
+category: [followup]
+seed: 39
+world:
+  book: {forced: [success, success]}
+user:
+  persona: cooperative
+  goal: {service: plumber, area: Indiranagar, window: this week mornings, budget_max_inr: "1500"}
+steps:
+  - say: "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, area, window, budget_max_inr]
+  - until: approval_card
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_booking: {count: 1}
+  # a quiet tick writes no trace and no notification
+  - watcher_tick: {}
+  - expect_followup: {quiet_tick: true, watch_trace: false}
+  - expect_notification: {count: 0}
+  - world_event: {type: provider_cancelled, booking: last_booked}
+  - watcher_tick: {}
+  # no user message was sent: the run belongs to the system
+  - expect_outcome: NOTIFIED
+  - expect_followup: {delivered: 1}
+  - expect_notification: {count: 1, urgency: urgent, unread: 1}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: notified}, count: 1}
+      - {table: notifications, where: {kind: followup}, count: 1}
+  # one search, one hold for the replacement (the original booking made one of each)
+  - expect_world: {search_providers: 2, hold_slot: 2, book: 1}
+  # the origin conversation hears about it in one line
+  - expect_followup: {origin_line: "cancelled B-"}
+  # the old consumed approval is not a way to book again (the double-click contract: 200,
+  # already approved, nothing new happens)
+  - approve: {card: original, expect_status: 200}
+  - expect_world: {book: 1}
+  # a second tick changes nothing
+  - watcher_tick: {}
+  - expect_followup: {quiet_tick: true}
+  - expect_notification: {count: 1}
+  - expect_world: {book: 1, search_providers: 2}
+  - open_followup: {}
+  - expect_card: {kind: action, status: pending, typed_grant_ok: true, price_is_held_quote: true}
+  - expect_transcript: {includes: ["cancelled your plumber visit", "Rebook"], excludes: ["Confirmed with the provider"]}
+  - approve: {}
+  - expect_outcome: BOOKED_VERIFIED
+  - expect_world: {book: 2}
+  - expect_rows:
+      - {table: followup_jobs, where: {state: done}, count: 1}
+      - {table: action_intents, where: {state: succeeded}, count: 2}
+  - watcher_tick: {}
+  - expect_notification: {count: 1}
+  - expect_world: {book: 2}
+expect:
+  invariants: [default]

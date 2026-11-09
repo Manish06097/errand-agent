@@ -63,6 +63,23 @@ class ConversationsRepo:
         )
         return conversation
 
+    async def ensure_followup(
+        self, *, conversation_id: str, user_id: str, origin_booking_id: str, title: str, now_ms: int
+    ) -> bool:
+        """The follow-up conversation of a job (INSERT OR IGNORE, kind followup)."""
+        cur = await self._conn.execute(
+            f"INSERT OR IGNORE INTO conversations ({_COLUMNS}) "
+            "VALUES (?, ?, 'followup', ?, ?, ?, ?)",
+            (conversation_id, user_id, title, origin_booking_id, now_ms, now_ms),
+        )
+        return cur.rowcount == 1
+
+    async def user_ids(self) -> list[str]:
+        async with self._conn.execute(
+            "SELECT DISTINCT user_id FROM conversations ORDER BY user_id"
+        ) as cur:
+            return [str(r[0]) for r in await cur.fetchall()]
+
     async def get(self, conversation_id: str) -> Conversation | None:
         async with self._conn.execute(
             f"SELECT {_COLUMNS} FROM conversations WHERE conversation_id = ?", (conversation_id,)

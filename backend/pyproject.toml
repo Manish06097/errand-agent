@@ -143,7 +143,7 @@ forbidden_modules = ["errand.execution.executor"]
 [[tool.importlinter.contracts]]
 name = "The follow-up never books and never calls a model: it imports neither the executor, the model gateway nor the quarantined reader"
 type = "forbidden"
-source_modules = ["errand.followup"]
+source_modules = ["errand.followup", "errand.agent.nodes.followup"]
 forbidden_modules = [
   "errand.execution.executor",
   "errand.llm",

@@ -63,11 +63,14 @@ class RunStart(Envelope):
     # The limits this run was held to (N3, additive), so INV-09 reads them from the record
     # and never imports config.
     limits: dict[str, Json] | None = None
+    # A watcher tick that saw a change or a failure: its own trace, no runs row (INV-07).
+    kind: Literal["watch"] | None = None
 
 
 class RunEnd(Envelope):
     type: Literal["run.end"]
-    outcome: str
+    # None only for a watch run, which has no outcome.
+    outcome: str | None = None
     user_message_id: str | None = None
     totals: RunTotals
     # The approval the run ended parked on, read from the graph's v2 output interrupts,
@@ -76,6 +79,9 @@ class RunEnd(Envelope):
     # The cap that ended the run, when one did (N3, additive): model_calls, iterations,
     # tool_calls or deadline.
     limit: str | None = None
+    # A watch run (no outcome): what the tick saw.
+    changes: list[dict[str, Json]] | None = None
+    failed_users: list[str] | None = None
 
 
 class NodeRecord(Envelope):
@@ -281,9 +287,13 @@ class MemoryRecord(Envelope):
 
 
 class FollowupRecord(Envelope):
-    type: Literal["followup.detected", "followup.ignored", "followup.notified"]
+    type: Literal["followup.detected", "followup.ignored", "followup.notified", "followup.done"]
     booking_id: str
     urgency: str | None = None
+    job_id: str | None = None
+    # ignored: slot_started or already_replaced; done: replaced, dismissed or lapsed.
+    reason: str | None = None
+    variant: str | None = None
 
 
 class GuardRecord(Envelope):

@@ -422,6 +422,9 @@ class _Execute:
             same_service_nearby=[
                 b.booking_id for b in nearby_bookings(bookings, approved.service, hold.slot.start)
             ],
+            # Not a fact of the hold or the world but of the approval: which cancelled
+            # booking this one replaces (14.5).
+            replaces_booking_id=approved.replaces_booking_id,
         )
 
     def _what_changed(self, approved: BookMaterial, current: BookMaterial) -> tuple[Any, str]:

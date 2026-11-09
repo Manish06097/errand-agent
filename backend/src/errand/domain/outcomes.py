@@ -315,8 +315,15 @@ class BookCalled(_Result):
     price_inr: int | None = None
 
 
+class FollowupDone(_Result):
+    """The followup node decided and handed `respond` a notice (the context is in state)."""
+
+    kind: Literal["followup_done"] = "followup_done"
+
+
 StepResult = Annotated[
-    CardReady
+    FollowupDone
+    | CardReady
     | ProposalRefused
     | HoldFailed
     | OverBudget

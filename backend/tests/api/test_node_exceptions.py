@@ -25,6 +25,7 @@ from evals.runner import Harness, harness
 OPENER = "Book a plumber in Indiranagar for my kitchen tap this week, mornings only, under ₹1,500."
 NODES = [
     "ingress",
+    "followup",
     "plan",
     "prepare_proposal",
     "execute",
@@ -66,6 +67,8 @@ class Arm:
 
 async def drive_to(h: Harness, arm: Arm, node: str) -> str:
     """Drive the conversation to `node` and make it raise there. Returns the failed run id."""
+    if node == "followup":
+        return await _drive_followup(h, arm)
     if node in ("ingress", "plan", "prepare_proposal", "respond"):
         arm.on = True
         view = await h.say(OPENER)
@@ -87,6 +90,29 @@ async def drive_to(h: Harness, arm: Arm, node: str) -> str:
     await h.finish(run_id)
     arm.on = False
     return run_id
+
+
+async def _drive_followup(h: Harness, arm: Arm) -> str:
+    """Book, let the provider cancel it, and tick the watcher with the node armed: the
+    follow-up run belongs to the system, so the failure has no user message to answer."""
+    view = await h.say(OPENER)
+    convo = await h.conversation()
+    card = [m for m in convo["messages"] if m["body"].get("type") == "action"][-1]
+    click = await h.decide(card["approval_id"], "approve", card["body"]["fingerprint"])
+    await h.finish(str(click.json()["run_id"]))
+    booking = [b for b in await h.inspector.bookings() if b.created_by_key is not None][-1]
+    await h.inspector.fire_provider_cancel(booking.booking_id)
+    arm.on = True
+    result = await h.app.state.watcher.tick()
+    await h.manager.wait_idle()
+    arm.on = False
+    assert view.outcome == "AWAITING_APPROVAL" and result.delivered
+    conversation_id = f"cf_{result.delivered[0]}"
+    h.conversations["followup"] = conversation_id
+    await h.switch("followup")
+    async with h.manager.db.session() as repos:
+        runs = await repos.runs.list_for_conversation(conversation_id)
+    return runs[-1].run_id
 
 
 @pytest.mark.parametrize("node", NODES)
