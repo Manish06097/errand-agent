@@ -38,7 +38,12 @@ from tests.trace.langfuse_support import (
 )
 
 TIMEOUT_S = 2
-CALL_BUDGET_MS = 5.0
+# What this guards is that no sink call blocks the run for anything like the export
+# timeout: a per-request flush() would hold a call for the whole TIMEOUT_S (spike F8).
+# 250 ms is an order of magnitude under that, so a blocking call still fails here, but a
+# scheduler pause on a loaded machine (one call took 70 ms with several suites running at
+# once) does not make the suite fail at random.
+CALL_BUDGET_MS = 250.0
 
 
 def closed_port() -> int:
