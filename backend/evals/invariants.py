@@ -1252,6 +1252,21 @@ def inv19_memory_authority(rec: Records) -> Violations:
     return out
 
 
+def _sentence(text: str, start: int, end: int) -> str:
+    """The clauses of `text` that [start, end) touches, split by hand, not by memory/cues."""
+    lo, hi = 0, len(text)
+    for i, ch in enumerate(text):
+        stop = ch == "\n" or (ch in ".!?;" and (i + 1 == len(text) or text[i + 1].isspace()))
+        if not stop:
+            continue
+        if i < start:
+            lo = i + 1
+        elif i >= end:
+            hi = i
+            break
+    return text[lo:hi]
+
+
 def _explicit_evidence(
     row: dict[str, Any],
     ev: dict[str, Any] | None,
@@ -1274,7 +1289,12 @@ def _explicit_evidence(
     quote = ev.get("quote", "")
     if text[ev["start"] : ev["end"]] != quote and _REMOVED not in text:
         return [f"{mid}: the quote is not where the evidence says it is"]
-    cue, veto = _has(quote, _CUES), _has(quote, _ONE_OFF)
+    # the cue must be in the quote; the one-off veto reads the whole sentence around it
+    # (INV-19's own split: a clause ends at . ! ? ; before a space or the end, or a newline)
+    whole = quote
+    if text[ev["start"] : ev["end"]] == quote:
+        whole = _sentence(text, ev["start"], ev["end"])
+    cue, veto = _has(quote, _CUES), _has(whole, _ONE_OFF)
     if cue is None:
         return [f"{mid}: evidence {quote!r} has no standing-preference cue"]
     if veto is not None:
