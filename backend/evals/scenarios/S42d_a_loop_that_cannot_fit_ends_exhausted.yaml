@@ -1,0 +1,16 @@
+id: S42d_a_loop_that_cannot_fit_ends_exhausted
+title: 'The same growing planner on a bigger errand: even after the compaction and every shed there is no room for the next result, so the run ends CONTEXT_EXHAUSTED with its own message and no request is ever sent over 12,000'
+category: [context]
+seed: 422
+model: scripted:growing
+memory_seed: memory_rich_v1
+context_budget_tokens: 9000
+user:
+  persona: cooperative
+  goal: {}
+steps:
+  - say: "Look through all my bookings for me please, grow=16"
+  - expect_outcome: CONTEXT_EXHAUSTED
+  - expect_context: {compacted: true, max_over: 9000, shed: [recent, ledger]}
+expect:
+  invariants: [default]

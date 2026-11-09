@@ -669,6 +669,8 @@ class Scenario(_Strict):
     # conversation becomes this scenario's chat) and harness-side triggers (S49b).
     memory_seed: Literal["memory_demo", "memory_rich_v1"] | None = None
     hooks: list[memory_steps.CallHook] = Field(default_factory=list)
+    # A lowered hard cap for the gateway (S42d's second leg): the section caps stay as they are.
+    context_budget_tokens: int | None = Field(default=None, ge=1_000)
     # M5: the world's dedupe modes this scenario runs in. Default: both for a scenario
     # that can reach `book`, else just the one `world.enforce_idempotency` says. A single
     # mode that is not forced by `world.enforce_idempotency` needs a reason (one line).

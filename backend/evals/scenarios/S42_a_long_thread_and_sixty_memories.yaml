@@ -1,0 +1,48 @@
+id: S42_a_long_thread_and_sixty_memories
+title: 'A 240-message thread, 60 memories and 30 upcoming bookings at the default caps with the budget binding: turns are dropped, the ledger folds older errands into an overflow line, S3 is sub-capped, a request is over 9,000 estimated tokens and none is over 12,000; the included and excluded memory sets are the hand-written ones'
+category: [context, memory]
+seed: 42
+model: scripted:memory
+memory_seed: memory_rich_v1
+world:
+  book: {forced: [success]}
+user:
+  persona: cooperative
+  goal:
+    service: electrician
+    area: Indiranagar
+    window: tomorrow morning
+steps:
+  # Three long chatty turns first, so S6 has more recent text than its 1,000 tokens hold.
+  - say: "Just so you know, please keep the visit short and tidy. "
+    repeat: 28
+  - say: "Also, the dog is friendly but loud, and the lift is slow. "
+    repeat: 26
+  - say: "One more thing: parking is limited on the street, so ask them to be quick. "
+    repeat: 20
+  - say: "I need an electrician in Indiranagar for a flickering light. "
+    repeat: 8
+    gives: [service, issue, area]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [window]
+  - answer: {}
+  - expect_outcome: PRESENTED_OPTIONS
+  - expect_context:
+      min_turns_dropped: 1
+      ledger_overflow: true
+      s3_sub_capped: true
+      min_request_tokens: 9000
+      max_over: 12000
+      included: [m-07, m-11, m-30, m-33, m-35, m-38, m-59, m-60]
+      excluded:
+        m-03: "shadowed:scope"
+        m-09: "shadowed:scope"
+        m-28: "shadowed:scope"
+        m-48: "irrelevant:kind"
+        m-12: "irrelevant:scope"
+        m-16: pending_confirmation
+        m-50: forgotten
+        m-02: superseded
+        m-01: rejected
+expect:
+  invariants: [default]

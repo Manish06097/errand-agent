@@ -4,7 +4,7 @@
 the user's message states a standing preference in the words the product's cues look for,
 `list_memories` for "what do you remember about me", and otherwise defers to the reference
 planner. `growing_policy` grows the loop on purpose (S42d): it asks `list_bookings` again
-and again, two calls per turn, as many times as the message says (`grow=N`), then answers.
+and again, four calls per turn, as many times as the message says (`grow=N`), then answers.
 
 `hooked_factory` wraps a policy in a model that awaits an async hook before each call. The
 harness uses it to forget a memory between two loop calls of one run (S49b) through the
@@ -142,7 +142,7 @@ def growing_policy(request: ScriptedRequest) -> AIMessage:
     done = len(view.loop)
     if done >= total:
         return answer(request, "That is everything I could find about your bookings.")
-    batch: list[tuple[str, dict[str, Any]]] = [("list_bookings", {})] * min(2, total - done)
+    batch: list[tuple[str, dict[str, Any]]] = [("list_bookings", {})] * min(4, total - done)
     return tool_calls(request, "Look at the bookings again.", *batch)
 
 

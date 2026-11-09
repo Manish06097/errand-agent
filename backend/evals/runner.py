@@ -503,7 +503,14 @@ async def scenario_harness(
             reader=reader,
             memory_seed=scenario.memory_seed,
             hooks=scenario.hooks,
-            **extra,
+            **(
+                {
+                    **extra,
+                    "limits": LimitSettings(context_budget_tokens=scenario.context_budget_tokens),
+                }
+                if scenario.context_budget_tokens
+                else extra
+            ),
         ) as h:
             yield h
         return

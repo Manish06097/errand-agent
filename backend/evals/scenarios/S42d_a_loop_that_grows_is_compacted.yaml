@@ -1,0 +1,15 @@
+id: S42d_a_loop_that_grows_is_compacted
+title: 'A planner that keeps reading the bookings grows the loop past the cap on a full context; the loop compacts once into a fresh request, sheds nothing more than it must, and finishes with no request over 12,000'
+category: [context]
+seed: 421
+model: scripted:growing
+memory_seed: memory_rich_v1
+user:
+  persona: cooperative
+  goal: {}
+steps:
+  - say: "Look through all my bookings for me please, grow=15"
+  - expect_outcome: REPLIED
+  - expect_context: {compacted: true, max_over: 12000}
+expect:
+  invariants: [default]
