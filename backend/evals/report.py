@@ -64,6 +64,9 @@ def write_report(
     seed_range = f"{seed_values[0]}-{seed_values[-1]}" if seed_values else "none"
     stamp = now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     passed = sum(1 for r in rows if r["pass"])
+    # scripted first, then the cassette-backed modes the rows actually use
+    kinds = {str(r["model_mode"]).split(":")[0].split(" ")[0] for r in rows}
+    modes = ", ".join(sorted(kinds, key=lambda k: (k != "scripted", k)))
     lines = [
         "# Eval table",
         "",
@@ -71,7 +74,7 @@ def write_report(
         "",
         f"- Generated: {stamp}",
         f"- Git SHA: {sha}",
-        "- Model mode: scripted",
+        f"- Model mode: {modes}",
         f"- Seeds: {seed_range}",
         f"- Result: {passed}/{len(rows)} passed",
         "",
@@ -83,7 +86,7 @@ def write_report(
     data = {
         "generated_at": stamp,
         "git_sha": sha,
-        "model_mode": "scripted",
+        "model_mode": modes,
         "seeds": seed_range,
         "passed": passed,
         "total": len(rows),

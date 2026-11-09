@@ -26,6 +26,7 @@ dependencies = [
 errand-api = "errand.api.app:main"
 errand-world = "errand.world.server:main"
 errand-trace = "errand.trace.cli:main"
+errand = "errand.cli.chat:main"
 
 [dependency-groups]
 dev = [
@@ -187,9 +188,11 @@ forbidden_modules = [
 # The tools package is the one sanctioned way in, and only through these two edges:
 # the runtime builds the host and the in-process transport calls it. Any other tools
 # module on a path from these sources to the engine, store, server or catalog fails.
+# The runtime also hands out the WorldInspector (dev access, M7) through its own edge.
 ignore_imports = [
   "errand.tools.runtime -> errand.world.engine",
   "errand.tools.client -> errand.world.engine",
+  "errand.tools.runtime -> errand.tools.inspector",
 ]
 
 [[tool.importlinter.contracts]]

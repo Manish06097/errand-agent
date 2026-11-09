@@ -29,7 +29,10 @@ git and make. macOS or Linux.
 | `make dev` | Starts the world (8765), the API (8000) and the web app (3200) with prefixed logs. Stops all three if one exits or on Ctrl-C. |
 | `make check` | `uv sync --locked` (fails if `uv.lock` disagrees with the pins in `pyproject.toml`), ruff, ruff format, mypy, import-linter, the em-dash, attribution and secret guards, the design-note budget, `pytest backend/tests` in two steps (the fast tests under pytest-xdist, then the `slow` ones that start subprocesses or servers, three workers, one file each), web typecheck and lint. |
 | `make evals` | The offline eval suite. There are no scenarios yet, so it prints `0 scenarios`. If pytest collects nothing while `backend/evals` holds anything besides placeholders, it fails instead. |
-| `make e2e`, `make record` | Not built yet; they say so and exit 2. |
+| `make e2e` | Playwright (`web/e2e`): starts its own stack through `scripts/dev.py` (scripted planner, fresh data dir, `ERRAND_DEV=1`, your ports), runs the browser tests and stops it. Installs chromium first. |
+| `make record SCENARIO=S01` | Records the scenario's cassette (`backend/evals/cassettes`) with the real Opus and Haiku and the key in `.env`, on the simulated clock, and prints the cost. `make evals` then replays it offline. |
+| `uv run --project backend errand chat --api http://127.0.0.1:8000` | The terminal client over the same API: numbered quick replies and slots, approve and decline, the agent clock. Needs only uv (no node). |
+| `uv run --frozen --project backend errand-trace stats` | p50 and p95 latency and cost of live planning turns in `data/traces`, and the `live_run_deadline_s` they imply. |
 | `make langfuse-up`, `make langfuse-down` | Optional self-hosted Langfuse on 127.0.0.1:3100 (`infra/langfuse`, about 4 GiB of Docker memory). `make dev` then sends each run's spans there; nothing else needs it. |
 
 Ports come from `ERRAND_WORLD_PORT`, `ERRAND_API_PORT` and `ERRAND_WEB_PORT`. If one is

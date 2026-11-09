@@ -26,11 +26,12 @@ def make(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedP
     )
 
 
-@pytest.mark.parametrize(("target", "milestone"), [("e2e", "M7"), ("record", "M7")])
-def test_unbuilt_targets_fail_loudly(target: str, milestone: str) -> None:
-    result = make(target)
+def test_record_without_a_scenario_says_how_to_use_it() -> None:
+    """`make record` is a real target since M7; with no SCENARIO it stops before it does
+    anything (no key is read, nothing is recorded) and names the variable."""
+    result = make("record")
     assert result.returncode == 2
-    assert f"not built yet, lands in {milestone}" in result.stderr
+    assert "usage: make record SCENARIO=S01" in result.stderr
 
 
 def run_evals_wrapper(

@@ -52,6 +52,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from errand.agent.brief_ops import missing
 from errand.agent.graph import build_graph, run_config
 from errand.agent.state import ThreadState
+from errand.api import dev_routes, web_routes
 from errand.api.runs import (
     Answer,
     ClientMsgIdReused,
@@ -522,6 +523,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         ):
             yield event
 
+    web_routes.register(app)
+    dev_routes.register(app)
     return app
 
 

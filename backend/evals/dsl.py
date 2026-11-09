@@ -414,6 +414,13 @@ PlannerName = Literal[
 ReaderName = Literal["keyword", "blind", "hostile", "skipper", "timeout", "refusal", "max_tokens"]
 
 
+class ReplaySpec(_Strict):
+    """`replay: {cassette: S01}` asks the collector for a second case with the same steps
+    and expectations, served from `evals/cassettes/<cassette>.jsonl` (18.2, 18.6)."""
+
+    cassette: str = Field(pattern=r"^[A-Za-z0-9_]+$")
+
+
 class Scenario(_Strict):
     id: str
     title: str
@@ -427,6 +434,7 @@ class Scenario(_Strict):
     user: UserSpec
     steps: list[Annotated[Step, BeforeValidator(parse_step)]]
     expect: FinalExpect = Field(default_factory=FinalExpect)
+    replay: ReplaySpec | None = None
 
     def world_config(self) -> ScenarioConfig:
         return ScenarioConfig(id=self.id, seed=self.seed, world=self.world, faults=self.faults)
