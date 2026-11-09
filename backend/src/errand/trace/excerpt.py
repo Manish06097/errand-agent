@@ -53,14 +53,14 @@ def _need(found: Record | None, what: str) -> Record:
 
 def timeout_excerpt(records: Sequence[Record]) -> list[str]:
     """The excerpt lines for a booking whose `book` timed out and was then found confirmed."""
-    run_ids: set[str] = set()
+    run_ids: list[str] = []
     for r in records:
         is_book = r.get("type") == "tool.call" and r.get("tool") == "book"
         if is_book and "timeout" in str(r.get("error") or "").lower():
-            run_ids.add(str(r.get("run_id")))
+            run_ids.append(str(r.get("run_id")))
     if not run_ids:
         raise ExcerptError("no timeout-after-success sequence: no `book` call ended in a timeout")
-    run_id = sorted(run_ids)[0]
+    run_id = run_ids[0]
     block = [r for r in records if r.get("run_id") == run_id]
 
     def first(type_: str, **match: Any) -> Record | None:

@@ -30,7 +30,7 @@ Each run writes `data/traces/{thread}/{run}.jsonl`, the trace of record. One Tra
 
 ## Trade-offs
 <!-- budget: 80 words -->
-Most evals run on a planner I scripted, with five real-model replay cassettes and a live smoke instead of an LLM judge: exact and offline, and I say so in the table. SQLite with one writer, not Postgres: one file, simple recovery. LangGraph with one interrupt and the tool loop inside one node, so recovery reads my tables, not graph state. Holds are placed before the click: free, temporary, expiring. Traces are masked on read, never rewritten.
+Most evals run on a planner I scripted, with two real-model replay cassettes (S01, S22) and a few live runs instead of an LLM judge: exact and offline, and I say so in the table. SQLite with one writer, not Postgres: one file, simple recovery. LangGraph with one interrupt and the tool loop inside one node, so recovery reads my tables, not graph state. Holds are placed before the click: free, temporary, expiring. Traces are masked on read, never rewritten.
 
 ## Trace excerpt
 <!-- budget: 40 words -->
