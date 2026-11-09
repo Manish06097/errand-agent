@@ -4,7 +4,8 @@
 - a quote of at least 4 characters that is a substring of the user's message, compared
   with case, whitespace and Unicode normalised, and located so its offsets in the
   original text can be stored (redaction needs them);
-- a standing-preference cue in the quote and no one-off veto (cues.py);
+- a standing-preference cue in the quote and no one-off veto anywhere in the sentence
+  that holds the quote (cues.py; the planner's choice of span is not trusted);
 - the value in the quote.
 
 The value check here is the conservative one: a surface form of the value must appear
@@ -22,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from errand.memory.cues import check_span, normalise
+from errand.memory.cues import check_span, normalise, sentence_around
 from errand.memory.registry import surface_forms
 
 MIN_QUOTE_CHARS = 4
@@ -99,10 +100,13 @@ def check_explicit(
             "quote_not_in_message",
             f"{quote!r} is not in the user's message; quote their own words",
         )
-    cue = check_span(located.quote, key)
+    # the cue must be in the quote; the one-off veto reads the whole sentence around it
+    sentence = sentence_around(message, located.start, located.end)
+    cue = check_span(located.quote, key, veto_text=sentence)
     if cue.veto is not None:
         raise EvidenceRefused(
-            "one_off", f"{located.quote!r} is a one-off ({cue.veto!r}), not a standing preference"
+            "one_off",
+            f"{sentence.strip()!r} is a one-off ({cue.veto!r}), not a standing preference",
         )
     if cue.cue is None:
         raise EvidenceRefused(

@@ -52,9 +52,37 @@ class CueResult:
         return self.cue is not None and self.veto is None
 
 
-def check_span(span: str, key: str) -> CueResult:
-    """The first cue in the span (general cues, then the key's own) and the first veto."""
+def check_span(span: str, key: str, *, veto_text: str | None = None) -> CueResult:
+    """The first cue in the span (general cues, then the key's own) and the first veto.
+
+    The cue is looked for in `span` only. The veto is looked for in `veto_text` when
+    given (the sentence that holds the span), else in the span.
+    """
     text = normalise(span)
     cue = next((c for c in (*GENERAL_CUES, *KEY_CUES.get(key, ())) if _find(c, text)), None)
-    veto = next((v for v in ONE_OFF_MARKERS if _find(v, text)), None)
+    vetoed = normalise(veto_text) if veto_text is not None else text
+    veto = next((v for v in ONE_OFF_MARKERS if _find(v, vetoed)), None)
     return CueResult(cue, veto)
+
+
+# A sentence or clause ends at . ! ? or ; before whitespace or the end, or at a line
+# break. A "." inside "10.30" is not an end.
+_BOUNDARY = re.compile(r"[.!?;]+(?=\s|$)|\n")
+
+
+def sentence_around(message: str, start: int, end: int) -> str:
+    """The sentence(s) of `message` that the span [start, end) touches.
+
+    The veto reads this, not the quote, so a planner cannot get a one-off past the cue
+    check by quoting less ("I prefer after 5 pm" out of "this time I prefer after 5 pm").
+    A span that crosses a boundary takes every sentence it touches.
+    """
+    lo = 0
+    hi = len(message)
+    for found in _BOUNDARY.finditer(message):
+        if found.end() <= start:
+            lo = found.end()
+        elif found.start() >= end:
+            hi = found.start()
+            break
+    return message[lo:hi]
