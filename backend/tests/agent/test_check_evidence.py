@@ -102,3 +102,38 @@ def test_issue_words_must_all_be_in_the_span() -> None:
     assert ok("my kitchen tap", F.ISSUE, "kitchen tap")
     assert not ok("my kitchen tap", F.ISSUE, "bathroom geyser")
     assert not ok("my kitchen tap", F.ISSUE, "kitchen sink leaking")
+
+
+def test_a_day_part_the_patch_sets_needs_a_day_part_word_in_the_spans() -> None:
+    # M8 review: part_of_day is tied to evidence like every other value (10.7)
+    msg = "Find a plumber this week, mornings only, under ₹1,500."
+    quote = "this week, mornings only"
+
+    def part(value: str, span: str = quote) -> bool:
+        return check_evidence(span, msg, F.WINDOW, window("this week", part_of_day=value)).ok
+
+    assert part("morning")
+    assert not part("evening")
+    assert not part("afternoon")
+    assert not part("any")
+    assert not part("evening", "this week")  # the phrase alone says nothing about the day part
+    assert not part("morning", "this week")
+
+
+def test_day_part_words_and_any_time() -> None:
+    for text, value in [
+        ("friday afternoon", "afternoon"),
+        ("friday afternoons", "afternoon"),
+        ("friday evening", "evening"),
+        ("friday, any time", "any"),
+        ("friday anytime", "any"),
+    ]:
+        assert check_evidence(text, text, F.WINDOW, window("friday", part_of_day=value)).ok, text
+    assert not check_evidence(
+        "friday evening", "friday evening", F.WINDOW, window("friday", part_of_day="any")
+    ).ok
+
+
+def test_a_window_without_a_day_part_needs_no_day_part_word() -> None:
+    # the part carried over from the old window is not in the patch, so it is not checked
+    assert ok("Thursday or Friday", F.WINDOW, window())

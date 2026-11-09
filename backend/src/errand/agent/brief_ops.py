@@ -193,7 +193,7 @@ def apply_patch(
             facts[item.name] = None
             continue
         prov = Provenance(source="user_msg", message_id=message_id, evidence=item.quote)
-        fact, error = _fact(item, prov, turn, now, tz)
+        fact, error = _fact(item, prov, turn, now, tz, brief.window)
         if error is not None:
             errors.append(error)
             continue
@@ -204,8 +204,33 @@ def apply_patch(
     return PatchOutcome(brief=merged, applied=True, set_fields=set_fields, cleared_fields=cleared)
 
 
+def carry_over(new: TimeWindowExpr, old: TimeWindowExpr | None) -> TimeWindowExpr:
+    """A window set over an existing one keeps what the new expression leaves unset.
+
+    "Actually Thursday or Friday" after "mornings only" names days and nothing else, so
+    the day part and time bounds the user already gave still hold (7.3, 10.5). Only a
+    sub-field the patch leaves null is filled; "any" is the explicit way to widen the
+    day part, and it needs its own evidence (10.7). The merged expression is what the
+    brief stores, so a chain of corrections keeps carrying.
+    """
+    if old is None:
+        return new
+    return new.model_copy(
+        update={
+            "part_of_day": new.part_of_day if new.part_of_day is not None else old.part_of_day,
+            "not_before": new.not_before if new.not_before is not None else old.not_before,
+            "not_after": new.not_after if new.not_after is not None else old.not_after,
+        }
+    )
+
+
 def _fact(
-    item: FieldValue, prov: Provenance, turn: int, now: datetime, tz: tzinfo
+    item: FieldValue,
+    prov: Provenance,
+    turn: int,
+    now: datetime,
+    tz: tzinfo,
+    current_window: WindowFact | None = None,
 ) -> tuple[ServiceFact | AreaFact | TextFact | WindowFact | BudgetFact | None, str | None]:
     v = item.value
     if item.name is F.SERVICE and isinstance(v, Service):
@@ -223,10 +248,11 @@ def _fact(
             return None, "budget_max_inr must be a positive number of rupees, or none"
         return BudgetFact(value=budget, prov=prov, set_at_turn=turn), None
     if item.name is F.WINDOW and isinstance(v, TimeWindowExpr):
-        resolved = timewin.resolve(v, now, tz)
+        expr = carry_over(v, current_window.expr if current_window else None)
+        resolved = timewin.resolve(expr, now, tz)
         if isinstance(resolved, timewin.Unresolved):
             return None, f"window: {resolved.reason}; ask the user for the days they want"
-        return WindowFact(value=resolved, expr=v, prov=prov, set_at_turn=turn), None
+        return WindowFact(value=resolved, expr=expr, prov=prov, set_at_turn=turn), None
     return None, f"{item.name.value}: value of the wrong type"
 
 

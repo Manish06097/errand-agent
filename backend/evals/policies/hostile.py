@@ -439,6 +439,44 @@ def no_evidence_policy(request: ScriptedRequest) -> AIMessage:
     return tool_calls(request, "Search.", ("search_providers", {}))
 
 
+def no_day_part_policy(request: ScriptedRequest) -> AIMessage:
+    """NoDayPartEvidencePolicy (S60c): moves the user's day part with no words behind it.
+
+    After the honest patch ("this week, mornings only") it sets the window to the same
+    phrase with `part_of_day: evening`, quoting only "this week". The phrase is in the
+    message, so the span rule passes; no day-part word is in the span, so the value rule
+    (10.7) must refuse it and the window must stay mornings.
+    """
+    view = read(request)
+    step = len(view.loop)
+    if view.shortlist_current or step > 2:
+        return reference.policy(request)
+    if step == 0:
+        patch = extract(view.current, view)
+        if not patch.values:
+            return reference.policy(request)
+        return tool_calls(request, "Fill the brief.", ("update_brief", update_brief_args(patch)))
+    if step == 1:
+        args = {
+            "set": {
+                "service": None,
+                "issue": None,
+                "area": None,
+                "window": {
+                    "phrase": "this week",
+                    "part_of_day": "evening",
+                    "not_before": None,
+                    "not_after": None,
+                },
+                "budget_max_inr": None,
+            },
+            "clear": [],
+            "evidence": [{"field": "window", "quote": "this week"}],
+        }
+        return tool_calls(request, "Evenings suit them better.", ("update_brief", args))
+    return tool_calls(request, "Search.", ("search_providers", {}))
+
+
 def reask_policy(request: ScriptedRequest) -> AIMessage:
     """ReaskPolicy (S03b): competent, except that after recording what the user said it
     asks again for a field the user gave an earlier turn. The ask guard refuses ("already

@@ -37,7 +37,7 @@ from evals.policies.common import TurnView, answer, read, tool_calls
 SERVICE_ALIASES = product_aliases.SERVICE_ALIASES
 AREA_ALIASES = product_aliases.AREA_ALIASES
 _PHRASE = re.compile(r"\b(today|tomorrow|this week|next week)\b", re.I)
-_PART = re.compile(r"\b(morning|afternoon|evening)s?\b", re.I)
+_PART = re.compile(r"\b(morning|afternoon|evening)s?\b|\bany ?time\b", re.I)
 _DAY = r"(?:mon|tue|wed|thu|fri|sat|sun)(?:day|sday|nesday|rsday|urday)?"
 # Day phrases the full resolver knows (M8): weekends, this/next <weekday>, a weekday or a
 # list of them. Tried before the plain phrases, so "this week" never shadows "this weekend".
@@ -123,7 +123,7 @@ def window_value(text: str) -> tuple[dict[str, Any], str] | None:
     spans = [m for m in (day, part, before, after) if m is not None]
     window: dict[str, Any] = {
         "phrase": day.group(0).lower(),
-        "part_of_day": part.group(1).lower() if part else None,
+        "part_of_day": ((part.group(1) or "any").lower() if part else None),
         "not_before": hhmm(before.group(1)) if before else None,
         "not_after": hhmm(after.group(1)) if after else None,
     }
