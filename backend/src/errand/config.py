@@ -56,6 +56,10 @@ class LimitSettings(BaseSettings):
     # Per-run cost cap (15.1). M10 applies it to the quarantined reader only: a reader
     # call is skipped once the run has spent this much. M13 applies it to the planner.
     run_cost_cap_usd: float = 0.40
+    # The wall clock per run when the planner is the real model (15.1): ceil(2 x p95 of a
+    # planning turn) from the M7 live runs. Applied in live and record modes only; evals
+    # keep run_deadline_s. M13 owns the enforcement.
+    live_run_deadline_s: float = Field(default=60.0, gt=0)
 
 
 class ReaderSettings(BaseSettings):

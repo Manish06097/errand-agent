@@ -176,8 +176,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     show_p.add_argument(
         "--data-dir", type=Path, default=None, help="default: ERRAND_DATA_DIR or ./data"
     )
+    stats_p = sub.add_parser("stats", help="p50 and p95 latency and cost of planning turns")
+    stats_p.add_argument("--data-dir", type=Path, default=None)
+    stats_p.add_argument("--mode", default="live", help="live (default: live and record), or all")
     args = parser.parse_args(argv)
     data_dir = args.data_dir or PathSettings().data_dir
+    if args.command == "stats":
+        from errand.trace.stats import run as run_stats
+
+        return run_stats(data_dir, args.mode)
     if args.command == "show":
         return show(args.target, data_dir)
     parser.error(f"unknown command {args.command}")  # pragma: no cover - argparse exits first

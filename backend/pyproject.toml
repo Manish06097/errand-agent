@@ -26,6 +26,7 @@ dependencies = [
 errand-api = "errand.api.app:main"
 errand-world = "errand.world.server:main"
 errand-trace = "errand.trace.cli:main"
+errand = "errand.cli.chat:main"
 
 [dependency-groups]
 dev = [
@@ -109,6 +110,7 @@ addopts = "-ra --strict-markers"
 empty_parameter_set_mark = "fail_at_collect"
 markers = [
   "live: calls the real Claude API; skipped unless ERRAND_LIVE=1",
+  "slow: starts a subprocess or a real server, or shells out to make or git; runs in the second pytest step of make check, on its own xdist workers",
 ]
 
 [tool.importlinter]
