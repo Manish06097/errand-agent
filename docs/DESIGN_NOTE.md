@@ -22,6 +22,8 @@ Consuming an approval writes an intent and an attempt with a derived key before 
 ## Memory
 <!-- budget: 80 words -->
 
+One typed row per fact, keys fixed in a code registry. A row is explicit only when code finds a standing-preference cue in the user's own quoted words; inferred rows come from two rules over bookings and wait for Keep. Forget is one transaction that overwrites the value in every message, nulls it, and writes HMAC hashes; the mask and the trace reader use them on read. Bookings stay. Each request is rebuilt from eligible rows only.
+
 ## Observability
 <!-- budget: 70 words -->
 Each run writes `data/traces/{thread}/{run}.jsonl`, the trace of record. One Tracer assigns sequence and span ids, sanitizes once (review text hashed, phones, addresses and keys masked, thinking reduced to summary and signature hash), validates schema v1 and fans the same line to every sink. Each `model.call` carries the request hash, usage split and cost; `run.end` totals are summed from those records. Langfuse, off by default, mirrors it live with our costs.

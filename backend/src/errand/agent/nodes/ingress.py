@@ -29,6 +29,7 @@ from langgraph.runtime import Runtime
 
 from errand.agent import recovery
 from errand.agent.deps import RunDeps
+from errand.agent.memory_fill import apply_memory
 from errand.agent.records import live_approval
 from errand.agent.state import ThreadState
 from errand.agent.transitions import INITIAL_PHASE, transition
@@ -54,6 +55,7 @@ RECHECK_ACTIONS = frozenset({"check_now"})
 async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, Any]:
     deps = runtime.context
     errand = state.errand
+    fresh = errand is None or errand.phase in TERMINAL
     if errand is None or errand.phase in TERMINAL:
         errand = Errand(
             errand_id=errand_id_for(deps.run_id),
@@ -72,6 +74,9 @@ async def ingress(state: ThreadState, runtime: Runtime[RunDeps]) -> dict[str, An
             "card_changes": [],
             "followup": None,
         }
+        # Memory first (gate 2 decisions 10 and 17): clear what was forgotten, pre-fill the area.
+        turn = getattr(state.inbound, "turn_no", None) or 0
+        errand = await apply_memory(deps, errand, fresh=fresh, turn=turn)
         live = await live_approval(deps)
         inbound = state.inbound
         rechecks = isinstance(inbound, Recover) or (

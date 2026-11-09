@@ -1,0 +1,26 @@
+id: S43_fifty_thousand_character_paste
+title: A 50,000-character paste is refused as too long, the user is told, and no model call is sent
+category: [context budget]
+seed: 43
+user:
+  persona: cooperative
+  goal:
+    service: plumber
+    area: Indiranagar
+    window: this week mornings
+    budget_max_inr: "1500"
+steps:
+  # 58 characters x 900 = 52,200 characters
+  - say: "My kitchen tap drips all night and the washer looks worn. "
+    repeat: 900
+  - expect_outcome: CONTEXT_TOO_LARGE
+  - expect_no_card: {}
+  - expect_trace: {model.call: 0}
+  - expect_world: {search_providers: 0}
+  # the thread is not stuck: a normal message afterwards is handled
+  - say: "Find a plumber for my kitchen tap this week, mornings only, under ₹1,500."
+    gives: [service, issue, window, budget_max_inr]
+  - expect_outcome: ASKED_USER
+  - expect_question_for: [area]
+expect:
+  invariants: [default]

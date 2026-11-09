@@ -13,6 +13,8 @@ from typing import Any
 
 import aiosqlite
 
+from errand.memory.briefjson import scrub_brief_json
+
 _COLUMNS = (
     "booking_id, user_id, provider_id, service, slot_start, slot_end, status, last_seen_at, "
     "origin_conversation_id, origin_brief_json, source_intent_id"
@@ -43,6 +45,16 @@ class KnownBookingsRepo:
         self._conn = conn
 
     async def upsert(self, b: KnownBooking) -> None:
+        # A stale checkpoint must never write a forgotten value back into agent.sqlite
+        # (gate 2 decision 10): the brief goes in without fields whose memory is not
+        # eligible. Done here, at the repo, so verify.py is untouched.
+        origin = b.origin_brief_json
+        if origin is not None:
+            async with self._conn.execute(
+                "SELECT memory_id FROM memories_eligible WHERE user_id = ?", (b.user_id,)
+            ) as cur:
+                eligible = {r[0] for r in await cur.fetchall()}
+            origin, _ = scrub_brief_json(origin, eligible)
         await self._conn.execute(
             f"INSERT INTO known_bookings ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(booking_id) DO UPDATE SET status = excluded.status, "
@@ -67,7 +79,7 @@ class KnownBookingsRepo:
                 b.status,
                 b.last_seen_at,
                 b.origin_conversation_id,
-                b.origin_brief_json,
+                origin,
                 b.source_intent_id,
             ),
         )
