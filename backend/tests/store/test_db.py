@@ -28,6 +28,7 @@ TABLES_4_1 = {
     "memories",
     "memory_events",
     "memory_blocklist",
+    "memory_surface_hashes",
     "notifications",
     "followup_jobs",
     "pending_resumes",
@@ -54,7 +55,8 @@ async def _rows(conn: aiosqlite.Connection, sql: str, *params: Any) -> list[tupl
 async def test_fresh_migrate_creates_every_table_and_a_rerun_is_a_no_op(tmp_path: Path) -> None:
     path = tmp_path / "agent.sqlite"
     conn = await connect(path)
-    assert await migrate(conn) == [m.version for m in load_migrations()] == [1, 2, 3]
+    versions = [m.version for m in load_migrations()]
+    assert await migrate(conn) == versions == list(range(1, len(versions) + 1))
     names = {r[0] for r in await _rows(conn, "SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert names == TABLES_4_1
     views = await _rows(conn, "SELECT name FROM sqlite_master WHERE type = 'view'")
@@ -65,7 +67,7 @@ async def test_fresh_migrate_creates_every_table_and_a_rerun_is_a_no_op(tmp_path
 
     again = await open_agent_db(path)
     assert await migrate(again) == []
-    assert await _rows(again, "SELECT version FROM schema_version") == [(1,), (2,), (3,)]
+    assert await _rows(again, "SELECT version FROM schema_version") == [(v,) for v in versions]
     assert (
         await _rows(again, "SELECT type, name, sql FROM sqlite_master ORDER BY name")
         == schema_before
@@ -77,7 +79,7 @@ async def test_two_processes_migrating_at_once_apply_each_migration_once(tmp_pat
     path = tmp_path / "agent.sqlite"
     a, b = await connect(path), await connect(path)
     results = await asyncio.gather(migrate(a), migrate(b))
-    assert sorted(results) == [[], [1, 2, 3]]
+    assert sorted(results) == [[], [m.version for m in load_migrations()]]
     await a.close()
     await b.close()
 
@@ -268,10 +270,14 @@ async def test_transaction_immediate_commits_rolls_back_and_does_not_nest(
     db: aiosqlite.Connection,
 ) -> None:
     async with transaction_immediate(db):
-        await db.execute("INSERT INTO users VALUES ('u1', 'Asia/Kolkata', 'One')")
+        await db.execute(
+            "INSERT INTO users (user_id, tz, display_name) VALUES ('u1', 'Asia/Kolkata', 'One')"
+        )
     with pytest.raises(ZeroDivisionError):
         async with transaction_immediate(db):
-            await db.execute("INSERT INTO users VALUES ('u2', 'Asia/Kolkata', 'Two')")
+            await db.execute(
+                "INSERT INTO users (user_id, tz, display_name) VALUES ('u2', 'Asia/Kolkata', 'Two')"
+            )
             raise ZeroDivisionError
     assert await _rows(db, "SELECT user_id FROM users") == [("u1",)]
     assert not db.in_transaction
