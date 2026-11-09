@@ -14,6 +14,12 @@ called before anything is reported, even after a clean `cancelled` answer:
   and that is why this reads the list instead of trusting the error. A provider that
   said `cancelled` while the list still shows `confirmed` is a contradiction: the intent
   is `needs_attention`, never claimed;
+- the attempt is still `prepared` (the process died after the intent was written and
+  before anything was sent) and the list shows the old state: nothing reached the
+  provider, so the change is sent once, with the attempt's own key, as a booking is
+  (9.4 step 6, S36, S36b). The `in_flight` move is committed before the call, the token
+  comes back from the consumed approval (`token_for_consumed`, which works after a
+  restart), and verification then reads the list as for any send;
 - `list_bookings` unavailable, or the booking missing from it: `needs_attention` with
   PENDING_VERIFICATION, re-checked by the reconciler.
 
@@ -26,9 +32,11 @@ import json
 from datetime import datetime
 from typing import Any
 
+from errand.agent.changes.execute import ExecuteChange
 from errand.agent.deps import RunDeps
 from errand.agent.state import ThreadState
 from errand.agent.transitions import transition
+from errand.approvals import service
 from errand.approvals.fingerprint import parse_material
 from errand.clock import to_ms
 from errand.domain.errand import Errand, Phase
@@ -80,18 +88,24 @@ class _VerifyChange:
         self.errand = transition(self.errand, to, reason, self.deps.tracer)
 
     async def run(self) -> StepResult:
-        deps = self.deps
         called = self.called
+        self._move(
+            Phase.VERIFYING, "change_called" if called.answer == "confirmed" else "change_unknown"
+        )
+        return await self._check()
+
+    async def _check(self) -> StepResult:
+        """Read the list and judge the attempt; a `prepared` attempt that shows the old
+        state is sent once and then checked again."""
+        deps = self.deps
         async with deps.db.session() as repos:
-            attempt = await repos.intents.get_attempt(called.attempt_id)
-            intent = await repos.intents.get(called.intent_id)
+            attempt = await repos.intents.get_attempt(self.called.attempt_id)
+            intent = await repos.intents.get(self.called.intent_id)
         assert attempt is not None and intent is not None
         material = parse_material(intent.material_json)
         assert isinstance(material, CancelMaterial | RescheduleMaterial)
         action = material.action
-        self._move(
-            Phase.VERIFYING, "change_called" if called.answer == "confirmed" else "change_unknown"
-        )
+        called = self.called
         listed = await self._list()
         if listed is None:
             return await self._unresolved(attempt, intent, "status_not_confirmed", "")
@@ -116,7 +130,9 @@ class _VerifyChange:
             decision={
                 "applied": "report_success",
                 "by_provider": "report_success",
-                "not_applied": "report_not_applied",
+                "not_applied": "send_prepared"
+                if attempt.state == "prepared"
+                else "report_not_applied",
                 "provider_cancelled": "report_not_applied",
             }.get(outcome, "escalate"),
         )
@@ -127,6 +143,12 @@ class _VerifyChange:
         if outcome == "provider_cancelled":
             return await self._failed(attempt, intent, "provider_cancelled", action)
         if outcome == "not_applied":
+            if attempt.state == "prepared":
+                sent = await self._send_prepared(attempt, intent, material)
+                if isinstance(sent, BookCalled):
+                    self.called = sent
+                    return await self._check()
+                return sent
             if called.answer == "confirmed":
                 # The provider said it was done and its own list disagrees.
                 return await self._unresolved(
@@ -137,6 +159,45 @@ class _VerifyChange:
                 )
             return await self._failed(attempt, intent, "still_confirmed", action)
         return await self._failed(attempt, intent, "booking_changed", action)
+
+    async def _send_prepared(
+        self, attempt: AttemptRow, intent: IntentRow, material: CancelMaterial | RescheduleMaterial
+    ) -> BookCalled | StepResult:
+        """A `prepared` attempt is provably unsent (the `in_flight` commit comes before
+        the call) and the list shows the old state, so this is its first send, not a
+        retry. Same write-ahead and the same send path as `execute` (a cancel keeps its
+        503 retries)."""
+        deps = self.deps
+        async with deps.db.transaction() as repos:
+            moved = await repos.intents.move_attempt(
+                attempt.attempt_id,
+                frm=("prepared",),
+                to="in_flight",
+                fence_epoch=attempt.fence_epoch,
+                now_ms=to_ms(deps.clock.now()),
+                add_calls=1,
+            )
+            sent_row = await repos.intents.get_attempt(attempt.attempt_id)
+        if not moved or sent_row is None:
+            return await self._unresolved(attempt, intent, "fenced_off", "")
+        deps.tracer.emit(
+            "intent.in_flight",
+            intent_id=intent.intent_id,
+            attempt=attempt.n,
+            idempotency_key=attempt.idempotency_key,
+            state="in_flight",
+        )
+        token = await service.token_for_consumed(
+            deps.db, approval_id=self.called.approval_id, intent_id=intent.intent_id
+        )
+        if token is None:
+            return await self._unresolved(
+                sent_row, intent, "status_unavailable", "no consumed approval"
+            )
+        sender = ExecuteChange(deps, self.errand, self.called.approval_id)
+        sent = await sender.send(token, intent, sent_row, material, attempt.fence_epoch)
+        self.errand = sender.errand
+        return sent
 
     async def _list(self) -> ListBookingsOut | None:
         try:

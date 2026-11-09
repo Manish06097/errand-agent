@@ -285,17 +285,20 @@ def cancel_card(
     )
 
 
-def cancelled_card(card: ActionCard, booking_id: str, *, by_provider: bool = False) -> OutcomeCard:
+def cancelled_card(
+    card: ActionCard, booking_id: str, *, by_provider: bool = False, after_restart: bool = False
+) -> OutcomeCard:
+    suffix = " I checked after a restart." if after_restart else ""
     if by_provider:
         text = (
             f"{card.provider_name} had already cancelled {booking_id} ({card.slot_label}), "
-            "so there was nothing for me to cancel."
+            f"so there was nothing for me to cancel.{suffix}"
         )
         title = f"Already cancelled by the provider: {card.provider_name}"
     else:
         text = (
             f"Cancelled {card.provider_name} for {card.slot_label} ({booking_id}). "
-            "Confirmed with the provider."
+            f"Confirmed with the provider.{suffix}"
         )
         title = f"Cancelled: {card.provider_name}"
     return OutcomeCard(
@@ -313,14 +316,17 @@ def cancelled_card(card: ActionCard, booking_id: str, *, by_provider: bool = Fal
     )
 
 
-def rescheduled_card(card: ActionCard, booking_id: str) -> OutcomeCard:
+def rescheduled_card(
+    card: ActionCard, booking_id: str, *, after_restart: bool = False
+) -> OutcomeCard:
+    suffix = " I checked after a restart." if after_restart else ""
     return OutcomeCard(
         outcome=RunOutcome.RESCHEDULED_VERIFIED,
         verified=True,
         title=f"Moved: {card.provider_name}",
         text=(
             f"Moved {card.provider_name} to {card.slot_label} ({booking_id}). "
-            "Confirmed with the provider."
+            f"Confirmed with the provider.{suffix}"
         ),
         lines=[
             MaterialLine(label="Booking", value=booking_id),

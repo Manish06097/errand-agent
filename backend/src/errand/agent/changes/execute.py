@@ -87,7 +87,7 @@ async def action_of(deps: RunDeps, approval_id: str) -> str:
 async def run_node(deps: RunDeps, state: ThreadState) -> dict[str, Any]:
     assert state.errand is not None and isinstance(state.inbound, ApprovalGranted)
     with deps.tracer.node("execute", phase_before=state.errand.phase.value) as span:
-        ex = _ExecuteChange(deps, state.errand, state.inbound.approval_id)
+        ex = ExecuteChange(deps, state.errand, state.inbound.approval_id)
         try:
             result = await ex.run()
         finally:
@@ -128,7 +128,7 @@ def subject_of(material: Material) -> str:
     return f"{material.booking_id}|{datetime.fromisoformat(material.to_start).isoformat()}"
 
 
-class _ExecuteChange:
+class ExecuteChange:
     def __init__(self, deps: RunDeps, errand: Errand, approval_id: str) -> None:
         self.deps = deps
         self.errand = errand
@@ -279,9 +279,9 @@ class _ExecuteChange:
             idempotency_key=attempt.idempotency_key,
             state="in_flight",
         )
-        return await self._send(token, intent_row, attempt, approved, held.epoch)
+        return await self.send(token, intent_row, attempt, approved, held.epoch)
 
-    async def _send(
+    async def send(
         self,
         token: service.ApprovalToken,
         intent: IntentRow,
@@ -289,7 +289,8 @@ class _ExecuteChange:
         approved: Material,
         epoch: int,
     ) -> StepResult:
-        """The call(s) of attempt 1, then the classification."""
+        """The call(s) of attempt 1, then the classification. `verify` calls it too, for a
+        `prepared` attempt found after a restart (S36b)."""
         deps = self.deps
         client = ConsequentialClient(deps.tools)
         answer: CancelOut | CancelError | RescheduleOut | RescheduleError | None = None
@@ -362,7 +363,7 @@ class _ExecuteChange:
                 )
                 await repos.intents.resolve_intent(
                     intent.intent_id,
-                    frm=("open",),
+                    frm=("open", "needs_attention"),
                     to="failed",
                     result_json=json.dumps({"error": answer.error}),
                     now_ms=now_ms,

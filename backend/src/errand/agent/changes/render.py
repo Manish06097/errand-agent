@@ -39,16 +39,25 @@ _FAILED_TEXT = {
 }
 
 
-async def render_changed(deps: RunDeps, result: Changed) -> tuple[RunOutcome, list[MessageBody]]:
+async def render_changed(
+    deps: RunDeps, result: Changed, *, after_restart: bool = False
+) -> tuple[RunOutcome, list[MessageBody]]:
     async with deps.db.session() as repos:
         row = await repos.approvals.get(result.approval_id)
     assert row is not None
     card = ActionCard.model_validate_json(row.card_json)
     if result.action == "cancel":
         return RunOutcome.CANCELLED_VERIFIED, [
-            cards.cancelled_card(card, result.booking_id, by_provider=result.by_provider)
+            cards.cancelled_card(
+                card,
+                result.booking_id,
+                by_provider=result.by_provider,
+                after_restart=after_restart,
+            )
         ]
-    return RunOutcome.RESCHEDULED_VERIFIED, [cards.rescheduled_card(card, result.booking_id)]
+    return RunOutcome.RESCHEDULED_VERIFIED, [
+        cards.rescheduled_card(card, result.booking_id, after_restart=after_restart)
+    ]
 
 
 def render_failed(result: ChangeFailed) -> tuple[RunOutcome, list[MessageBody]]:

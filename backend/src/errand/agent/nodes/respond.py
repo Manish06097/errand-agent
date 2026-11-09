@@ -320,7 +320,12 @@ class _Respond:
                 )
             ]
         if isinstance(result, Changed):
-            return await changes_render.render_changed(self.deps, result)
+            inbound = self.state.inbound
+            return await changes_render.render_changed(
+                self.deps,
+                result,
+                after_restart=isinstance(inbound, Recover) and inbound.after_restart,
+            )
         if isinstance(result, ChangeFailed):
             return changes_render.render_failed(result)
         if isinstance(result, Booked):
