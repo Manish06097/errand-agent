@@ -19,8 +19,9 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
+from errand.config import LimitSettings
 from errand.domain.brief import BriefField
 from errand.domain.outcomes import RunOutcome
 from errand.world.scenario import FaultsConfig, ScenarioConfig, WorldConfig
@@ -309,6 +310,26 @@ class ExpectBrief(_Strict):
     expect_brief: BriefSpec
 
 
+class ExpectLimit(_Strict):
+    """The cap that ended the last run, as `run.end` names it (N3)."""
+
+    expect_limit: Literal["model_calls", "iterations", "tool_calls", "deadline"]
+
+
+class MarkerSpec(_Strict):
+    # strings that must appear in no planner request of the scenario
+    markers: list[str] = Field(min_length=1)
+    # tools whose results the planner must never have been given back
+    no_tool_result_for: list[str] = Field(default_factory=list)
+
+
+class ExpectNotInRequests(_Strict):
+    """Nothing from a malformed tool answer reached the model (S63): its marker is in no
+    model.call request, and no tool_result exists for the call that got it."""
+
+    expect_not_in_requests: MarkerSpec
+
+
 STEP_TYPES: dict[str, type[_Strict]] = {
     "say": Say,
     "answer": Answer,
@@ -339,6 +360,8 @@ STEP_TYPES: dict[str, type[_Strict]] = {
     "expect_planner": ExpectPlanner,
     "expect_no_side_effects": ExpectNoSideEffects,
     "expect_brief": ExpectBrief,
+    "expect_limit": ExpectLimit,
+    "expect_not_in_requests": ExpectNotInRequests,
 }
 
 Step = (
@@ -371,6 +394,8 @@ Step = (
     | ExpectPlanner
     | ExpectNoSideEffects
     | ExpectBrief
+    | ExpectLimit
+    | ExpectNotInRequests
 )
 
 
@@ -400,6 +425,8 @@ class UserSpec(_Strict):
 
 class FinalExpect(_Strict):
     invariants: list[str] = Field(default_factory=lambda: ["default"])
+    # The scenario must finish within this much real time (S45: no hang).
+    max_real_s: float | None = Field(default=None, gt=0)
 
 
 PlannerName = Literal[
@@ -410,6 +437,8 @@ PlannerName = Literal[
     "hostile:false_claim",
     "hostile:paraphrase_claim",
     "hostile:cross_service_cite",
+    "hostile:loop_forever",
+    "hostile:loop_forever_x3",
 ]
 ReaderName = Literal["keyword", "blind", "hostile", "skipper", "timeout", "refusal", "max_tokens"]
 
@@ -424,9 +453,26 @@ class Scenario(_Strict):
     reader: ReaderName = "keyword"
     world: WorldConfig = Field(default_factory=WorldConfig)
     faults: FaultsConfig = Field(default_factory=FaultsConfig)
+    # LimitSettings fields only (strict): overrides for this scenario, to prove each cap binds.
+    limits: dict[str, float | int] = Field(default_factory=dict)
     user: UserSpec
     steps: list[Annotated[Step, BeforeValidator(parse_step)]]
     expect: FinalExpect = Field(default_factory=FinalExpect)
+
+    @field_validator("limits")
+    @classmethod
+    def _limits_are_settings(cls, value: dict[str, float | int]) -> dict[str, float | int]:
+        unknown = sorted(set(value) - set(LimitSettings.model_fields))
+        if unknown:
+            raise ValueError(
+                f"limits: {unknown} are not LimitSettings fields "
+                f"(known: {sorted(LimitSettings.model_fields)})"
+            )
+        LimitSettings(**value)  # type: ignore[arg-type]
+        return value
+
+    def limit_settings(self) -> LimitSettings:
+        return LimitSettings(**self.limits)  # type: ignore[arg-type]
 
     def world_config(self) -> ScenarioConfig:
         return ScenarioConfig(id=self.id, seed=self.seed, world=self.world, faults=self.faults)

@@ -57,6 +57,27 @@ class LimitSettings(BaseSettings):
     # Per-run cost cap (15.1). M10 applies it to the quarantined reader only: a reader
     # call is skipped once the run has spent this much. M13 applies it to the planner.
     run_cost_cap_usd: float = 0.40
+    # Caps INV-09 checks (15.1). Reprompts are enforced in plan, replans in routing and
+    # status checks in verify; they are listed here so the run records one set of limits.
+    reprompts_per_run: int = 1
+    replans_per_run: int = 1
+    status_checks_per_run: int = 4
+    # What an open intent may run past the deadline: execute, verify and respond finish.
+    critical_grace_s: float = 20.0
+
+    def recorded(self) -> dict[str, float | int]:
+        """The limits as run.start records them for INV-09."""
+        return {
+            "model_calls": self.model_calls_per_run,
+            "iterations": self.loop_iterations,
+            "tool_calls": self.tool_calls_per_run,
+            "deadline_s": self.run_deadline_s,
+            "backstop_s": self.run_backstop_s,
+            "reprompts": self.reprompts_per_run,
+            "replans": self.replans_per_run,
+            "status_checks": self.status_checks_per_run,
+            "critical_grace_s": self.critical_grace_s,
+        }
 
 
 class ReaderSettings(BaseSettings):

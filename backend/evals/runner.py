@@ -23,6 +23,7 @@ import json
 import os
 import shutil
 import sqlite3
+import time
 from collections import Counter
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -56,9 +57,11 @@ from evals.dsl import (
     ExpectBooking,
     ExpectBrief,
     ExpectCard,
+    ExpectLimit,
     ExpectNoCard,
     ExpectNoSideEffects,
     ExpectNotice,
+    ExpectNotInRequests,
     ExpectOutcome,
     ExpectPlanner,
     ExpectQuestionFor,
@@ -80,6 +83,7 @@ from evals.dsl import (
     Until,
 )
 from evals.policies import hostile, reference
+from evals.policies import limits as limits_policies
 from evals.policies import reader as reader_doubles
 from evals.simuser import SimUser, SimUserFailure
 
@@ -100,6 +104,8 @@ PLANNERS: dict[str, Policy] = {
     "hostile:false_claim": hostile.false_claim_policy,
     "hostile:paraphrase_claim": hostile.paraphrase_claim_policy,
     "hostile:cross_service_cite": hostile.cross_service_cite_policy,
+    "hostile:loop_forever": limits_policies.loop_forever_policy,
+    "hostile:loop_forever_x3": limits_policies.loop_forever_x3_policy,
 }
 SIDE_EFFECT_OPS = ("hold_slot", "book", "cancel", "reschedule")
 
@@ -500,6 +506,16 @@ def describe(step: Step) -> str | None:
         bits = [f"v{brief.version}"] if brief.version is not None else []
         bits += [f"{k.value}={v}" for k, v in brief.values.items()]
         return "brief " + ", ".join(bits)
+    if isinstance(step, ExpectLimit):
+        return f"run.end names the {step.expect_limit} cap"
+    if isinstance(step, ExpectNotInRequests):
+        marker_spec = step.expect_not_in_requests
+        extra = (
+            f", no tool_result for {', '.join(marker_spec.no_tool_result_for)}"
+            if marker_spec.no_tool_result_for
+            else ""
+        )
+        return f"nothing of the malformed answer in any model request{extra}"
     return None
 
 
@@ -992,6 +1008,10 @@ class Runner:
             )
         elif isinstance(step, ExpectBrief):
             await self._expect_brief(step)
+        elif isinstance(step, ExpectLimit):
+            await self._expect_limit(step)
+        elif isinstance(step, ExpectNotInRequests):
+            await self._expect_not_in_requests(step)
         else:  # pragma: no cover - the DSL admits nothing else
             raise AssertionError(f"no runner for {step!r}")
 
@@ -1136,6 +1156,36 @@ class Runner:
             statuses = self.h.agent_db_approval_statuses()
             self.expect(statuses == ["pending"], f"approval rows {statuses}, want one pending")
 
+    async def _expect_limit(self, step: ExpectLimit) -> None:
+        rec = await self.h.records()
+        ends = [r for r in rec.traces[self.last.run_id] if r["type"] == "run.end"]
+        named = ends[-1].get("limit") if ends else None
+        self.expect(
+            named == step.expect_limit, f"run.end names limit {named!r}, wanted {step.expect_limit}"
+        )
+
+    async def _expect_not_in_requests(self, step: ExpectNotInRequests) -> None:
+        spec = step.expect_not_in_requests
+        rec = await self.h.records()
+        calls = [r for r in rec.all_records() if r["type"] == "model.call"]
+        self.expect(bool(calls), "no model.call records: the check would pass vacuously")
+        for call in calls:
+            hay = json.dumps(call["request"], ensure_ascii=False)
+            for marker in spec.markers:
+                self.expect(marker not in hay, f"marker {marker!r} reached a model request")
+        asked: set[str] = set()
+        for call in calls:
+            for tc in call["response"]["tool_calls"]:
+                if tc["name"] in spec.no_tool_result_for and tc.get("id"):
+                    asked.add(str(tc["id"]))
+        for call in calls:
+            hay = json.dumps(call["request"], ensure_ascii=False)
+            for tool_id in sorted(asked):
+                self.expect(
+                    f'"tool_use_id": "{tool_id}"' not in hay,
+                    f"the planner was given a tool_result for {tool_id}",
+                )
+
     async def _expect_brief(self, step: ExpectBrief) -> None:
         spec = step.expect_brief
         state = (await self.h.conversation())["state"] or {}
@@ -1252,14 +1302,21 @@ async def run_scenario(
     failures: list[str] = []
     planner = policy or PLANNERS[scenario.model]
     reader = reader_doubles.READERS[scenario.reader]
-    async with harness(root, scenario.world_config(), planner, reader=reader) as h:
+    async with harness(
+        root, scenario.world_config(), planner, reader=reader, limits=scenario.limit_settings()
+    ) as h:
         runner = Runner(scenario, h, planner)
+        started = time.monotonic()
         try:
             await runner.run()
         except SimUserFailure as exc:
             failures.append(f"simulated user: {exc}")
         except AssertionError as exc:
             failures.append(str(exc))
+        took = time.monotonic() - started
+        cap = scenario.expect.max_real_s
+        if cap is not None and took > cap:
+            failures.append(f"the scenario took {took:.1f} s of real time, over {cap:g} s")
         records = await h.records()
         op_log = records.op_log
     if on_records is not None:

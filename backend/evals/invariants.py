@@ -43,6 +43,7 @@ from errand.domain.material import BookMaterial, ist_seconds
 from errand.domain.outcomes import RunOutcome
 from errand.trace.reader import read_trace
 from errand.world.contracts import Service
+from evals.invariants_limits import inv09_counters_within_limits
 
 CONSEQUENTIAL = frozenset({"book", "cancel", "reschedule", "hold_slot", "get_booking_status"})
 
@@ -1004,6 +1005,7 @@ INVARIANTS: dict[str, Callable[[Records], Violations]] = {
     "INV-04": inv04_success_only_after_the_source_of_truth,
     "INV-07": inv07_one_end_per_run,
     "INV-08": inv08_transitions_allowed,
+    "INV-09": inv09_counters_within_limits,
     "INV-10": inv10_no_review_text_in_planner_requests,
     "INV-11": inv11_no_consequential_tool_listed,
     "INV-12": inv12_material_change_invalidates,

@@ -61,7 +61,7 @@ from errand.domain.inbound import (
     UserMessage,
 )
 from errand.domain.messages import OutcomeNotice
-from errand.domain.outcomes import RunOutcome
+from errand.domain.outcomes import Limit, RunOutcome
 from errand.ids import IdFactory, message_id_for, message_id_for_user
 from errand.llm.gateway import LLMGateway
 from errand.quarantine.reader import ReviewReader
@@ -610,6 +610,7 @@ class RunManager:
         )
         outcome: RunOutcome = RunOutcome.INTERNAL_ERROR
         parked: str | None = None
+        limit: str | None = None
         cancelled = False
         try:
             tracer.start_run(
@@ -617,6 +618,7 @@ class RunManager:
                 inbound_type=run.inbound.type,
                 user_message_id=run.user_message_id,
                 routed_as=run.routed_as,
+                limits=self.limits.recorded(),
                 **(run.client or {}),
             )
             backstop = asyncio.timeout(self.limits.run_backstop_s)
@@ -627,6 +629,8 @@ class RunManager:
                 raise RuntimeError("the run ended without an outcome")
             outcome = final.state.outcome
             parked = final.parked_on
+            if final.state.result is None and isinstance(final.state.plan_result, Limit):
+                limit = final.state.plan_result.limit
         except BaseException as exc:
             cancelled = isinstance(exc, asyncio.CancelledError)
             outcome = RunOutcome.INTERNAL_ERROR
@@ -642,7 +646,7 @@ class RunManager:
                 body = wall_clock_exceeded("", "")
             await self._fail(run, tracer, exc, body)
         finally:
-            await self._finish(run, tracer, outcome, parked)
+            await self._finish(run, tracer, outcome, parked, limit)
         if cancelled:
             raise asyncio.CancelledError()
 
@@ -745,7 +749,12 @@ class RunManager:
             log.exception("run %s: could not write the INTERNAL_ERROR message", run.run_id)
 
     async def _finish(
-        self, run: _Run, tracer: Tracer, outcome: RunOutcome, parked: str | None
+        self,
+        run: _Run,
+        tracer: Tracer,
+        outcome: RunOutcome,
+        parked: str | None,
+        limit: str | None = None,
     ) -> None:
         if run.deps is not None:
             try:
@@ -758,6 +767,7 @@ class RunManager:
                 outcome=outcome.value,
                 user_message_id=run.user_message_id,
                 parked_approval_id=parked,
+                limit=limit,
             )
             totals = end["totals"]
             async with self.db.session() as repos:

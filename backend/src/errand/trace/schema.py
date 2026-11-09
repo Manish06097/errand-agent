@@ -60,6 +60,9 @@ class RunStart(Envelope):
     client_composed_at: str | None = None
     visible_card: dict[str, Json] | None = None
     routed_as: str | None = None
+    # The limits this run was held to (N3, additive), so INV-09 reads them from the record
+    # and never imports config.
+    limits: dict[str, Json] | None = None
 
 
 class RunEnd(Envelope):
@@ -70,6 +73,9 @@ class RunEnd(Envelope):
     # The approval the run ended parked on, read from the graph's v2 output interrupts,
     # not from agent state (M4). None when the run did not end at an interrupt.
     parked_approval_id: str | None = None
+    # The cap that ended the run, when one did (N3, additive): model_calls, iterations,
+    # tool_calls or deadline.
+    limit: str | None = None
 
 
 class NodeRecord(Envelope):
