@@ -20,7 +20,7 @@ from errand.agent import templates
 from errand.agent.claim_guard import guard
 from errand.agent.nodes import verify as verify_node
 from errand.clock import IST
-from errand.config import BookingSettings
+from errand.config import BookingSettings, LimitSettings
 from errand.domain.messages import ActionCard
 from errand.domain.outcomes import PendingCheck
 from errand.execution import executor
@@ -144,7 +144,10 @@ async def test_not_found_after_the_hold_lapsed_is_definitive_and_asks_for_a_fres
     can only get hold_expired, so `not_found` is definitive: nothing booked, a fresh
     quote, no retry."""
     monkeypatch.setattr(verify_node, "BACKOFF_S", (700.0, 1.0, 2.0, 4.0))
-    async with harness(tmp_path, world("timeout_not_booked")) as h:
+    # The 700 s wait is a test device to get past the hold's TTL in one run; INV-09 would
+    # rightly flag it against the default 20 s grace, so the grace is raised to cover it.
+    limits = LimitSettings(critical_grace_s=800.0)
+    async with harness(tmp_path, world("timeout_not_booked"), limits=limits) as h:
         view = await approve(h)
         rec = await h.records()
         convo = await h.conversation()
