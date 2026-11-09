@@ -415,3 +415,8 @@ def conflicts(key: str, value: Any, other_key: str, other_value: Any) -> bool:
         earliest, latest = (value, other_value) if key == "earliest_time" else (other_value, value)
         return bool(earliest >= latest)
     return False
+
+
+# The brief field a key fills ahead of the user's answer (gate 2 decision 17). The window
+# keys feed M8's not_before / not_after, which are not a brief field of their own.
+PREFILL_FIELD: dict[str, str] = {"home_area": "area", "budget_ceiling": "budget_max_inr"}

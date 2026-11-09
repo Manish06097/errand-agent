@@ -149,3 +149,16 @@ class ApprovalSettings(BaseSettings):
     # A typed grant is refused when the client says it composed the message later than
     # the agent clock at receipt plus this much (8.7, BUG-M4F-1): a skewed client clock.
     composed_tolerance_s: float = Field(default=2.0, ge=0)
+
+
+class MemorySettings(BaseSettings):
+    """Memory and the seeds (architecture 12, 13.5)."""
+
+    model_config = SettingsConfigDict(env_prefix="ERRAND_MEMORY_", extra="ignore")
+
+    # The HMAC key behind the forgotten-value hashes, under the data directory.
+    hmac_key_file: str = "memory_hmac.key"
+    # Recency in the relevance score halves every this many days (13.2).
+    half_life_days: float = Field(default=60.0, gt=0)
+    # The seeds `python -m errand.seed` and the dev drawer know (13.5).
+    seed_names: tuple[str, ...] = ("memory_demo", "memory_rich_v1")
