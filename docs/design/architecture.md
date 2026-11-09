@@ -1243,6 +1243,20 @@ Memory-related assistant content is never stored as text. "Saved: home area Indi
 
 I rejected forgetting only the memory row: the long prior conversation would still carry the fact into context. I rejected a vector store: memories are small and keyed, deterministic filtering is provable in tests, and embeddings cannot express superseded or forgotten cleanly. `MemoryRanker` is a protocol, so a semantic ranker could sit behind the same eligibility view later.
 
+### 12.4 N2 rulings (phase A, as built)
+
+Where the design was silent, N2 decided:
+
+- **Stored forms.** Area is its enum value, a time is "HH:MM", weekdays are lowercase names, money is an int, a provider is its id, `avoid_provider` is a sorted list, `contact_window` is `{from, to}`. Provider ids are a letter and a number (`P` plumbers, `E` electricians, `A` AC servicing, as in the catalogue) and must match their scope's service. A service scope is any `service:<name>`, so the seed can hold rows for services the catalogue does not book (pest control, painting).
+- **Ids and events.** Memory ids are `m-01`, `m-02`, ... (the next number after the highest ever used), event ids `m-01-e1`, ... , so the seed's fixed ids are the production scheme.
+- **Contradictions are about values.** Preferring and avoiding the same provider conflicts only when they share an id, and an earliest and a latest time conflict only when earliest is at or after latest. A pending suggestion is rejected as `superseded_by_explicit` only by an explicit write that truly conflicts with it, and a suggestion is declined only when an active row of its key, or a conflicting one of its pair, exists.
+- **Correct and Undo.** A correct is `remember_from_ui` on an active row with a new value. Undo on a "Saved" chip rejects the row and, if that save had replaced an older row, restores the older one, so undoing a correction returns to what was saved before it.
+- **Forget looks for more than the value.** Besides the value's spellings, a forget looks for the whole evidence quote, so a user or the model repeating the sentence loses the words around the value too. The quote is dropped from `evidence_json`; ids and offsets stay. Any stored answer to an earlier mutation in `client_requests` that names the row is blanked, because it held the value.
+- **Redaction offsets.** `message_redactions` rows hold offsets into a message's primary text (`text`, a clarify `question`, a shortlist `recommendation`). After an overwrite the row describes the marker in the new text, and rows from earlier forgets shift with the edit. Card options and status lines are overwritten without a row.
+- **Invalidate records.** A forget writes no trace record (it can come from the API with no run open). The open errand's `invalidate {what: brief_field, reason: memory_forgotten | memory_superseded}` is written by `ingress` when it clears the field, which is also where the re-fill from the active successor happens. Archived briefs are cleared inside the forget transaction.
+- **Where the scrub sits.** `KnownBookingsRepo.upsert` and the new `ErrandsRepo.archive` scrub `origin_brief_json` and `brief_json` themselves, from `memories_eligible`, so `verify.py` and `execute.py` are untouched; the conversation state API scrubs the brief it serves. The approvals insert is phase B.
+- **The seeds' HMAC key** is fixed, so two builds are byte for byte equal. It is demo data, not a secret.
+
 ---
 
 ## 13. Context management under a hard token budget
@@ -1351,6 +1365,13 @@ The sanitized rendered request itself is on the `model.call` record. The trace p
 Pending and dismissed rows are rule-inferred with typed values and booking-id evidence, so they carry no text a canary could sit in. For those the proof is structural: INV-20 checks that no non-eligible `memory_id` is rendered in S3 or S4, and INV-05 checks that no pending or dismissed (key, value) pair from the seed manifest appears in S3's brief or in S4.
 
 **Generated deterministically, through the real code paths.** `errand.seed` builds it from fixed phrase tables with the keyed RNG (ADR 0010), stepping the SimClock from a fixed epoch, with fixed ids (`m-01` to `m-60`, `msg_0001` on). Every write goes through the memory service, the message repo and the real forget path: each explicit row comes from a seeded user message carrying its cue, through the same evidence check, and each inferred row from the rules over seeded bookings, so redactions, blocklist rows and surface hashes are exactly what production makes; nothing is inserted as raw SQL. It writes a manifest (`backend/evals/fixtures/memory_rich_v1.json`: each row's id, key, scope, kind, status, canary and where it was planted). A test builds it twice and compares the dumps byte for byte, and checks that each canary is unique and planted where the manifest says. Expected context sets are written by hand in the scenario YAML, never derived from the scorer.
+
+### 13.6 N2 rulings (phase A, as built)
+
+- **S4 form.** Rows render as `{"home_area":"indiranagar"}`, with `"service":"electrician"` added for a service-scoped row, inside `<memory>` ... `</memory>`, in registry order; nothing renders when no row is chosen. The first sketch (`{"key", "scope", "value"}` per row) put the longest-value case over 600 tokens (611 with an ASCII note, 771 with a Devanagari one); this form measures 448 and 608, and the test renders every key at its longest for an errand kind that takes them (a booking never carries `contact_window`) and requires at most 600.
+- **Packing.** Rows are ranked by score with the tie-break order, and while the section is over its cap the lowest-ranked non-pinned row is dropped as `over_budget`. Pinned rows are never dropped here; if they alone exceed the cap `Selection.over_cap` tells the caller to shed.
+- **S5.** A ledger line is built from `known_bookings`: day, service, provider id (a name when the caller has one), weekday and time, status. The table holds no price or provider name, so a line has neither until a later milestone stores them. Newest first, then "and N earlier errands".
+- **The mask.** Word tokens are NFKC, case-folded, punctuation dropped, joined by one space; the longest n-gram (at most 24 words) whose HMAC is in `memory_surface_hashes` is replaced by `[removed]`. `trace/reader.read_trace_masked` applies it to every string of a record except ids, timestamps and hashes, and `errand-trace show` reads through it. SSE replay and the trace routes follow in phase C. There is no `export` command yet.
 
 ---
 
