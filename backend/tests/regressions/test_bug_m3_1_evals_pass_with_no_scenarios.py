@@ -25,6 +25,8 @@ from evals.dsl import CatalogueError, find_scenarios
 from evals.runner import ScenarioResult
 from tests.hygiene.repo import REPO_ROOT
 
+pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+
 BACKEND = REPO_ROOT / "backend"
 REAL_EVALS = BACKEND / "evals"
 KEEP = "S67_area_dodged_twice.yaml"  # no world calls, the quickest real scenario

@@ -29,6 +29,8 @@ from errand.tools.gateway import ALLOWED, SIDE_EFFECT_TOOLS, Caller, ToolGateway
 from errand.trace.sinks.null import NullSink
 from errand.trace.tracer import Tracer
 
+pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+
 BACKEND = Path(__file__).resolve().parents[2]
 SRC = BACKEND / "src"
 CONSEQUENTIAL = "errand.tools.consequential"

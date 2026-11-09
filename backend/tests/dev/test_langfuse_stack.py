@@ -23,6 +23,8 @@ import pytest
 
 from tests.hygiene.repo import REPO_ROOT
 
+pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+
 INFRA = REPO_ROOT / "infra" / "langfuse"
 UPSTREAM = REPO_ROOT / "spikes" / "langfuse" / "downloaded" / "docker-compose.yml"
 # spikes/README.md: upstream commit 05ece6fd, downloaded 2026-11-06.

@@ -82,7 +82,7 @@ def http_world(tmp_path_factory: pytest.TempPathFactory) -> Iterator[WorldProces
     world.stop()
 
 
-@pytest.fixture(params=["inprocess", "http"])
+@pytest.fixture(params=["inprocess", pytest.param("http", marks=pytest.mark.slow)])
 async def env(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[Env]:
     kind: Kind = request.param
     if kind == "inprocess":

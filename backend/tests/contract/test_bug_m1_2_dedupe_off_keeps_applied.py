@@ -72,6 +72,7 @@ async def test_a_resent_book_never_rewrites_an_applied_key(env: Env, second: str
     assert first_booking in {b.booking_id for b in await env.inspector.bookings()}
 
 
+@pytest.mark.slow
 async def test_a_restart_during_a_resent_book_keeps_the_key_applied(tmp_path: Path) -> None:
     # Same bug, another path: the re-send's claim used to mark the applied key
     # in_progress, and a restart mid-latency then turned it not_applied.

@@ -21,6 +21,8 @@ import pytest
 
 from tests.hygiene.repo import REPO_ROOT
 
+pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+
 BACKEND = REPO_ROOT / "backend"
 PIN = '"httpx==0.28.1"'
 DRIFTED_PIN = '"httpx==0.28.0"'

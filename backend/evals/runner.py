@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sqlite3
 from collections import Counter
@@ -86,6 +87,9 @@ APPROVAL_CARDS = ("action", "reminder")
 
 EVALS = Path(__file__).resolve().parent
 OUT = EVALS / "out"
+# The unit tests that run scenarios point this elsewhere (tests/conftest.py), so parallel
+# workers never share backend/evals/out. make evals leaves it unset.
+TRACE_DIR_ENV = "ERRAND_EVAL_TRACE_DIR"
 BASE_URL = "http://errand.test"
 
 PLANNERS: dict[str, Policy] = {
@@ -1227,7 +1231,7 @@ def _notes(scenario: Scenario, records: invariants.Records) -> str:
 
 
 def save_traces(scenario: Scenario, root: Path) -> None:
-    dest = OUT / scenario.id
+    dest = Path(os.environ.get(TRACE_DIR_ENV) or OUT) / scenario.id
     if dest.exists():
         shutil.rmtree(dest)
     if (root / "traces").exists():

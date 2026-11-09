@@ -19,6 +19,8 @@ import pytest
 
 from tests.hygiene.repo import REPO_ROOT
 
+pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
+
 # The stack script's docker timeout, shortened so the test stays quick.
 TIMEOUT_S = 2
 # Far longer than TIMEOUT_S, far shorter than the fake's hang.

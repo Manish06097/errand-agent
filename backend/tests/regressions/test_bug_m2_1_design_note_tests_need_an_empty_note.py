@@ -17,7 +17,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tests.hygiene.repo import REPO_ROOT
+
+pytestmark = pytest.mark.slow  # subprocesses or real servers: serial step of make check
 
 SECTIONS = (
     "State model",
