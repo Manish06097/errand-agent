@@ -16,4 +16,5 @@ def test_a_replay_row_names_its_own_dot_replay_trace_directory() -> None:
     records: Any = SimpleNamespace(all_records=lambda: [], notes={})
     assert trace_name(scenario, replay) == f"{scenario.id}.replay"
     assert f"trace=backend/evals/out/{scenario.id}.replay/" in _notes(scenario, records, replay)
-    assert _notes(scenario, records).endswith(f"trace=backend/evals/out/{scenario.id}/")
+    # A scripted row of a booking scenario names its dedupe-mode folder (M5).
+    assert _notes(scenario, records).endswith(f"trace=backend/evals/out/{scenario.id}.dedupe-on/")
