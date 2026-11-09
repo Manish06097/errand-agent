@@ -1389,7 +1389,7 @@ Pending and dismissed rows are rule-inferred with typed values and booking-id ev
 | world tool calls per run (incl. retries) | 16 | `ToolGateway` |
 | reprompts per run | 1 | `plan` |
 | SystemNote replans per run | 1 | routing |
-| wall clock per run | 60 s simulated in evals; 23 s live and in record mode (`live_run_deadline_s`: 16 live planning turns in M7 gave p50 6.9 s and p95 11.5 s, and 2 x p95 rounded up is 23) | checked before every node, model call and tool call outside the critical section |
+| wall clock per run | 60 s simulated in evals; 43 s live and in record mode (`live_run_deadline_s`: 16 live planning turns in M7 gave p50 6.9 s and p95 11.5 s, so ceil(2 x p95) is 23, plus the reader's 20 s timeout, because the quarantined reader is skipped once less run time is left than its timeout and 23 s alone skips it on every cold-cache turn) | checked before every node, model call and tool call outside the critical section |
 | per-tool timeout | see the timeout table below | `ToolGateway` |
 | critical-section grace | 20 s | `execute`/`verify` under `asyncio.shield` |
 | cost per run | $0.40 | `LLMGateway`; not applied inside the critical section |
@@ -1560,6 +1560,9 @@ On mobile the inspector becomes a bottom sheet and the sidebar a drawer. A dev d
 - `ActionCard`: material lines from the server, the price delta against the search price, a hold countdown that switches to "Hold expired · Refresh hold", a primary button that repeats the material detail ("Book for ₹1,350", "Move to Sat 11:00", "Cancel booking"), Decline. Button state idle, submitting, done. Disabling is UX only; the server is the guard. On 409 the card shows "details changed" and refetches.
 - Trace panel: run tree grouped by turn, filter chips (Model, Tools, Approval, Memory, Context), latency bars, running tokens and cost, a Context view per model call (sections, included and excluded memories with reasons, the exact messages sent), and a Langfuse link when enabled.
 - `/memory`: Your preferences (active, grouped by global and service, with provenance linking to the source message, last used, Edit and Forget), Suggestions (pending inferred, Keep and Dismiss), History (superseded, and forgotten as "Forgotten on 5 Nov" with no value).
+- Status lines are snapshots of the moment their message was written, so the web shows the status line of the latest assistant message only; under an older card it would contradict what happened since ("Nothing booked yet" above a verified booking). The text shown is still exactly the server's.
+- Notice actions: `refresh_hold` goes through the actions route; `retry`, `narrow_search`, `raise_budget` and `options` send the server's label as the user's quick reply, like a ClarifyCard option; `answer` and `shorten` send nothing: they focus the composer (`shorten` puts the user's last message back in it to edit), because a message the user did not write must never appear as theirs.
+- A decision answered 409 `no_longer_valid` on a superseded or invalidated card is shown as "details changed" and refetched, like `details_changed`: that is what a click on a card a correction replaced gets.
 - Composer stays enabled during a run; a message sent mid-run is shown as queued, with the `visible_card` and `client_composed_at` captured at Send. Stop cancels at the next node boundary outside the critical section. Once an intent exists, Stop is deferred until `respond` and the UI says "Finishing the booking check first".
 
 ### 17.3 API
