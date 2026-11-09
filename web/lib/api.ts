@@ -7,6 +7,7 @@ import type {
   DevBooking,
   MetaOut,
   NewMessage,
+  NotificationsOut,
   ScenariosOut,
   TraceOut,
 } from "./types";
@@ -74,6 +75,9 @@ export const api = {
     ),
   action: (conversationId: string, body: ActionIn) =>
     post<{ run_id?: string } & ErrorBody>(`/api/conversations/${conversationId}/actions`, body),
+  notifications: () => getOk<NotificationsOut>("/api/notifications"),
+  markRead: (notificationId: string) =>
+    post<{ unread?: number }>(`/api/notifications/${notificationId}/read`, undefined),
   rendered: (messageId: string, clientTs: string) =>
     post<unknown>(`/api/messages/${messageId}/rendered`, { client_ts: clientTs }),
   dev: {

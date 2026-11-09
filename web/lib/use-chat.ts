@@ -232,7 +232,10 @@ export function useChat(conversationId: string) {
   );
 
   const action = useCallback(
-    async (kind: "select_slot" | "refresh_hold", payload: Record<string, string>) => {
+    async (
+      kind: "select_slot" | "refresh_hold" | "widen_followup" | "dismiss_followup",
+      payload: Record<string, string>,
+    ) => {
       const result = await api.action(conversationId, {
         client_action_id: newId("ca"),
         kind,

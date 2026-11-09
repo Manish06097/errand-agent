@@ -23,7 +23,10 @@ export function ConversationList({ currentId }: { currentId?: string }) {
                 c.conversation_id === currentId && "bg-neutral-100 dark:bg-neutral-800",
               )}
             >
-              <span className="block truncate">{c.title ?? c.preview ?? "New errand"}</span>
+              <span className="block truncate" data-testid={c.kind === "followup" ? "followup-link" : undefined}>
+                {c.kind === "followup" ? "Follow-up: " : ""}
+                {c.title ?? c.preview ?? "New errand"}
+              </span>
               <span className="block truncate text-xs text-neutral-500">{c.conversation_id}</span>
             </Link>
           </li>
