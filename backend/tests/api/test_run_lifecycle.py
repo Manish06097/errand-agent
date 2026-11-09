@@ -148,7 +148,7 @@ async def test_the_tool_call_cap_ends_limit_reached(tmp_path: Path) -> None:
     assert rec.runs[0]["tool_calls"] == 16 and len(op_log) == 16
 
 
-async def test_the_simulated_deadline_caps_timeouts_and_ends_limit_reached(
+async def test_the_simulated_deadline_caps_timeouts_and_ends_wall_clock_exceeded(
     tmp_path: Path,
 ) -> None:
     # Each call takes 4.5 s of world time, inside the 5 s read timeout. The 14th starts
@@ -159,7 +159,7 @@ async def test_the_simulated_deadline_caps_timeouts_and_ends_limit_reached(
         view = await h.say(OPENER)
         op_log = await h.op_log()
         rec = await h.records()
-    assert view.outcome == "LIMIT_REACHED"
+    assert view.outcome == "WALL_CLOCK_EXCEEDED"
     assert len(op_log) == 14
     calls = [r for r in rec.traces[view.run_id] if r["type"] == "tool.call"]
     assert [c["error"] for c in calls][-2:] == [None, "ToolTimeout"]

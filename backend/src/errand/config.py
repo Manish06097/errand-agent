@@ -31,8 +31,9 @@ class ModelSettings(BaseSettings):
     planner_max_tokens: int = 16_000
     # The SDK retries a failed request (connection errors, 408, 409, 429, 5xx) inside one
     # model.call, so latency and the planner timeout stretch up to (1 + retries) times.
-    # Explicit so nothing hides behind the SDK default; M13 sets it against the deadline.
-    planner_max_retries: int = Field(default=2, ge=0)
+    # Explicit so nothing hides behind the SDK default. 1 (N3): 15.2 says "after one
+    # retry", and two would stretch a failed call to three attempts against the deadline.
+    planner_max_retries: int = Field(default=1, ge=0)
     # Live and record runs opt in to strict prefix binding, so a history edit fails
     # loudly instead of being patched over by drop_block (architecture 10.1).
     thinking_binding_beta: str = "thinking-binding-controls-2026-08-01"

@@ -134,6 +134,8 @@ class ModelCall(Envelope):
     est_request_tokens: NonNegativeInt
     floor_tokens: NonNegativeInt
     budget_tokens: NonNegativeInt
+    # Set on a call that failed (N3): usage and cost are zero, the response is empty.
+    error: str | None = None
 
 
 class ReaderCall(Envelope):

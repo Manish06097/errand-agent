@@ -93,6 +93,13 @@ class ToolDown(_Result):
     error_class: str
 
 
+class ModelDown(_Result):
+    """The planning model could not be reached after the SDK's retry (N3, 15.2)."""
+
+    kind: Literal["model_down"] = "model_down"
+    reason: str
+
+
 class TooLarge(_Result):
     kind: Literal["too_large"] = "too_large"
     section: str
@@ -106,7 +113,16 @@ class Failure(_Result):
 
 
 PlanResult = Annotated[
-    Reply | Ask | AskExhausted | Options | Proposal | Limit | ToolDown | TooLarge | Failure,
+    Reply
+    | Ask
+    | AskExhausted
+    | Options
+    | Proposal
+    | Limit
+    | ToolDown
+    | ModelDown
+    | TooLarge
+    | Failure,
     Field(discriminator="kind"),
 ]
 

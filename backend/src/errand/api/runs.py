@@ -45,6 +45,7 @@ from errand.agent.deps import ConsequentialLocks, RunDeps
 from errand.agent.graph import Graph, RoutedAs, invoke, route_input
 from errand.agent.planner_tools import PLANNER_TOOLS
 from errand.agent.templates import internal_error
+from errand.agent.templates_limits import wall_clock_exceeded
 from errand.api.locks import LeaseKeeper, ThreadLocks, UserLocks, thread_key
 from errand.api.sse import Broadcaster, RunStream
 from errand.approvals import service
@@ -59,6 +60,7 @@ from errand.domain.inbound import (
     UiAction,
     UserMessage,
 )
+from errand.domain.messages import OutcomeNotice
 from errand.domain.outcomes import RunOutcome
 from errand.ids import IdFactory, message_id_for, message_id_for_user
 from errand.llm.gateway import LLMGateway
@@ -529,6 +531,7 @@ class RunManager:
             "run_id": run_id,
             "inbound": inbound,
             "counters": counters,
+            "node_failed": False,
         }
         graph_input, entered = await route_input(self.graph, conversation_id, run_input)
         routed_as: RoutedAs = routed or entered
@@ -616,7 +619,8 @@ class RunManager:
                 routed_as=run.routed_as,
                 **(run.client or {}),
             )
-            async with asyncio.timeout(self.limits.run_backstop_s):
+            backstop = asyncio.timeout(self.limits.run_backstop_s)
+            async with backstop:
                 run.deps = self._deps(run, tracer)
                 final = await invoke(self.graph, run.conversation_id, run.graph_input, run.deps)
             if final.state.outcome is None:
@@ -626,7 +630,17 @@ class RunManager:
         except BaseException as exc:
             cancelled = isinstance(exc, asyncio.CancelledError)
             outcome = RunOutcome.INTERNAL_ERROR
-            await self._fail(run, tracer, exc)
+            body: OutcomeNotice | None = None
+            # The 90 s backstop is a time limit, not a bug: WALL_CLOCK_EXCEEDED. With a
+            # booking intent open it stays on the old path until N1's critical.py takes it.
+            if (
+                isinstance(exc, TimeoutError)
+                and backstop.expired()
+                and not await self._open_intent(run)
+            ):
+                outcome = RunOutcome.WALL_CLOCK_EXCEEDED
+                body = wall_clock_exceeded("", "")
+            await self._fail(run, tracer, exc, body)
         finally:
             await self._finish(run, tracer, outcome, parked)
         if cancelled:
@@ -647,6 +661,7 @@ class RunManager:
             limits=self.limits,
             transport=self.model_factory(),
             counters=run.counters,
+            clock=self.clock,
         )
         tools = ToolGateway(
             self.world.client,
@@ -684,7 +699,21 @@ class RunManager:
             consequential=self.consequential,
         )
 
-    async def _fail(self, run: _Run, tracer: Tracer, exc: BaseException) -> None:
+    async def _open_intent(self, run: _Run) -> bool:
+        try:
+            async with self.db.session() as repos:
+                rows = await repos.intents.unresolved_for_user(run.user_id)
+        except Exception:
+            return True
+        return any(row.conversation_id == run.conversation_id for row in rows)
+
+    async def _fail(
+        self,
+        run: _Run,
+        tracer: Tracer,
+        exc: BaseException,
+        body: OutcomeNotice | None = None,
+    ) -> None:
         """The outer handler: an error record and the INTERNAL_ERROR message, whatever broke."""
         log.error("run %s failed", run.run_id, exc_info=exc)
         with contextlib.suppress(Exception):
@@ -694,7 +723,7 @@ class RunManager:
                 exception_type=type(exc).__name__,
                 message=str(exc)[:2000],
             )
-        body = internal_error(run.run_id)
+        body = body or internal_error(run.run_id)
         message = Message(
             message_id=message_id_for(run.run_id, "notice"),
             conversation_id=run.conversation_id,

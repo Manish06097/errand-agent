@@ -80,6 +80,7 @@ from errand.domain.outcomes import (
     Failure,
     Limit,
     LimitName,
+    ModelDown,
     Options,
     PlanResult,
     Proposal,
@@ -87,7 +88,12 @@ from errand.domain.outcomes import (
     TooLarge,
     ToolDown,
 )
-from errand.llm.errors import ContextOverBudget, ModelCallLimit
+from errand.llm.errors import (
+    ContextOverBudget,
+    ModelCallLimit,
+    ModelDeadline,
+    ModelUnavailable,
+)
 from errand.tools import views
 from errand.tools.errors import (
     PlannerToolRejected,
@@ -182,6 +188,10 @@ class PlannerLoop:
                 turn = await session.call(on_token=deps.on_token)
             except ModelCallLimit:
                 return Limit(limit="model_calls")
+            except ModelDeadline:
+                return Limit(limit="deadline")
+            except ModelUnavailable as exc:
+                return ModelDown(reason=exc.reason)
             except ContextOverBudget as exc:
                 return TooLarge(section="request", estimated=exc.needed, cap=exc.budget)
             if turn.stop_reason == "end_turn":

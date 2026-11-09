@@ -28,6 +28,24 @@ class ModelCallLimit(Exception):
         super().__init__(f"the run already made {cap} model calls; nothing was sent")
 
 
+class ModelUnavailable(Exception):
+    """The planner model could not be reached after the SDK's own retries (429, 5xx
+    including 529, a connection error or a timeout with run time left). Nothing from the
+    failed request reached the run; `plan` renders MODEL_UNAVAILABLE."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"the planning model is unavailable: {reason}")
+
+
+class ModelDeadline(Exception):
+    """A planner call hit the run's wall-clock deadline (the call timeout was capped by
+    the time left), so `plan` ends the run Limit(deadline), not MODEL_UNAVAILABLE."""
+
+    def __init__(self) -> None:
+        super().__init__("the run deadline passed during a planner call")
+
+
 class ForcedToolChoiceError(ValueError):
     """Forced tool_choice is a 400 on Opus 5.5 and LangChain silently drops it."""
 

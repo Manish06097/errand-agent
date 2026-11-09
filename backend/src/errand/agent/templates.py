@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import tzinfo
 
+from errand.agent import templates_limits
 from errand.domain.brief import BriefField
 from errand.domain.errand import Errand
 from errand.domain.messages import (
@@ -32,6 +33,7 @@ from errand.domain.outcomes import (
     AskExhausted,
     Failure,
     Limit,
+    ModelDown,
     Options,
     PlanResult,
     Proposal,
@@ -173,6 +175,14 @@ def render(
         )
     if isinstance(result, Options) and errand is not None and errand.shortlist is not None:
         return RunOutcome.PRESENTED_OPTIONS, shortlist_card(errand, result.recommendation, tz)
+    if isinstance(result, Limit) and result.limit == "deadline":
+        return RunOutcome.WALL_CLOCK_EXCEEDED, templates_limits.wall_clock_exceeded(
+            _so_far(errand), templates_limits.still_to_do(errand, _FIELD_WORDS)
+        )
+    if isinstance(result, ModelDown):
+        return RunOutcome.MODEL_UNAVAILABLE, templates_limits.model_unavailable()
+    if isinstance(result, ToolDown) and result.error_class == "ToolUnexpected":
+        return RunOutcome.TOOL_UNAVAILABLE, templates_limits.tool_unexpected()
     if isinstance(result, Limit):
         known = _so_far(errand)
         so_far = f" So far I have: {known}." if known else ""
