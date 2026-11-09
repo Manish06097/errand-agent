@@ -2,6 +2,7 @@ id: S39_provider_cancels_and_user_rebooks
 title: The provider cancels a verified booking; the watcher notices on its own, one notification, a Rebook card in its own conversation, the old approval is dead, a fresh grant books once, the job ends done
 category: [followup]
 seed: 39
+replay: {cassette: S39}
 world:
   book: {forced: [success, success]}
 user:
